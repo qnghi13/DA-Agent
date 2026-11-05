@@ -10,6 +10,9 @@ for an AI Engineer role: architecture, reliability, and operability matter more 
 The approved plan is in `docs/plan.md`. Read only the section a task needs, using its table at the
 top. Update `docs/progress.md` when a task finishes or a session ends.
 
+Design: `docs/architecture.md`, `docs/threat-model.md`, `docs/adr/`. Read them only when a task touches
+that area.
+
 ## Commands
 
 ```bash

@@ -4,27 +4,35 @@ Loaded into every session through `CLAUDE.md`, so keep it under 60 lines. Update
 finishes or a session ends. Replace stale content instead of appending. Git history keeps the rest.
 
 **Last updated:** 2026-11-05
-**Phase:** Days 1–2, Foundation ([plan §6](plan.md#6-roadmap)). Day 1 application work has not started.
+**Phase:** Days 1–2, Foundation ([plan §6](plan.md#6-roadmap)). Design docs are done. No application
+code exists yet.
 
 ## Next step
 
-1. Ask whether to make the first commit. Nothing is committed yet, and `.agents/`, `.claude/skills/`
-   symlinks, and `skills-lock.json` are the user's call to include.
-2. Day 1 docs: `docs/architecture.md`, `docs/threat-model.md`, and the first ADRs, using
-   [plan §2](plan.md#2-architecture).
-3. Build the scorer test-first from `train/rulebook.md` §9, then the eval splits
+1. Ask whether to commit the design docs and project structure. The user's commit `2c3e6ad` holds the
+   dev environment, and there is no remote yet.
+2. Build the scorer test-first from `train/rulebook.md` §9, then the eval splits
    ([plan §3](plan.md#3-evaluation)).
+3. Day 2: `LLMClient`, tracing, cost ledger, minimal agent on biz_123, `smoke` run. Ask before the run.
 
 ## Done
 
 - Dev environment: `CLAUDE.md`, Ruff, pytest, two hooks with tests, `tdd` and `agent-architecture`
-  skills, three subagents. `uv run pytest` gives 70 passed and `ruff check` is clean.
-- Plan approved and stored in [plan.md](plan.md).
+  skills, three subagents.
+- Docs: [plan](plan.md), [architecture](architecture.md), [threat model](threat-model.md),
+  [7 ADRs](adr/README.md), first learning note, README, LICENSE.
+- Project structure: empty directories with `.gitkeep`. No Python packages yet.
+
+## Decisions needed
+
+- **By Day 3:** should file parsing run in a sandbox? See
+  [architecture open questions](architecture.md#open-questions). Other open questions are listed there.
 
 ## Not verified
 
 - Subagents and skills are registered but have not been run.
 - Whether `permissionMode: plan` actually blocks writes for `system-architect`.
+- All security controls in the threat model are planned, none implemented.
 
 ## Waiting on the user
 
@@ -32,7 +40,7 @@ finishes or a session ends. Replace stale content instead of appending. Git hist
 - **Days 7–11:** agree to add $5–10 for Haiku 5.5. Claude gives notice first.
 - **Before pushing to GitHub:** install `gh` or create the repo.
 - **Before the repo goes public:** check the organizer's data rules and whether the `cccd` and phone
-  columns are fake.
+  columns are fake. Review the licenses of the skills in `.agents/`, and the `brainstorming` scripts.
 
 ## Spend so far
 
@@ -40,13 +48,8 @@ $0. No real LLM calls have been made.
 
 ## Watch out
 
-- `pyproject.toml` has `package = false` and `readme = "CLAUDE.md"`. Change both when `src/da_agent`
-  and `README.md` are added.
-- pyright is planned but not installed. Add it with the first application code.
+- `pyproject.toml` has `package = false`. Remove it and add a build setup when the first module in
+  `src/da_agent` is added. pyright is planned but not installed, so add it then too.
 - `command_guard` rejects mounting all of `train/`. The Runner must mount one shop directory.
 - `agent-browser` also needs its CLI, installed globally with npm. The guard asks before that runs.
-
-## Key answer facts
-
-`train/answers.jsonl` has 3,000 rows: number 1884, percent 578, list 193, date 145, string 88,
-unanswerable 70, boolean 23, table 19. `alias` is non-empty in 167 rows.
+- `eval/reports/` is gitignored. Publish only aggregate results in `docs/eval/`.

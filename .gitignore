@@ -19,6 +19,10 @@ htmlcov/
 node_modules/
 dist/
 
+# Raw eval output can contain answers and cell values
+/eval/reports/*
+!/eval/reports/.gitkeep
+
 # Runtime data
 *.duckdb
 *.duckdb.wal
@@ -26,6 +30,7 @@ dist/
 # Personal Claude Code overrides
 .claude/settings.local.json
 .claude/worktrees/
+.agents
 
 # OS noise
 *:Zone.Identifier
