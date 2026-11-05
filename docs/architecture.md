@@ -76,6 +76,9 @@ Dependencies point inward: `api`, `worker`, and `runner` may use `agent`, `inges
 
 ## Ingestion
 
+Steps 1–6 run inside a sandbox container, so untrusted bytes never reach a process that holds
+secrets ([ADR 0009](adr/0009-parse-uploads-in-sandbox.md)).
+
 1. **Safety checks:** limits on size, file type, and row count. Reject zip bombs. Ignore macros and
    junk files such as `Zone.Identifier`.
 2. **Raw read:** xlsx, csv (with encoding detection), and SQLite become raw text tables.
@@ -178,7 +181,6 @@ Reports are standalone HTML, and every number links to the query that produced i
 
 | Question | Decide by |
 |---|---|
-| Should file parsing run in a sandbox? Today's design parses untrusted files in the Worker, which holds provider keys ([threat-model.md](threat-model.md#residual-risks-and-open-items)) | Day 3, before ingestion |
-| How does the Worker call the Runner: internal HTTP or a job table? | Days 3–6 |
+| How does the Worker call the Runner: internal HTTP or a job table? Today `Runner` is a library with typed requests | Days 3–6 |
 | One container per request, or one per run? This trades startup latency against isolation | Days 3–6 |
 | What are the parse rate thresholds and the retry limit N? Set from real data | Days 3–6 |

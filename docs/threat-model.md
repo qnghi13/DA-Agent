@@ -1,8 +1,9 @@
 # Threat model
 
 **Status: mostly design.** Controls are planned unless noted. A control counts as done only when a
-test proves it. Done so far: the SQL guard and hidden columns on SQLite (`tests/security/`), and keeping
-answers away from the model during eval runs (`tests/unit/test_datamate_eval.py`).
+test proves it. Done so far: the SQL guard and hidden columns on SQLite (`tests/security/`), keeping
+answers away from the model during eval runs (`tests/unit/test_datamate_eval.py`), and the sandbox
+limits in the first two rows below (`tests/security/test_sandbox_escape.py`, `tests/unit/test_runner.py`).
 
 ## Assets
 
@@ -38,8 +39,8 @@ Injection is assumed to succeed sometimes. Permissions, not prompts, must limit 
 
 | Threat | Control | Proof |
 |---|---|---|
-| LLM-generated code attacks the host or network | Container with `--network none`, read-only, non-root, `--cap-drop ALL`, RAM, CPU, PID, and time limits, no secrets | Tests attempt network, file writes, env reads, fork bomb, memory exhaustion |
-| Runner compromised through its Docker socket | Only the Runner holds the socket. It accepts typed requests and builds container options itself, so callers cannot set mounts or flags | Test that request fields cannot change mounts or flags |
+| LLM-generated code or a malicious upload attacks the host or network | Container with `--network none`, read-only, non-root, `--cap-drop ALL`, `no-new-privileges`, RAM, CPU, PID, and time limits, no secrets. Uploads are parsed here too ([ADR 0009](adr/0009-parse-uploads-in-sandbox.md)) | **Done:** tests attempt network, file writes, env reads, other datasets, the Docker socket, fork bomb, memory exhaustion, endless loops, output floods |
+| Runner compromised through its Docker socket | Only the Runner holds the socket. It accepts typed requests and builds container options itself, so callers cannot set mounts or flags | **Done:** request fields cannot change mounts or flags, dataset ids cannot name paths or follow symlinks out |
 | SQL reads files, writes, or attaches databases | sqlglot allows only `SELECT`. DuckDB opens read-only with `enable_external_access` off and a timeout | Tests attempt `COPY`, `read_csv`, `ATTACH` |
 | Prompt injection from cells or descriptions | File content is always framed as data. Tools have least privilege | Injection suite through cells and descriptions |
 | Malicious spreadsheet: zip bomb, external entities, huge sheets | Size, type, and row limits before parsing. Macros are ignored | Malformed file tests. See the open item below |
@@ -60,9 +61,8 @@ Injection is assumed to succeed sometimes. Permissions, not prompts, must limit 
   optional, and the README must state this limit plainly.
 - **The Docker socket equals root on the host.** A Runner compromise is a host compromise. The Runner
   stays small for this reason.
-- **Parser exploits in the Worker (open).** The Worker parses untrusted files and also holds provider
-  keys, so a parser bug could expose them. Option: move parsing into a sandbox through the Runner. It
-  needs a decision by Day 3, before ingestion is built.
+- **Parser exploits.** Decided in [ADR 0009](adr/0009-parse-uploads-in-sandbox.md): parsing runs in
+  the sandbox. A parser bug then reaches only the sandbox, unless it is combined with a kernel escape.
 - **Data sent to LLM providers.** Column profiles, sample values, and query results leave the machine.
   Free tiers may use them under different terms. During development, send only demo or DataMate data.
   The README must warn self-hosters and point to local models.

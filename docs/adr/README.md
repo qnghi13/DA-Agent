@@ -13,3 +13,4 @@ decision, add a new ADR and mark the old one as superseded.
 | [0006](0006-dataset-spec.md) | LLM-proposed, user-approved `DatasetSpec` | Accepted |
 | [0007](0007-code-first-verification.md) | Verification mostly in code | Accepted |
 | [0008](0008-rules-on-demand.md) | Topic rules fetched on demand with `search_rules` | Accepted |
+| [0009](0009-parse-uploads-in-sandbox.md) | Uploaded files are parsed inside the sandbox | Accepted |
