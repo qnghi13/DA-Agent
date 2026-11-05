@@ -1,0 +1,50 @@
+[project]
+name = "da-agent"
+version = "0.0.0"
+description = "Open-source agent that analyses uploaded tabular data"
+readme = "CLAUDE.md"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+dependencies = []
+
+[tool.uv]
+# No application package exists yet. Remove this when src/da_agent is added.
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+force-exclude = true
+extend-exclude = ["train"]
+
+[tool.ruff.lint]
+select = [
+  "E",   # pycodestyle errors
+  "W",   # pycodestyle warnings
+  "F",   # pyflakes
+  "I",   # import sorting
+  "B",   # likely bugs
+  "UP",  # modern Python syntax
+  "SIM", # simplifications
+  "RUF", # ruff-specific checks
+  "S",   # security checks, relevant for an agent that runs generated code
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S603", "S607"]
+".claude/hooks/**" = ["S603", "S607"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config -m 'not llm'"
+markers = [
+  "llm: calls a real LLM and costs money or quota, excluded by default",
+  "integration: needs Docker or Postgres",
+  "security: proves that a sandbox, SQL, or isolation boundary holds",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "ruff>=0.17.3",
+]

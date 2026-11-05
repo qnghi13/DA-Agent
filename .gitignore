@@ -1,0 +1,32 @@
+# Competition data, never published through git
+/train/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+dist/
+
+# Runtime data
+*.duckdb
+*.duckdb.wal
+
+# Personal Claude Code overrides
+.claude/settings.local.json
+.claude/worktrees/
+
+# OS noise
+*:Zone.Identifier
+.DS_Store
