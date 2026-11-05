@@ -36,6 +36,7 @@ select = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "-ra --strict-markers --strict-config -m 'not llm'"
 markers = [
   "llm: calls a real LLM and costs money or quota, excluded by default",

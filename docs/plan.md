@@ -53,6 +53,7 @@ Moved to [architecture.md](architecture.md). Security controls are in
 - **Scorer:** implements `train/rulebook.md` §9 exactly: format, alias, and +1 / −1 / 0 scoring.
 - **Split by shop:** 24 dev and 6 holdout, balanced by data completeness. Holdout runs once, at the
   end.
+  Shops already read closely during design stay in dev, so holdout stays unseen.
 - **Question sets within dev:** `smoke` (30), `regression` (150, stratified by answer type and
   shop), and the full set only when budget allows.
 - **Metrics:** score; correct, wrong, and abstain rates; cost and latency per question; tool errors;
