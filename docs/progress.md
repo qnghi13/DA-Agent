@@ -1,60 +1,58 @@
 # Progress
 
-Loaded into every session through `CLAUDE.md`, so keep it under 60 lines. Update it when a task
-finishes or a session ends. Replace stale content instead of appending. Git history keeps the rest.
+Loaded into every session, so keep it under 60 lines. Replace stale content instead of appending.
 
-**Last updated:** 2026-11-05
-**Phase:** Days 1–2, Foundation ([plan §6](plan.md#6-roadmap)). Day 1 is done. No code under `src/`
-exists yet.
+**Last updated:** 2026-11-06
+**Phase:** Days 1–2, Foundation ([plan §6](plan.md#6-roadmap)). Day 2 is committed. The user chose
+to build ingestion before the `bootstrap` baseline.
 
 ## Next step
 
-1. Ask whether to commit the scorer and splits. They are uncommitted.
-2. Day 2: `LLMClient`, tracing, cost ledger, minimal agent on biz_123. It needs the user's free API
-   keys. Use the `agent-architecture` skill first.
-3. Run the `bootstrap` question set (30 questions, biz_123 only). Ask before the run.
+1. Model: Groq `openai/gpt-oss-20b`, paid ($0.075 in, $0.037 cached, $0.30 out per million).
+   Done today: cached-token pricing, `InvalidToolCallError` sent back to the model, and topic rules
+   on demand through `search_rules` ([ADR 0008](adr/0008-rules-on-demand.md)): system prompt 17.1k
+   to 8.1k chars, first call 5.8k to 3k tokens, 44% of input cached. 3 bootstrap questions, 12
+   iterations: all hit the limit, $0.017. Most turns fight mixed date formats in `NgayLap`.
+2. Decide whether file parsing runs in a sandbox, then start ingestion. Run `bootstrap` after it.
+3. Days 3–6: ingestion, `DatasetSpec`, DuckDB, Runner, sandbox.
 
 ## Done
 
-- Dev environment in `.claude/`, with Ruff, pytest, hooks, skills, and subagents.
-- Design docs, 7 ADRs, README, LICENSE, and the project structure (`.gitkeep` until modules arrive).
-- Scorer: `eval/scorer/`, implementing rulebook §9. On the real answers, correct answers score
-  3000/3000, the same through aliases, empty scores 0, and all perturbed answers score -3000.
-- Splits: `eval/splits/splits.json` with 24 dev and 6 holdout shops, and the question sets `bootstrap`
-  (30), `smoke` (30), `regression` (150). Run with
-  `uv run python -m eval.scorer.cli --answers A --submission S --splits eval/splits/splits.json --set smoke`.
+- Dev environment, design docs, 7 ADRs, README, LICENSE, project structure.
+- Scorer (`eval/scorer/`, rulebook §7 and §9), checked on the real answers: 3000/3000 when correct.
+- Splits (`eval/splits/splits.json`): 24 dev and 6 holdout shops; sets `bootstrap`, `smoke`, `regression`.
+- Minimal agent (`src/da_agent`): `LLMClient`, Groq and Gemini adapters, SQL guard, read-only SQLite
+  dataset, bounded tool loop, tracing. `eval/datamate` runs it and stays resumable.
+- Checked end to end with a scripted model on biz_123, with spans arriving in Phoenix.
 
 ## Decisions needed
 
 - **By Day 3:** should file parsing run in a sandbox? See
-  [architecture open questions](architecture.md#open-questions). Other open questions are listed there.
+  [architecture open questions](architecture.md#open-questions).
 
 ## Not verified
 
-- Subagents and skills are registered but have not been run.
-- Whether `permissionMode: plan` actually blocks writes for `system-architect`.
-- All security controls in the threat model are planned, none implemented.
+- Gemini has made no real call. Local Ollama (qwen3.5:2b, qwen3:4b on a 4 GB GPU) was too slow
+  and never answered; container `da-agent-ollama` is stopped.
+- `deploy/compose.dev.yml` has not run, because this machine lacks the Compose plugin. Phoenix runs
+  through `docker run` as container `da-agent-phoenix`.
+- Subagents are registered but unused. `permissionMode: plan` on `system-architect` is untested.
+- Most security controls in the threat model are still planned.
 
 ## Waiting on the user
 
-- **Before Day 2:** create free Groq and Google AI Studio keys.
 - **Days 7–11:** agree to add $5–10 for Haiku 5.5. Claude gives notice first.
+- **Before Day 20:** install the Compose plugin, or enable Docker Desktop's WSL integration.
 - **Before pushing to GitHub:** install `gh` or create the repo.
-- **Before the repo goes public:** check the organizer's data rules and whether the `cccd` and phone
-  columns are fake. Review the licenses of the skills in `.agents/`, and the `brainstorming` scripts.
+- **Before going public:** check the organizer's data rules, whether `cccd` and phone are fake, the
+  licenses of skills in `.agents/`, and the `brainstorming` scripts.
 
-## Spend so far
-
-$0. No real LLM calls have been made.
+## Spend so far: about $0.06 (Groq gpt-oss-20b, 3 runs of 3 questions plus a cache probe).
 
 ## Watch out
 
-- `pyproject.toml` has `package = false`. Remove it and add a build setup when the first module in
-  `src/da_agent` is added. pyright is planned but not installed, so add it then too.
-- `command_guard` rejects mounting all of `train/`. The Runner must mount one shop directory.
-- `agent-browser` also needs its CLI, installed globally with npm. The guard asks before that runs.
-- `eval/reports/` is gitignored. Publish only aggregate results in `docs/eval/`.
-- Do not regenerate `splits.json` without a reason, because it invalidates baselines. Never read data
-  from the holdout shops listed there. The scorer has no holdout set yet: add that on Day 21.
-- Scorer interpretations the rulebook leaves open: a wrong `type` is wrong, `unanswerable` needs a
-  non-empty `reason`, and table columns match by name only when all names match.
+- A question uses 48–75k tokens (6–9 calls of 6–9.5k input), about $0.005; a runaway one 130k.
+- SQL runs in the eval process until the sandbox exists. Do not use this path on untrusted files.
+- Do not regenerate `splits.json`, and never read data from its holdout shops. The scorer gets a
+  holdout option on Day 21. `eval/reports/` is gitignored, so publish only aggregates in `docs/eval/`.
+- Scorer interpretations: a wrong `type` is wrong; table columns match by name only if all names match.

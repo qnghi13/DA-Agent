@@ -3,7 +3,7 @@
 DA-Agent turns uploaded tabular files and a free-form description into a queryable dataset, then
 answers questions about it with cited, verified results.
 
-This document describes the intended design. **None of it is implemented yet.** See
+This document describes the intended design. Most of it is not implemented yet. See
 [progress.md](progress.md) for what exists. Security controls are in
 [threat-model.md](threat-model.md), and the reasons behind major choices are in [adr/](adr/).
 
@@ -151,12 +151,15 @@ Mostly code, not LLM self-assessment ([ADR 0007](adr/0007-code-first-verificatio
 
 - **Short-term:** thread state in checkpoints.
 - **Long-term, per dataset:** the approved spec, rules, and user corrections, each with provenance.
-- **RAG:** dataset docs and rules. The first version puts the whole rulebook in the prompt, which
-  helps caching. Retrieval is tried later and measured with evals.
+- **RAG:** dataset docs and rules. Rules that shape every answer stay in the prompt. Topic sections
+  are listed by title and fetched with `search_rules`, by title or keywords
+  ([ADR 0008](adr/0008-rules-on-demand.md)). Embedding retrieval is tried later and measured with
+  evals.
 
 ### Output
 
-`AgentAnswer` is structured. The `eval/datamate` adapter converts it to the competition format, and
+`AgentAnswer` holds a kind, a value, and an optional reason. `AgentResult` adds the steps taken, and
+its successful queries are the evidence behind the answer. The `eval/datamate` adapter converts it to the competition format, and
 the core does not know that format. Charts are validated Vega-Lite specs with no code execution.
 Reports are standalone HTML, and every number links to the query that produced it.
 
@@ -179,4 +182,3 @@ Reports are standalone HTML, and every number links to the query that produced i
 | How does the Worker call the Runner: internal HTTP or a job table? | Days 3–6 |
 | One container per request, or one per run? This trades startup latency against isolation | Days 3–6 |
 | What are the parse rate thresholds and the retry limit N? Set from real data | Days 3–6 |
-| Which fields are in `AgentAnswer` and how are citations shaped? | Day 2, with the minimal agent |

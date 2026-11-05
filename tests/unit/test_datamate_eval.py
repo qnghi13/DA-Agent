@@ -1,0 +1,393 @@
+"""DataMate eval adapter and runner, on a small synthetic shop."""
+
+import json
+import sqlite3
+from pathlib import Path
+
+import pytest
+
+from da_agent.agent.answer import AgentAnswer, AgentResult
+from da_agent.llm.client import CostLedger, LLMClient, Route
+from da_agent.llm.types import LLMRequest, LLMResponse, PermanentLLMError, ToolCall, Usage
+from eval.datamate.adapter import (
+    UnsupportedShopError,
+    agent_rulebook,
+    open_shop,
+    rulebook_documents,
+    to_submission,
+)
+from eval.datamate.run import RunConfig, run_questions, score_run, select_questions
+
+CANARY = "ANSWER-CANARY-7731"
+
+
+class ScriptedAdapter:
+    provider = "fake"
+
+    def __init__(self, script: list) -> None:
+        self.script = list(script)
+        self.requests: list[LLMRequest] = []
+
+    def complete(self, request: LLMRequest, model: str) -> LLMResponse:
+        self.requests.append(request.model_copy(deep=True))
+        step = self.script.pop(0)
+        if isinstance(step, Exception):
+            raise step
+        return step
+
+
+def answer(value: int) -> LLMResponse:
+    call = ToolCall(
+        id="c", name="submit_answer", arguments={"kind": "number", "value_json": str(value)}
+    )
+    return LLMResponse(tool_calls=[call], usage=Usage(input_tokens=40, output_tokens=10))
+
+
+@pytest.fixture
+def data_dir(tmp_path: Path) -> Path:
+    root = tmp_path / "train"
+    shop = root / "data" / "biz_1"
+    shop.mkdir(parents=True)
+    (root / "data" / "biz_2").mkdir()
+    (root / "data" / "biz_2" / "sales.xlsx").write_bytes(b"not used")
+    (root / "data" / "biz_2" / "README.md").write_text("Shop 2", encoding="utf-8")
+    (root / "data" / "biz_9").mkdir()
+    (root / "rulebook.md").write_text("Revenue rule", encoding="utf-8")
+    (root / "calendar.csv").write_text("date,holiday\n2026-01-01,New Year\n", encoding="utf-8")
+    (shop / "README.md").write_text("Shop 1 notes", encoding="utf-8")
+    connection = sqlite3.connect(shop / "pos.sqlite")
+    connection.execute("CREATE TABLE khach_hang (TenGoi TEXT, cccd TEXT, SoDienThoai TEXT)")
+    connection.execute("INSERT INTO khach_hang VALUES ('An', 'SECRET-ID', 'SECRET-PHONE')")
+    connection.commit()
+    connection.close()
+    questions = [
+        {"id": "q1", "business_id": "biz_1", "question": "One?", "as_of_date": "2026-01-02"},
+        {"id": "q2", "business_id": "biz_1", "question": "Two?", "as_of_date": "2026-01-03"},
+        {"id": "q3", "business_id": "biz_2", "question": "Three?", "as_of_date": "2026-01-04"},
+        {"id": "q9", "business_id": "biz_9", "question": "Held out?", "as_of_date": "2026-01-05"},
+    ]
+    (root / "questions.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in questions), encoding="utf-8"
+    )
+    truths = [
+        {"id": "q1", "type": "number", "answer": 1, "alias": [CANARY]},
+        {"id": "q2", "type": "number", "answer": 2, "alias": [CANARY]},
+    ]
+    (root / "answers.jsonl").write_text(
+        "".join(json.dumps(row) + "\n" for row in truths), encoding="utf-8"
+    )
+    return root
+
+
+@pytest.fixture
+def splits(tmp_path: Path) -> Path:
+    path = tmp_path / "splits.json"
+    path.write_text(
+        json.dumps(
+            {
+                "dev_shops": ["biz_1", "biz_2"],
+                "holdout_shops": ["biz_9"],
+                "question_sets": {
+                    "good": ["q1", "q2"],
+                    "mixed": ["q1", "q3"],
+                    "leaky": ["q1", "q9"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def make_llm(script: list) -> tuple[LLMClient, CostLedger, ScriptedAdapter]:
+    adapter = ScriptedAdapter(script)
+    ledger = CostLedger()
+    client = LLMClient([Route(adapter, "m")], ledger, sleep=lambda _: None, max_retries=0)
+    return client, ledger, adapter
+
+
+def read_jsonl(path: Path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+@pytest.mark.parametrize(
+    ("kind", "value", "expected_type"),
+    [
+        ("number", 5, "number"),
+        ("percent", 1.5, "percent"),
+        ("date", "2026-01-01", "date"),
+        ("boolean", True, "boolean"),
+        ("text", "An", "string"),
+        ("list", [1], "list"),
+        ("table", {"columns": ["a"], "rows": [[1]]}, "table"),
+    ],
+)
+def test_to_submission_maps_answer_kinds(kind: str, value: object, expected_type: str) -> None:
+    result = AgentResult(answer=AgentAnswer(kind=kind, value=value))
+
+    assert to_submission("q1", result) == {"id": "q1", "type": expected_type, "answer": value}
+
+
+def test_to_submission_maps_unanswerable_with_a_string_reason() -> None:
+    result = AgentResult(answer=AgentAnswer(kind="unanswerable", reason="No data"))
+
+    assert to_submission("q1", result) == {
+        "id": "q1",
+        "type": "unanswerable",
+        "reason": "No data",
+    }
+
+
+def test_to_submission_omits_a_missing_reason() -> None:
+    result = AgentResult(answer=AgentAnswer(kind="unanswerable"))
+
+    assert to_submission("q1", result) == {"id": "q1", "type": "unanswerable"}
+
+
+def test_to_submission_abstains_without_an_answer() -> None:
+    result = AgentResult(stop_reason="iteration_limit")
+
+    assert to_submission("q1", result) == {"id": "q1", "type": "abstain"}
+
+
+def test_open_shop_provides_documents_calendar_and_hides_personal_data(data_dir: Path) -> None:
+    shop = open_shop(data_dir, "biz_1")
+
+    names = {document.name for document in shop.documents}
+    assert names == {"rulebook.md", "rulebook-topics.md", "README.md"}
+    assert shop.dataset.query("SELECT holiday FROM calendar").rows == [["New Year"]]
+    columns = {c.name for table in shop.dataset.describe() for c in table.columns}
+    assert "TenGoi" in columns
+    assert "cccd" not in columns
+    assert "SoDienThoai" not in columns
+
+
+def test_open_shop_rejects_shops_without_a_sqlite_file(data_dir: Path) -> None:
+    with pytest.raises(UnsupportedShopError, match="biz_2"):
+        open_shop(data_dir, "biz_2")
+
+
+def test_select_questions_filters_by_set_and_limit(data_dir: Path, splits: Path) -> None:
+    assert [q["id"] for q in select_questions(data_dir, splits, "good")] == ["q1", "q2"]
+    assert [q["id"] for q in select_questions(data_dir, splits, "good", limit=1)] == ["q1"]
+
+
+def test_select_questions_refuses_holdout_shops(data_dir: Path, splits: Path) -> None:
+    with pytest.raises(ValueError, match="holdout"):
+        select_questions(data_dir, splits, "leaky")
+
+
+def test_run_writes_submission_results_and_metrics(data_dir: Path, tmp_path: Path) -> None:
+    output = tmp_path / "out"
+    llm, ledger, _ = make_llm([answer(1), answer(99)])
+    questions = read_jsonl(data_dir / "questions.jsonl")[:2]
+
+    metrics = run_questions(questions, data_dir, llm, ledger, RunConfig(output))
+
+    assert read_jsonl(output / "submission.jsonl") == [
+        {"id": "q1", "type": "number", "answer": 1},
+        {"id": "q2", "type": "number", "answer": 99},
+    ]
+    results = read_jsonl(output / "results.jsonl")
+    assert results[0]["id"] == "q1"
+    assert results[0]["stop_reason"] == "answered"
+    assert results[0]["total_tokens"] == 50
+    assert "latency_seconds" in results[0]
+    assert metrics["attempted"] == 2
+    assert metrics["total_tokens"] == 100
+    assert metrics["cost_usd"] == 0
+    assert metrics["stop_reasons"] == {"answered": 2}
+    assert json.loads((output / "metrics.json").read_text(encoding="utf-8")) == metrics
+
+
+def test_run_scores_in_a_separate_step_through_the_scorer(
+    data_dir: Path, splits: Path, tmp_path: Path
+) -> None:
+    output = tmp_path / "out"
+    llm, ledger, _ = make_llm([answer(1), answer(99)])
+    questions = select_questions(data_dir, splits, "good")
+    run_questions(questions, data_dir, llm, ledger, RunConfig(output))
+
+    summary = score_run(data_dir / "answers.jsonl", output, splits, "good")
+
+    assert (summary["correct"], summary["wrong"], summary["score"]) == (1, 1, 0)
+    assert json.loads((output / "score.json").read_text(encoding="utf-8")) == summary
+
+
+def test_unsupported_shops_are_skipped_and_reported(
+    data_dir: Path, splits: Path, tmp_path: Path
+) -> None:
+    llm, ledger, adapter = make_llm([answer(1)])
+    questions = select_questions(data_dir, splits, "mixed")
+
+    metrics = run_questions(questions, data_dir, llm, ledger, RunConfig(tmp_path / "out"))
+
+    assert metrics["attempted"] == 1
+    assert metrics["skipped_unsupported"] == ["q3"]
+    assert len(adapter.requests) == 1
+
+
+def test_resume_skips_finished_questions(data_dir: Path, tmp_path: Path) -> None:
+    output = tmp_path / "out"
+    questions = read_jsonl(data_dir / "questions.jsonl")[:2]
+    llm, ledger, _ = make_llm([answer(1)])
+    run_questions(questions[:1], data_dir, llm, ledger, RunConfig(output))
+
+    llm, ledger, adapter = make_llm([answer(2)])
+    metrics = run_questions(questions, data_dir, llm, ledger, RunConfig(output))
+
+    assert len(adapter.requests) == 1
+    assert [row["id"] for row in read_jsonl(output / "submission.jsonl")] == ["q1", "q2"]
+    assert metrics["attempted"] == 2
+    assert metrics["total_tokens"] == 100
+
+
+def test_total_token_limit_stops_the_run_with_a_clear_status(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    llm, ledger, adapter = make_llm([answer(1), answer(2)])
+    questions = read_jsonl(data_dir / "questions.jsonl")[:2]
+
+    metrics = run_questions(
+        questions, data_dir, llm, ledger, RunConfig(tmp_path / "out", max_total_tokens=50)
+    )
+
+    assert metrics["stopped"] == "total_token_limit"
+    assert metrics["attempted"] == 1
+    assert len(adapter.requests) == 1
+
+
+def test_question_budget_abstains_and_the_run_continues(data_dir: Path, tmp_path: Path) -> None:
+    run_sql = LLMResponse(
+        tool_calls=[ToolCall(id="c", name="run_sql", arguments={"sql": "SELECT 1"})],
+        usage=Usage(input_tokens=40, output_tokens=10),
+    )
+    llm, ledger, _ = make_llm([run_sql, answer(2)])
+    questions = read_jsonl(data_dir / "questions.jsonl")[:2]
+
+    run_questions(
+        questions, data_dir, llm, ledger, RunConfig(tmp_path / "out", max_tokens_per_question=50)
+    )
+
+    rows = read_jsonl(tmp_path / "out" / "submission.jsonl")
+    assert rows[0] == {"id": "q1", "type": "abstain"}
+    assert rows[1]["answer"] == 2
+
+
+def test_tokens_of_failed_questions_count_toward_reports_and_limits(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    run_sql = LLMResponse(
+        tool_calls=[ToolCall(id="c", name="run_sql", arguments={"sql": "SELECT 1"})],
+        usage=Usage(input_tokens=40, output_tokens=10),
+    )
+    llm, ledger, adapter = make_llm([run_sql, PermanentLLMError("too large"), answer(2)])
+    questions = read_jsonl(data_dir / "questions.jsonl")[:2]
+
+    metrics = run_questions(
+        questions, data_dir, llm, ledger, RunConfig(tmp_path / "out", max_total_tokens=50)
+    )
+
+    assert metrics["total_tokens"] == 50
+    assert metrics["stopped"] == "total_token_limit"
+    assert len(adapter.requests) == 2
+
+
+def test_repeated_provider_failures_stop_the_run_and_stay_retryable(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    output = tmp_path / "out"
+    llm, ledger, adapter = make_llm([PermanentLLMError("daily limit")] * 5)
+    questions = read_jsonl(data_dir / "questions.jsonl")[:2]
+
+    metrics = run_questions(
+        questions, data_dir, llm, ledger, RunConfig(output, max_consecutive_failures=1)
+    )
+
+    assert metrics["stopped"] == "provider_failures"
+    assert metrics["failed"] == ["q1"]
+    assert "daily limit" in metrics["failure_details"]["q1"]
+    assert len(adapter.requests) == 1
+    # Failed questions are not written, so a later run can retry them.
+    assert not (output / "submission.jsonl").exists() or not read_jsonl(output / "submission.jsonl")
+
+
+@pytest.mark.security
+def test_answers_and_personal_data_never_reach_the_model(data_dir: Path, tmp_path: Path) -> None:
+    describe = LLMResponse(tool_calls=[ToolCall(id="d", name="describe_dataset")])
+    llm, ledger, adapter = make_llm([describe, answer(1)])
+    questions = read_jsonl(data_dir / "questions.jsonl")[:1]
+
+    run_questions(questions, data_dir, llm, ledger, RunConfig(tmp_path / "out"))
+
+    sent = " ".join(request.model_dump_json() for request in adapter.requests)
+    assert CANARY not in sent
+    assert "SECRET" not in sent
+    assert "cccd" not in sent
+
+
+@pytest.mark.security
+def test_a_run_works_with_no_answers_file_present(data_dir: Path, tmp_path: Path) -> None:
+    (data_dir / "answers.jsonl").unlink()
+    llm, ledger, _ = make_llm([answer(1)])
+    questions = read_jsonl(data_dir / "questions.jsonl")[:1]
+
+    metrics = run_questions(questions, data_dir, llm, ledger, RunConfig(tmp_path / "out"))
+
+    assert metrics["attempted"] == 1
+
+
+RULEBOOK = """\
+## 7. Không trả lời được
+Nộp `{"type": "unanswerable", "reason": "…"}`.
+- Không có dữ liệu khác với bằng 0.
+
+Trường `reason` không bắt buộc và không chấm tự động. Nếu có, `reason` phải là chuỗi.
+
+## 9. Đáp án và chấm điểm
+Mỗi dòng `submission.jsonl`: `{"id": "..."}`. Đúng **+1**, sai **\u22121**.
+
+**Mỗi type có một format duy nhất; sai format là sai.** Tiền là số nguyên VND.
+- **Làm tròn:** tiền ra số lẻ làm tròn về đồng.
+"""
+
+
+def test_agent_rulebook_drops_submission_and_scoring_mechanics() -> None:
+    trimmed = agent_rulebook(RULEBOOK)
+
+    assert "submission.jsonl" not in trimmed
+    assert "+1" not in trimmed
+    assert "chấm tự động" not in trimmed
+
+
+def test_agent_rulebook_keeps_rules_that_shape_the_answer() -> None:
+    trimmed = agent_rulebook(RULEBOOK)
+
+    for rule in ("Không có dữ liệu khác với bằng 0", "Tiền là số nguyên VND", "Làm tròn"):
+        assert rule in trimmed
+
+
+TOPIC_RULEBOOK = """\
+# Rulebook
+Today is as_of_date.
+
+## 1. Đơn hàng và doanh thu
+Doanh thu không tính đơn huỷ.
+
+## 7. Không trả lời được
+Không có dữ liệu khác với bằng 0.
+
+## 9. Đáp án và chấm điểm
+Tiền là số nguyên VND.
+"""
+
+
+def test_rulebook_keeps_answer_rules_inline_and_topics_on_demand() -> None:
+    inline, topics = rulebook_documents(TOPIC_RULEBOOK)
+
+    assert not inline.on_demand
+    assert topics.on_demand
+    for rule in ("Today is as_of_date", "khác với bằng 0", "số nguyên VND"):
+        assert rule in inline.text
+    assert "Doanh thu không tính đơn huỷ" in topics.text
+    assert "Doanh thu không tính đơn huỷ" not in inline.text

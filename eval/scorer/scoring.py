@@ -1,4 +1,4 @@
-"""Scorer for DataMate submissions, following section 9 of the rulebook.
+"""Scorer for DataMate submissions, following sections 7 and 9 of the rulebook.
 
 Scored items and reports carry only outcomes and reason codes, never expected answers, so they are
 safe to pass to analysis tools or show in logs.
@@ -236,15 +236,10 @@ def _check_table(expected: dict, given: Any, aliases: list) -> str | None:
     return None
 
 
-def _check_unanswerable(submission: Mapping[str, Any]) -> str | None:
-    reason = submission.get("reason")
-    return None if isinstance(reason, str) and reason.strip() else FORMAT
-
-
 def _check(truth: Mapping[str, Any], submission: Mapping[str, Any]) -> str | None:
     kind = truth["type"]
     if kind == "unanswerable":
-        return _check_unanswerable(submission)
+        return None
 
     expected, aliases = truth["answer"], truth.get("alias") or []
     given = submission.get("answer")
@@ -263,10 +258,21 @@ def _check(truth: Mapping[str, Any], submission: Mapping[str, Any]) -> str | Non
     raise ValueError(f"unknown answer type in truth for {truth['id']}: {kind!r}")
 
 
+def _has_unreadable_reason(submission: Mapping[str, Any]) -> bool:
+    """Rulebook section 7: the reason is optional, but a non-string reason voids the line."""
+    return (
+        submission.get("type") == "unanswerable"
+        and "reason" in submission
+        and not isinstance(submission["reason"], str)
+    )
+
+
 def score_item(truth: Mapping[str, Any], submission: Mapping[str, Any] | None) -> ItemScore:
     """Score one question. A missing submission counts as an abstention."""
     id_, kind = truth["id"], truth["type"]
     if submission is None or submission.get("type") == "abstain":
+        return ItemScore(id_, kind, Outcome.ABSTAIN)
+    if _has_unreadable_reason(submission):
         return ItemScore(id_, kind, Outcome.ABSTAIN)
     if submission.get("type") != kind:
         return ItemScore(id_, kind, Outcome.WRONG, "type")

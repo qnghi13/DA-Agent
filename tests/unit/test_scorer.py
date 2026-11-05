@@ -234,13 +234,23 @@ def test_table_format_errors(given: Any) -> None:
     assert scored.reason == "format"
 
 
-def test_unanswerable_needs_a_reason() -> None:
-    expected = truth("unanswerable", None)
-    good = {"id": "q1", "type": "unanswerable", "reason": "No purchase price in the data"}
+@pytest.mark.parametrize("extra", [{}, {"reason": "No purchase price"}, {"reason": "  "}])
+def test_unanswerable_reason_is_optional(extra: dict) -> None:
+    given = {"id": "q1", "type": "unanswerable", **extra}
 
-    assert score_item(expected, good).outcome is Outcome.CORRECT
-    assert score_item(expected, {"id": "q1", "type": "unanswerable"}).outcome is Outcome.WRONG
-    assert score_item(expected, {**good, "reason": "  "}).outcome is Outcome.WRONG
+    assert score_item(truth("unanswerable", None), given).outcome is Outcome.CORRECT
+
+
+@pytest.mark.parametrize("reason", [None, 5, ["Missing"], {"why": "Missing"}])
+@pytest.mark.parametrize("kind", ["unanswerable", "number"])
+def test_non_string_reason_makes_the_line_unreadable_and_counts_as_abstention(
+    kind: str, reason: object
+) -> None:
+    given = {"id": "q1", "type": "unanswerable", "reason": reason}
+
+    assert score_item(truth(kind, None if kind == "unanswerable" else 5), given).outcome is (
+        Outcome.ABSTAIN
+    )
 
 
 def test_unanswerable_outcomes_when_either_side_differs() -> None:

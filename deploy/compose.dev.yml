@@ -1,0 +1,21 @@
+# Development services. Start with: docker compose -f deploy/compose.dev.yml up -d
+services:
+  phoenix:
+    image: arizephoenix/phoenix:version-21.0.0
+    ports:
+      # Bound to localhost only, because traces can contain dataset values.
+      - "127.0.0.1:6006:6006"
+    environment:
+      PHOENIX_WORKING_DIR: /mnt/data
+      # Local development only. The port above is not reachable from other machines.
+      PHOENIX_ENABLE_AUTH: "false"
+    volumes:
+      - phoenix-data:/mnt/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:6006/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  phoenix-data:

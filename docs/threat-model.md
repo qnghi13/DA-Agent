@@ -1,7 +1,8 @@
 # Threat model
 
-**Status: design only.** Every control below is planned and none is implemented yet. A control counts
-as done only when a test in `tests/security/` proves it.
+**Status: mostly design.** Controls are planned unless noted. A control counts as done only when a
+test proves it. Done so far: the SQL guard and hidden columns on SQLite (`tests/security/`), and keeping
+answers away from the model during eval runs (`tests/unit/test_datamate_eval.py`).
 
 ## Assets
 
