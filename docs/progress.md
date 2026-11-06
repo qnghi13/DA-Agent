@@ -3,17 +3,15 @@
 Loaded into every session, so keep it under 60 lines. Replace stale content instead of appending.
 
 **Last updated:** 2026-11-06
-**Phase:** Days 3–6, Data and tools ([plan §6](plan.md#6-roadmap)). `exclude_rows` done, uncommitted.
+**Phase:** Days 3–6, Data and tools ([plan §6](plan.md#6-roadmap)). `exclude_rows` checks done, uncommitted.
 
 ## Next step
 
-1. Measure subtotal handling without overfitting dev: a labelled list of non-record rows in dev
-   tables, plus synthetic files not taken from DataMate (English, total above its group, grand
-   total, notes mid-table, clean tables). A script reports precision and recall.
-2. Then decide on code checks (ask first): "row equals the sum of the rows above" as a profile hint
-   and post-build problem, and a problem for rules that exclude normally filled rows.
-3. Agent on the clean DuckDB files, `run_sql` through the Runner. Then the `bootstrap` baseline
-   (ask first), comparing with and without `exclude_rows`, and the Foundation learning note.
+1. Agent on the clean DuckDB files in `eval/reports/datasets-dev/`, `run_sql` through the Runner.
+   Then the `bootstrap` baseline (ask first), with `datasets-dev-v1` (no exclusion) as the
+   comparison, and the Foundation learning note.
+2. Known gap, left until real data needs it: a heading row holding a group total and the group's
+   date (`syn_total_above`). Excluding it leaves its rows without a date.
 
 ## Done
 
@@ -28,10 +26,11 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
   masked profiles. All 24 dev shops load (1–46 s).
 - `DatasetSpec` pipeline: LLM proposes, sandbox builds `dataset.duckdb` with `_quarantine`, parse-rate
   feedback. 24/24 dev shops, parse rates 99.9–100%, in `eval/reports/datasets-dev/` (gitignored).
-- `exclude_rows` (ADR 0010): declarative rules, `_excluded`, rare row shapes in the profile, 10%
-  guard. Rerun in `eval/reports/prepare-v2/` ($0.06): by hand count, row recall about 51% and
-  precision about 95% (missed biz_104, 107 and biz_130 monthly totals; dropped 60 real rows in
-  biz_117 purchases). Not promoted to `datasets-dev/`.
+- `exclude_rows` (ADR 0010): rules, `_excluded`, rare shapes with sums, and checks for kept
+  subtotals and for rules that remove records (full rows, identifiers, share). Rules still failing
+  after the last attempt are dropped. Measured with `eval/ingestion/` (labels, synthetic, scorer).
+  `datasets-dev/` (prepare-v4, biz_109 and biz_124 from v4b): 24/24 ok, parse 99.98%+, exclusion
+  precision and recall 100% on 2,032 labelled rows. Old build kept in `datasets-dev-v1/`.
 
 ## Decisions needed
 
@@ -39,8 +38,7 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
 
 ## Not verified
 
-- Gemini has made no real call. Ollama on the 4 GB GPU was too slow.
-- `deploy/compose.dev.yml` never ran (no Compose plugin). Phoenix runs as container `da-agent-phoenix`.
+- Gemini has made no real call; Ollama on the 4 GB GPU was too slow. `deploy/compose.dev.yml` never ran (no Compose plugin). Phoenix runs as container `da-agent-phoenix`.
 
 ## Waiting on the user
 
@@ -49,11 +47,12 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
 - **Before going public:** check the organizer's data rules, whether `cccd` and phone are fake, the
   licenses of skills in `.agents/`, and the `brainstorming` scripts.
 
-## Spend so far: about $0.31 (agent runs $0.06, spec proposals $0.25).
+## Spend so far: about $0.50 (agent runs $0.06, spec proposals $0.44).
 
 ## Watch out
 
 - A question uses 48–75k tokens, about $0.005; a runaway one 130k.
+- `gpt-oss-20b` specs vary run to run (one shop went 100% to 0%). Compare totals, never one shop.
 - Do not regenerate `splits.json`, and never read data from its holdout shops. The scorer gets a
   holdout option on Day 21. `eval/reports/` is gitignored, so publish only aggregates in `docs/eval/`.
 - Answers have no row labels: ingestion needs our own labels, the score checks end to end. Keep the

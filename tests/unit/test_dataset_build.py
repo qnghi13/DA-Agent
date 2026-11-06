@@ -433,3 +433,94 @@ def test_rules_sharing_a_reason_are_counted_apart(tmp_path: Path, out: Path) -> 
         ("note", 1),
         ("note (2)", 2),
     ]
+
+
+def daily_sales_upload(tmp_path: Path) -> tuple[Path, object]:
+    lines = ["Ngày,Sản phẩm,Tiền,Ghi chú"]
+    lines += ["01/03/2025,Trà,1000,"] * 40 + ["01/03/2025,Trà,1000,gấp"] * 10
+    lines += [",Tổng ngày 01/03,50000,"]
+    lines += ["02/03/2025,Cà phê,2500,"] * 30
+    lines += [",Tổng ngày 02/03,75000,", ",Tổng tháng 3,125000,"]
+    return raw_upload(tmp_path, {"t.csv": "\n".join(lines) + "\n"})
+
+
+def test_kept_rows_that_sum_the_rows_above_are_reported(tmp_path: Path, out: Path) -> None:
+    raw, report = daily_sales_upload(tmp_path)
+    spec = DatasetSpec(tables=[TableSpec(source="t", name="t")])
+
+    result = build(raw / RAW_DATABASE, spec, report, out)
+
+    [check] = result.tables[0].subtotal_checks
+    assert (check.columns, check.rows, check.sums_above, check.kept) == (
+        ["Sản phẩm", "Tiền"],
+        3,
+        2,
+        3,
+    )
+
+
+def test_excluded_subtotals_are_not_reported_as_kept(tmp_path: Path, out: Path) -> None:
+    raw, report = daily_sales_upload(tmp_path)
+    rule = RowRule(when=[RowCondition(column="Sản phẩm", op="starts_with", value="tổng")])
+    spec = DatasetSpec(tables=[TableSpec(source="t", name="t", exclude_rows=[rule])])
+
+    result = build(raw / RAW_DATABASE, spec, report, out)
+
+    assert result.tables[0].subtotal_checks[0].kept == 0
+
+
+def test_rules_that_remove_rows_filled_like_records_are_counted(tmp_path: Path, out: Path) -> None:
+    raw, report = daily_sales_upload(tmp_path)
+    rules = [
+        RowRule(when=[RowCondition(column="Ghi chú", op="not_blank")], reason="notes"),
+        RowRule(when=[RowCondition(column="Ngày", op="blank")], reason="subtotals"),
+    ]
+    spec = DatasetSpec(tables=[TableSpec(source="t", name="t", exclude_rows=rules)])
+
+    result = build(raw / RAW_DATABASE, spec, report, out)
+
+    assert [(e.reason, e.rows, e.full_rows) for e in result.tables[0].excluded] == [
+        ("notes", 10, 10),
+        ("subtotals", 3, 0),
+    ]
+
+
+def test_rules_that_remove_rows_with_an_identifier_are_counted(tmp_path: Path, out: Path) -> None:
+    lines = ["Mã đơn,Khách hàng,Thành tiền"]
+    lines += [f"HD{i:04d},{'' if i % 25 == 0 else 'An'},{1000 + i % 7}" for i in range(100)]
+    raw, report = raw_upload(tmp_path, {"t.csv": "\n".join(lines) + "\n"})
+    rule = RowRule(when=[RowCondition(column="Khách hàng", op="blank")], reason="no customer")
+    spec = DatasetSpec(tables=[TableSpec(source="t", name="t", exclude_rows=[rule])])
+
+    result = build(raw / RAW_DATABASE, spec, report, out)
+
+    [excluded] = result.tables[0].excluded
+    assert (excluded.rows, excluded.with_identifier, excluded.identifier) == (4, 4, "Mã đơn")
+
+
+def test_amounts_and_repeated_keys_are_not_identifiers(tmp_path: Path, out: Path) -> None:
+    raw, report = daily_sales_upload(tmp_path)
+    rule = RowRule(when=[RowCondition(column="Sản phẩm", op="starts_with", value="tổng")])
+    spec = DatasetSpec(tables=[TableSpec(source="t", name="t", exclude_rows=[rule])])
+
+    result = build(raw / RAW_DATABASE, spec, report, out)
+
+    assert result.tables[0].excluded[0].with_identifier == 0
+
+
+def test_notes_written_in_an_identifier_column_are_not_identifiers(
+    tmp_path: Path, out: Path
+) -> None:
+    lines = ["Mã phiếu,Mặt hàng,Nhập"]
+    lines += [f"PK{i:04d},Trà,{i % 9 + 1}" for i in range(60)]
+    lines.insert(30, "Lưu ý: hàng đổi trả ghi số âm,,")
+    raw, report = raw_upload(tmp_path, {"t.csv": "\n".join(lines) + "\n"})
+    rule = RowRule(when=[RowCondition(column="Mặt hàng", op="blank")], reason="note")
+    spec = DatasetSpec(tables=[TableSpec(source="t", name="t", exclude_rows=[rule])])
+
+    result = build(raw / RAW_DATABASE, spec, report, out)
+
+    assert (result.tables[0].excluded[0].rows, result.tables[0].excluded[0].with_identifier) == (
+        1,
+        0,
+    )

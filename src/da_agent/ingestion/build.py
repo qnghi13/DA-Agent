@@ -14,7 +14,7 @@ import duckdb
 from pydantic import BaseModel, Field
 
 from da_agent.ingestion.raw import slug
-from da_agent.ingestion.report import IngestReport
+from da_agent.ingestion.report import IngestReport, TableReport
 from da_agent.ingestion.spec import (
     META_COLUMNS,
     ColumnSpec,
@@ -22,6 +22,15 @@ from da_agent.ingestion.spec import (
     RowCondition,
     RowRule,
     TableSpec,
+)
+from da_agent.ingestion.sqltext import (
+    filled_count_sql,
+    filled_sql,
+    lit,
+    number_sql,
+    q,
+    shape_sql,
+    signature_sql,
 )
 
 CLEAN_DATABASE = "dataset.duckdb"
@@ -37,6 +46,12 @@ DATE_FORMATS = {
     "ymd": ("%Y/%m/%d %H:%M:%S", "%Y/%m/%d", "%Y.%m.%d"),
 }
 VI_TEXT_DATE = r"^(\d{1,2})\s+(thg|tháng)\s*(\d{1,2}),?\s+(\d{4})$"
+# A rare shape counts as subtotals when at least this share of its rows, and at least two, equal
+# the sum of the rows above them.
+SUBTOTAL_SHARE = 0.5
+# An identifier column, such as an order or slip id, is filled in at least half of the kept rows,
+# nearly unique there, and mostly not a number. Rows that carry one are records.
+ID_FILLED, ID_DISTINCT, ID_NUMERIC, ID_MIN_ROWS = 0.5, 0.9, 0.5, 20
 # Excel serial numbers from 1954 to 2119. Five-digit numbers outside this range stay unparsed.
 EXCEL_SERIAL_MIN, EXCEL_SERIAL_MAX = 20000, 80000
 
@@ -56,7 +71,22 @@ class ColumnBuild(BaseModel):
 
 class ExcludedRule(BaseModel):
     reason: str
+    position: int = Field(default=0, description="1-based index in the table's exclude_rows.")
     rows: int = 0
+    # Excluded rows with as many filled cells as the table's common row shape: likely records.
+    full_rows: int = 0
+    # Excluded rows with a value in an identifier column, such as an order id: likely records.
+    with_identifier: int = 0
+    identifier: str | None = None
+
+
+class SubtotalCheck(BaseModel):
+    """A rare row shape whose rows mostly equal the sum of the rows above them."""
+
+    columns: list[str]
+    rows: int
+    sums_above: int
+    kept: int = Field(description="Rows of this shape still in the clean table.")
 
 
 class TableBuild(BaseModel):
@@ -67,61 +97,12 @@ class TableBuild(BaseModel):
     columns: list[ColumnBuild] = Field(default_factory=list)
     hidden: list[str] = Field(default_factory=list)
     excluded: list[ExcludedRule] = Field(default_factory=list)
+    subtotal_checks: list[SubtotalCheck] = Field(default_factory=list)
     error: str | None = None
 
 
 class BuildReport(BaseModel):
     tables: list[TableBuild] = Field(default_factory=list)
-
-
-def q(identifier: str) -> str:
-    return '"' + identifier.replace('"', '""') + '"'
-
-
-def lit(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
-
-
-SHORTHAND = r"^(\d+)(tr|triệu|k)(\d{1,3})$"
-
-
-def _number(text: str) -> str:
-    """SQL for a DOUBLE from local number text: 22,000 / 1.350.000 / 25000k / 578.000đ / 1.5tr.
-
-    Without a suffix, groups of three digits mean thousands whatever the separator, so 22,000 can
-    never become 22, and one separator without three digits after it is a decimal point: 2,5.
-    Before a suffix, one separator is always a decimal point: 151,036tr is 151.036 million.
-    Shorthand such as 1tr270 (1,270,000) and 1k5 (1,500) is read too.
-    """
-    compact = f"regexp_replace(lower(trim({text})), '\\s+', '', 'g')"
-    bare = f"regexp_replace({compact}, '(vnđ|vnd|đồng|đ)$', '')"
-    multiplier = (
-        f"CASE WHEN regexp_matches({bare}, '(k|nghìn|ngàn)$') THEN 1000 "
-        f"WHEN regexp_matches({bare}, '(tr|triệu)$') THEN 1000000 ELSE 1 END"
-    )
-    digits = f"regexp_replace({bare}, '(k|nghìn|ngàn|tr|triệu)$', '')"
-    # With a suffix, one separator is a decimal point: 151,036tr is 151.036 million.
-    suffixed = f"({multiplier}) > 1 AND regexp_matches({digits}, '^-?\\d+[.,]\\d+$')"
-    normal = (
-        f"CASE WHEN {suffixed} THEN replace({digits}, ',', '.') "
-        f"WHEN regexp_matches({digits}, '^-?\\d{{1,3}}(,\\d{{3}})+(\\.\\d+)?$') "
-        f"THEN replace({digits}, ',', '') "
-        f"WHEN regexp_matches({digits}, '^-?\\d{{1,3}}(\\.\\d{{3}})+(,\\d+)?$') "
-        f"THEN replace(replace({digits}, '.', ''), ',', '.') "
-        f"WHEN regexp_matches({digits}, '^-?\\d+[.,]\\d+$') THEN replace({digits}, ',', '.') "
-        f"ELSE {digits} END"
-    )
-    major = f"TRY_CAST(regexp_extract({bare}, {lit(SHORTHAND)}, 1) AS DOUBLE)"
-    unit = f"regexp_extract({bare}, {lit(SHORTHAND)}, 2)"
-    minor = f"TRY_CAST(rpad(regexp_extract({bare}, {lit(SHORTHAND)}, 3), 3, '0') AS DOUBLE)"
-    shorthand = (
-        f"CASE WHEN {unit} = 'k' THEN {major} * 1000 + {minor} "
-        f"ELSE {major} * 1000000 + {minor} * 1000 END"
-    )
-    return (
-        f"(CASE WHEN regexp_matches({bare}, {lit(SHORTHAND)}) THEN {shorthand} "
-        f"ELSE TRY_CAST({normal} AS DOUBLE) * {multiplier} END)"
-    )
 
 
 def _timestamp(text: str, formats: list[str]) -> str:
@@ -161,15 +142,15 @@ def parse_expression(column: ColumnSpec, raw: str) -> str:
     if kind == "text":
         return text
     if kind == "number":
-        return _number(text)
+        return number_sql(text)
     if kind in ("integer", "money"):
-        number = _number(text)
+        number = number_sql(text)
         if kind == "money":
             return f"CAST(round({number}) AS BIGINT)"
         return f"CASE WHEN {number} = floor({number}) THEN CAST({number} AS BIGINT) END"
     if kind == "quantity":
         leading = f"regexp_extract(trim({text}), '^(-?\\d+(?:[.,]\\d+)?)', 1)"
-        return _number(f"NULLIF({leading}, '')")
+        return number_sql(f"NULLIF({leading}, '')")
     if kind in ("date", "datetime"):
         stamp = _timestamp(text, list(column.date_formats))
         return f"CAST({stamp} AS DATE)" if kind == "date" else stamp
@@ -226,6 +207,7 @@ def build(
         t.name: [c.name for c in t.columns if c.name not in META_COLUMNS] for t in report.tables
     }
     sensitive = {t.name: {c.name for c in t.columns if c.profile.sensitive} for t in report.tables}
+    raw_reports = {t.name: t for t in report.tables}
     tables = _with_missing_tables(spec, report)
     with duckdb.connect(str(out_dir / CLEAN_DATABASE)) as connection:
         connection.execute(f"ATTACH {lit(str(raw_database))} AS raw (READ_ONLY)")
@@ -243,7 +225,11 @@ def build(
             try:
                 result.tables.append(
                     _build_table(
-                        connection, table, raw_columns[table.source], sensitive[table.source]
+                        connection,
+                        table,
+                        raw_columns[table.source],
+                        sensitive[table.source],
+                        raw_reports[table.source],
                     )
                 )
             except duckdb.Error as error:
@@ -280,6 +266,7 @@ def _build_table(
     table: TableSpec,
     raw_columns: list[str],
     sensitive: set[str],
+    raw_report: TableReport,
 ) -> TableBuild:
     specs = {c.source: c for c in table.columns}
     hidden = sorted(s for s in raw_columns if s in sensitive or (s in specs and specs[s].sensitive))
@@ -333,15 +320,93 @@ def _build_table(
     )
     report = TableBuild(name=table.name, source=table.source, hidden=hidden)
     report.raw_rows = _scalar(connection, f"SELECT count(*) FROM {q(marked)}")
-    for label in _rule_labels(table.exclude_rows):
+    common = _common_filled_count(connection, marked, raw_columns)
+    full = f"{filled_count_sql(raw_columns)} >= {common}" if raw_columns else "false"
+    identifiers = _identifier_columns(connection, marked, raw_columns) if table.exclude_rows else {}
+    for position, label in enumerate(_rule_labels(table.exclude_rows), start=1):
         excluded = f"SELECT count(*) FROM {q(marked)} WHERE __excluded = {lit(label)}"
-        report.excluded.append(ExcludedRule(reason=label, rows=_scalar(connection, excluded)))
+        rule = ExcludedRule(
+            reason=label,
+            position=position,
+            rows=_scalar(connection, excluded),
+            full_rows=_scalar(connection, f"{excluded} AND {full}"),
+        )
+        for column, form in identifiers.items():
+            same_form = f"{signature_sql(q(column))} = {lit(form)}"
+            count = _scalar(connection, f"{excluded} AND {filled_sql(column)} AND {same_form}")
+            if count > rule.with_identifier:
+                rule.with_identifier, rule.identifier = count, column
+        report.excluded.append(rule)
+    for shape in raw_report.rare_shapes:
+        if shape.sums_above < 2 or shape.sums_above < SUBTOTAL_SHARE * shape.rows:
+            continue
+        kept = (
+            f"SELECT count(*) FROM {q(marked)} WHERE __excluded IS NULL "
+            f"AND {shape_sql(raw_columns, shape.columns)}"
+        )
+        report.subtotal_checks.append(
+            SubtotalCheck(
+                columns=shape.columns,
+                rows=shape.rows,
+                sums_above=shape.sums_above,
+                kept=_scalar(connection, kept),
+            )
+        )
     report.rows = _scalar(connection, f"SELECT count(*) FROM {q(stage)}")
     for column in columns:
         report.columns.append(_check_column(connection, table.name, stage, column))
     connection.execute(f"DROP TABLE {q(stage)}")
     connection.execute(f"DROP TABLE {q(marked)}")
     return report
+
+
+def _identifier_columns(
+    connection: duckdb.DuckDBPyConnection, table: str, columns: list[str]
+) -> dict[str, str]:
+    """Columns that identify kept rows, such as an order id, with the common form of their values.
+    See ID_FILLED and the others."""
+    kept = _scalar(connection, f"SELECT count(*) FROM {q(table)} WHERE __excluded IS NULL")
+    if kept < ID_MIN_ROWS or not columns:
+        return {}
+    parts = []
+    for column in columns:
+        value = f"NULLIF(trim({q(column)}), '')"
+        parts += [f"count({value})", f"count(DISTINCT {value})", f"count({number_sql(value)})"]
+    row = connection.execute(
+        f"SELECT {', '.join(parts)} FROM {q(table)} WHERE __excluded IS NULL"
+    ).fetchone()
+    if row is None:
+        return {}
+    found: dict[str, str] = {}
+    for position, column in enumerate(columns):
+        filled, distinct, numeric = row[3 * position : 3 * position + 3]
+        if (
+            filled >= ID_FILLED * kept
+            and distinct >= ID_DISTINCT * filled
+            and numeric < ID_NUMERIC * filled
+        ):
+            form = connection.execute(
+                f"SELECT {signature_sql(q(column))} AS form FROM {q(table)} "
+                f"WHERE __excluded IS NULL AND {filled_sql(column)} "
+                "GROUP BY form ORDER BY count(*) DESC LIMIT 1"
+            ).fetchone()
+            if form:
+                found[column] = str(form[0])
+    return found
+
+
+def _common_filled_count(
+    connection: duckdb.DuckDBPyConnection, table: str, columns: list[str]
+) -> int:
+    """Filled cells in the table's most common row shape."""
+    if not columns:
+        return 0
+    flags = ", ".join(filled_sql(c) for c in columns)
+    row = connection.execute(
+        f"SELECT shape FROM (SELECT list_value({flags}) AS shape, count(*) AS n FROM {q(table)} "
+        "GROUP BY shape) ORDER BY n DESC LIMIT 1"
+    ).fetchone()
+    return sum(row[0]) if row else 0
 
 
 def _scalar(connection: duckdb.DuckDBPyConnection, sql: str) -> int:

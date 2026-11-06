@@ -49,7 +49,8 @@ which takes the year from the sheet or file name. ISO, Excel serial numbers such
 customer on order line rows. Only when the data shows it.
 - exclude_rows: rows that are not records, such as subtotal, total, or note rows inside a table. \
 They would double count sums. "rare_shapes" in the profile lists unusual sets of filled columns \
-with example rows: decide from the examples whether they are records. All conditions of a rule \
+with example rows: decide from the examples whether they are records. Rows whose value equals \
+the sum of the rows above them are subtotals. All conditions of a rule \
 must hold. Text tests are trimmed and case-insensitive. Rules see raw values before fill_down, \
 so a subtotal row whose key columns are blank in the file can be matched with "blank". Make \
 rules narrow: never exclude real records, and never match on a word that also appears in product \
@@ -96,7 +97,12 @@ def profile_for_prompt(report: IngestReport) -> str:
         }
         if table.rare_shapes:
             entry_table["rare_shapes"] = [
-                {"filled": s.columns, "rows": s.rows, "examples": s.examples}
+                {
+                    "filled": s.columns,
+                    "rows": s.rows,
+                    "rows_equal_to_sum_of_rows_above": s.sums_above,
+                    "examples": s.examples,
+                }
                 for s in table.rare_shapes
             ]
         tables.append(entry_table)

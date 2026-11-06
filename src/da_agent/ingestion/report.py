@@ -45,6 +45,9 @@ class RowShape(BaseModel):
     columns: list[str]
     rows: int
     examples: list[dict[str, str | None]] = Field(default_factory=list)
+    # Rows whose value in a number column equals the sum of the record rows above them, back to
+    # the previous row of this shape in the same sheet: the mark of a subtotal.
+    sums_above: int = 0
 
 
 class TableReport(BaseModel):

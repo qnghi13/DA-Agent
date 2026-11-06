@@ -30,6 +30,7 @@ from da_agent.ingestion.report import (
     SourceReport,
     TableReport,
 )
+from da_agent.ingestion.sqltext import sums_above_sql
 
 RAW_DATABASE = "raw.duckdb"
 SOURCE_COLUMN, ROW_COLUMN = "_source", "_row"
@@ -369,20 +370,23 @@ def _rare_shapes(
     if len(counts) < 2:
         return []
     total, common = sum(n for _, n in counts), sum(counts[0][0])
+    rare = [
+        ([c for c, flag in zip(columns, flags, strict=True) if flag], flags, n)
+        for flags, n in counts[1:]
+        if n / total < RARE_SHAPE_SHARE and sum(flags) < common
+    ]
+    every = [names for names, _, _ in rare]
     shapes: list[RowShape] = []
-    for flags, n in counts[1:]:
-        if n / total >= RARE_SHAPE_SHARE or sum(flags) >= common:
-            continue
-        names = [c for c, flag in zip(columns, flags, strict=True) if flag]
+    for names, flags, n in rare[:MAX_RARE_SHAPES]:
+        sums = connection.execute(sums_above_sql(_quote(table), columns, names, every)).fetchone()
         shapes.append(
             RowShape(
                 columns=names,
                 rows=n,
                 examples=_shape_examples(connection, table, columns, filled, flags, sensitive),
+                sums_above=int(sums[0]) if sums else 0,
             )
         )
-        if len(shapes) >= MAX_RARE_SHAPES:
-            break
     return shapes
 
 

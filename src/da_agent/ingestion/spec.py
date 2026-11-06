@@ -5,6 +5,7 @@ so a manipulated proposal cannot run code. Columns that the raw profile marked s
 hidden whatever the spec says.
 """
 
+import functools
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -213,6 +214,10 @@ def _unique_name(base: str, taken: set[str]) -> str:
     return name
 
 
+def _raw_column(column: str, raw_columns: set[str], by_clean: dict[str, str]) -> str:
+    return column if column in raw_columns else by_clean.get(column, column)
+
+
 def sanitize_spec(spec: DatasetSpec, report: IngestReport) -> tuple[DatasetSpec, list[str]]:
     """Drop or rename what check_spec would reject, so the rest of the spec can still be built.
 
@@ -247,19 +252,23 @@ def sanitize_spec(spec: DatasetSpec, report: IngestReport) -> tuple[DatasetSpec,
                 )
             names.add(name)
             columns.append(column.model_copy(update={"name": name, "date_formats": formats}))
-        fill_down = [c for c in table.fill_down if c in raw[source]]
-        for missing in sorted(set(table.fill_down) - set(fill_down)):
+        # Models often name a column by its clean name here; map it back to the raw column.
+        by_clean = {c.name: c.source for c in table.columns}
+        raw_name = functools.partial(_raw_column, raw_columns=raw[source], by_clean=by_clean)
+        fill_down = [raw_name(c) for c in table.fill_down if raw_name(c) in raw[source]]
+        for missing in sorted({c for c in table.fill_down if raw_name(c) not in raw[source]}):
             problems.append(f"{source}: fill_down column {missing!r} is not in the table; dropped")
         rules = []
         for rule in table.exclude_rows:
-            unknown = [c.column for c in rule.when if c.column not in raw[source]]
+            when = [c.model_copy(update={"column": raw_name(c.column)}) for c in rule.when]
+            unknown = [c.column for c in when if c.column not in raw[source]]
             if unknown:
                 problems.append(
                     f"{source}: exclude_rows column {unknown[0]!r} is not in the table; "
                     "rule dropped"
                 )
             else:
-                rules.append(rule)
+                rules.append(rule.model_copy(update={"when": when}))
         name = _unique_name(table.name, table_names)
         table_names.add(name)
         update = {

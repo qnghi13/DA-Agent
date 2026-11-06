@@ -247,3 +247,25 @@ def test_a_broken_exclusion_rule_costs_only_that_rule() -> None:
 
     assert [r.reason for r in spec.tables[0].exclude_rows] == ["ok"]
     assert len(problems) == 1 and "exclude_rows" in problems[0]
+
+
+def test_clean_column_names_in_row_rules_map_to_their_raw_columns() -> None:
+    from da_agent.ingestion.spec import RowCondition, RowRule, sanitize_spec
+
+    spec = DatasetSpec(
+        tables=[
+            TableSpec(
+                source="don",
+                name="orders",
+                columns=[ColumnSpec(source="Mã đơn", name="order_id")],
+                fill_down=["order_id"],
+                exclude_rows=[RowRule(when=[RowCondition(column="order_id", op="blank")])],
+            )
+        ]
+    )
+
+    clean, problems = sanitize_spec(spec, report())
+
+    assert clean.tables[0].fill_down == ["Mã đơn"]
+    assert clean.tables[0].exclude_rows[0].when[0].column == "Mã đơn"
+    assert problems == []

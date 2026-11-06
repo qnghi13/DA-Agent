@@ -273,3 +273,37 @@ def test_tables_with_one_row_shape_report_no_rare_shapes(upload: Path, out: Path
     report = ingest(upload, out)
 
     assert by_name(report, "t").rare_shapes == []
+
+
+def daily_sales() -> str:
+    lines = ["Ngày,Sản phẩm,Tiền"]
+    lines += ["01/03/2025,Trà,1.000"] * 40
+    lines += [',Tổng ngày 01/03,"40,000"']
+    lines += ["02/03/2025,Cà phê,2500"] * 30
+    lines += [",Tổng ngày 02/03,75000", ",Tổng tháng 3,115000", "Ghi chú: tiền tính bằng đồng,,"]
+    return "\n".join(lines) + "\n"
+
+
+def test_rare_rows_that_equal_the_sum_of_the_rows_above_are_counted(
+    upload: Path, out: Path
+) -> None:
+    (upload / "t.csv").write_text(daily_sales(), encoding="utf-8")
+
+    report = ingest(upload, out)
+
+    shapes = {tuple(s.columns): s for s in by_name(report, "t").rare_shapes}
+    assert (shapes[("Sản phẩm", "Tiền")].rows, shapes[("Sản phẩm", "Tiền")].sums_above) == (3, 2)
+    assert shapes[("Ngày",)].sums_above == 0
+
+
+def test_hostile_column_names_stay_data_in_row_shapes(upload: Path, out: Path) -> None:
+    hostile = 'x"); DROP TABLE t; --'
+    header = f'"{hostile.replace(chr(34), chr(34) * 2)}",b'
+    lines = [header] + ["1,2"] * 40 + [",3", ",4"]
+    (upload / "t.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    report = ingest(upload, out)
+
+    [shape] = by_name(report, "t").rare_shapes
+    assert (shape.columns, shape.rows) == (["b"], 2)
+    assert len(tables(out)["t"]) == 42

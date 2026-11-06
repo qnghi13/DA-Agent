@@ -142,3 +142,84 @@ def test_a_rule_that_excludes_too_many_rows_is_a_problem() -> None:
     assert problems == [
         "orders: exclude rule 'x' removed 300 of 1000 rows (30%); exclude only summary or note rows"
     ]
+
+
+def test_kept_subtotals_and_rules_on_full_rows_are_problems() -> None:
+    from da_agent.ingestion.build import ExcludedRule, SubtotalCheck
+
+    report = build_report(parsed=100)
+    table = report.tables[0]
+    table.raw_rows = 1000
+    table.subtotal_checks = [
+        SubtotalCheck(columns=["Tên", "Tổng"], rows=30, sums_above=28, kept=30),
+        SubtotalCheck(columns=["Ghi chú"], rows=5, sums_above=5, kept=0),
+    ]
+    table.excluded = [ExcludedRule(reason="notes", rows=60, full_rows=60)]
+
+    problems = parse_problems(report)
+
+    assert len(problems) == 2
+    assert "30 rows" in problems[0] and "['Tên', 'Tổng']" in problems[0]
+    assert "'notes'" in problems[1] and "60" in problems[1]
+
+
+def test_a_rule_that_removes_rows_with_an_identifier_is_a_problem() -> None:
+    from da_agent.ingestion.build import ExcludedRule
+
+    report = build_report(parsed=100)
+    report.tables[0].raw_rows = 1000
+    report.tables[0].excluded = [
+        ExcludedRule(reason="no customer", rows=12, with_identifier=12, identifier="Mã đơn")
+    ]
+
+    [problem] = parse_problems(report)
+
+    assert "'no customer'" in problem and "'Mã đơn'" in problem
+
+
+def test_rules_still_removing_records_after_the_last_attempt_are_dropped(tmp_path: Path) -> None:
+    from da_agent.ingestion.build import ExcludedRule
+
+    greedy = json.dumps(
+        {"tables": [{"source": "don", "name": "orders", "exclude_rows": [
+            {"when": [{"column": "Tổng", "op": "not_blank"}], "reason": "totals"}]}]}
+    )  # fmt: skip
+    bad = build_report(parsed=100)
+    bad.tables[0].raw_rows = 100
+    bad.tables[0].excluded = [ExcludedRule(reason="totals", position=1, rows=50, full_rows=50)]
+    runner = FakeRunner(tmp_path, [bad, build_report(parsed=100)])
+    client, _ = llm([greedy])
+
+    prepared = prepare_dataset("up", runner, client, run_id="r", max_attempts=1)  # type: ignore[arg-type]
+
+    assert prepared.status == "problems"
+    assert runner.specs[-1].tables[0].exclude_rows == []
+    assert prepared.spec == runner.specs[-1]
+    assert prepared.dropped_rules == ["orders: 'totals'"]
+    assert prepared.build is not None and prepared.build.output_dir == tmp_path / "build2"
+    assert not (tmp_path / "build1").exists()
+
+
+def test_a_spec_without_record_removing_rules_is_kept_as_proposed(tmp_path: Path) -> None:
+    runner = FakeRunner(tmp_path, [build_report(parsed=100)])
+    client, _ = llm([GOOD])
+
+    prepared = prepare_dataset("up", runner, client, run_id="r")  # type: ignore[arg-type]
+
+    assert prepared.dropped_rules == []
+    assert prepared.proposal is not None and prepared.spec == prepared.proposal.spec
+
+
+def test_only_rules_actually_removed_are_reported_as_dropped() -> None:
+    from da_agent.ingestion.build import ExcludedRule
+    from da_agent.ingestion.pipeline import _without_record_rules
+    from da_agent.ingestion.spec import DatasetSpec
+
+    spec = DatasetSpec.model_validate_json(GOOD)
+    report = build_report(parsed=100)
+    report.tables[0].raw_rows = 100
+    report.tables[0].excluded = [ExcludedRule(reason="x", position=3, rows=50, full_rows=50)]
+
+    safer, dropped = _without_record_rules(spec, report)
+
+    assert (safer, dropped) == (spec, [])
