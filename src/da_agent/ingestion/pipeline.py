@@ -15,6 +15,9 @@ from da_agent.llm.client import LLMClient, RunBudget
 from da_agent.runner.runner import BuildResult, BuildRun, IngestResult, IngestRun, Runner
 
 MIN_PARSE_RATE = 0.98
+# Subtotal and note rows in the dev shops are at most 2% of a table. A rule that removes far more
+# is probably removing records.
+MAX_EXCLUDED_SHARE = 0.10
 
 PrepareStatus = Literal["ok", "problems", "fallback", "ingest_failed", "build_failed"]
 
@@ -27,11 +30,23 @@ class PreparedDataset:
     build: BuildResult | None = None
 
 
-def parse_problems(report: BuildReport, min_parse_rate: float = MIN_PARSE_RATE) -> list[str]:
+def parse_problems(
+    report: BuildReport,
+    min_parse_rate: float = MIN_PARSE_RATE,
+    max_excluded_share: float = MAX_EXCLUDED_SHARE,
+) -> list[str]:
+    """Build problems a model can fix: failed tables, low parse rates, and greedy exclude rules."""
     problems = []
     for table in report.tables:
         if table.error:
             problems.append(f"{table.name}: build failed: {table.error}")
+        for rule in table.excluded:
+            if table.raw_rows and rule.rows / table.raw_rows > max_excluded_share:
+                problems.append(
+                    f"{table.name}: exclude rule {rule.reason!r} removed {rule.rows} of "
+                    f"{table.raw_rows} rows ({rule.rows / table.raw_rows:.0%}); "
+                    "exclude only summary or note rows"
+                )
         for column in table.columns:
             if column.non_blank and column.parse_rate < min_parse_rate:
                 problems.append(

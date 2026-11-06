@@ -7,7 +7,7 @@ hidden whatever the spec says.
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from da_agent.ingestion.report import IngestReport
 
@@ -39,6 +39,31 @@ class ColumnSpec(_Model):
     description: str = Field(default="", max_length=300)
 
 
+ConditionOp = Literal["blank", "not_blank", "equals", "starts_with", "contains"]
+TEXT_OPS = ("equals", "starts_with", "contains")
+
+
+class RowCondition(_Model):
+    """One test on a raw cell, trimmed and case-insensitive. No regex, so no pattern runs away."""
+
+    column: str = Field(description="Raw column name, exactly as in the profile.")
+    op: ConditionOp
+    value: str = Field(default="", max_length=200)
+
+    @model_validator(mode="after")
+    def _text_ops_need_a_value(self) -> "RowCondition":
+        if self.op in TEXT_OPS and not self.value.strip():
+            raise ValueError(f"op {self.op!r} needs a value")
+        return self
+
+
+class RowRule(_Model):
+    """Rows matching every condition are moved to `_excluded`, such as subtotal or note rows."""
+
+    when: list[RowCondition] = Field(min_length=1, max_length=5)
+    reason: str = Field(default="", max_length=200)
+
+
 class TableSpec(_Model):
     source: str = Field(description="Raw table name, exactly as in the profile.")
     name: Identifier = Field(pattern=IDENTIFIER_PATTERN)
@@ -49,6 +74,11 @@ class TableSpec(_Model):
         description="Raw columns whose blank cells repeat the value above, within one source.",
     )
     dedupe: Literal["none", "exact"] = "none"
+    exclude_rows: list[RowRule] = Field(
+        default_factory=list,
+        max_length=10,
+        description="Rules for rows that are not records, tested on raw values before fill_down.",
+    )
 
 
 class Relationship(_Model):
@@ -90,6 +120,13 @@ def check_spec(spec: DatasetSpec, report: IngestReport) -> list[str]:
         for source in table.fill_down:
             if source not in raw[table.source]:
                 problems.append(f"{table.source}: fill_down column {source!r} is not in the table")
+        for rule in table.exclude_rows:
+            for condition in rule.when:
+                if condition.column not in raw[table.source]:
+                    problems.append(
+                        f"{table.source}: exclude_rows column {condition.column!r} "
+                        "is not in the table"
+                    )
         clean[table.name] = names
     for link in spec.relationships:
         for table, column in ((link.from_table, link.from_column), (link.to_table, link.to_column)):
@@ -143,8 +180,20 @@ def parse_spec_lenient(data: object) -> tuple[DatasetSpec, list[str]]:
                 source = raw_column.get("source") if isinstance(raw_column, dict) else raw_column
                 label = raw_table.get("name") or raw_table.get("source")
                 problems.append(f"{label} column {source!r} dropped: {_first_error(error)}")
+        rules: list[RowRule] = []
+        raw_rules = raw_table.get("exclude_rows") or []
+        for position, raw_rule in enumerate(raw_rules if isinstance(raw_rules, list) else []):
+            try:
+                rules.append(RowRule.model_validate(raw_rule))
+            except ValidationError as error:
+                label = raw_table.get("name") or raw_table.get("source")
+                problems.append(
+                    f"{label} exclude_rows {position + 1} dropped: {_first_error(error)}"
+                )
         try:
-            tables.append(TableSpec.model_validate({**raw_table, "columns": columns}))
+            tables.append(
+                TableSpec.model_validate({**raw_table, "columns": columns, "exclude_rows": rules})
+            )
         except ValidationError as error:
             problems.append(f"table {raw_table.get('source')!r} dropped: {_first_error(error)}")
     relationships: list[Relationship] = []
@@ -201,13 +250,26 @@ def sanitize_spec(spec: DatasetSpec, report: IngestReport) -> tuple[DatasetSpec,
         fill_down = [c for c in table.fill_down if c in raw[source]]
         for missing in sorted(set(table.fill_down) - set(fill_down)):
             problems.append(f"{source}: fill_down column {missing!r} is not in the table; dropped")
+        rules = []
+        for rule in table.exclude_rows:
+            unknown = [c.column for c in rule.when if c.column not in raw[source]]
+            if unknown:
+                problems.append(
+                    f"{source}: exclude_rows column {unknown[0]!r} is not in the table; "
+                    "rule dropped"
+                )
+            else:
+                rules.append(rule)
         name = _unique_name(table.name, table_names)
         table_names.add(name)
-        tables.append(
-            table.model_copy(
-                update={"source": source, "name": name, "columns": columns, "fill_down": fill_down}
-            )
-        )
+        update = {
+            "source": source,
+            "name": name,
+            "columns": columns,
+            "fill_down": fill_down,
+            "exclude_rows": rules,
+        }
+        tables.append(table.model_copy(update=update))
     clean = {t.name: {c.name for c in t.columns} | set(META_COLUMNS) for t in tables}
     relationships = []
     for link in spec.relationships:

@@ -19,13 +19,14 @@ from pathlib import Path
 import duckdb
 
 from da_agent.ingestion.limits import IngestLimits
-from da_agent.ingestion.profile import ColumnStats, classify
+from da_agent.ingestion.profile import SAMPLE_CHARS, ColumnStats, classify
 from da_agent.ingestion.readers import ReadError, Row, Sheet, read_csv, read_sqlite, read_xlsx
 from da_agent.ingestion.report import (
     ColumnProfile,
     ColumnReport,
     FileReport,
     IngestReport,
+    RowShape,
     SourceReport,
     TableReport,
 )
@@ -38,6 +39,12 @@ DOCUMENT_FILES = {".md", ".txt"}
 JUNK_NAMES = {"thumbs.db", "desktop.ini", ".ds_store"}
 _HEADER_TEXT_SHARE = 0.8
 _BLANK_ROW_LIMIT = 1000
+# Row shapes rarer than this, with fewer filled cells than the common shape, are reported. They are
+# often subtotal or note rows that the DatasetSpec should exclude.
+RARE_SHAPE_SHARE = 0.05
+MAX_RARE_SHAPES = 5
+SHAPE_EXAMPLES = 2
+SENSITIVE_MARK = "<sensitive>"
 
 
 @dataclass
@@ -331,6 +338,7 @@ def _load_group(connection: duckdb.DuckDBPyConnection, group: _Group, work: Path
     reports += [ColumnReport(name=n, profile=ColumnProfile()) for n in (SOURCE_COLUMN, ROW_COLUMN)]
     if long_cells and reports:
         reports[0].profile.truncated_cells = long_cells
+    sensitive = {name for name in columns if profiles[name].sensitive}
     return TableReport(
         name=group.name,
         sources=[
@@ -342,7 +350,64 @@ def _load_group(connection: duckdb.DuckDBPyConnection, group: _Group, work: Path
         row_count=sum(sheet.rows for sheet in group.sheets),
         truncated=any(sheet.truncated for sheet in group.sheets),
         columns=reports,
+        rare_shapes=_rare_shapes(connection, group.name, columns, sensitive),
     )
+
+
+def _rare_shapes(
+    connection: duckdb.DuckDBPyConnection, table: str, columns: list[str], sensitive: set[str]
+) -> list[RowShape]:
+    """Rare sets of filled columns, sparser than the common one, with a few example rows."""
+    if not columns:
+        return []
+    filled = [f"({_quote(c)} IS NOT NULL AND trim({_quote(c)}) <> '')" for c in columns]
+    shape = f"list_value({', '.join(filled)})"
+    counts = connection.execute(
+        f"SELECT {shape} AS shape, count(*) AS n FROM {_quote(table)} "  # noqa: S608
+        "GROUP BY shape ORDER BY n DESC, min(rowid)"
+    ).fetchall()
+    if len(counts) < 2:
+        return []
+    total, common = sum(n for _, n in counts), sum(counts[0][0])
+    shapes: list[RowShape] = []
+    for flags, n in counts[1:]:
+        if n / total >= RARE_SHAPE_SHARE or sum(flags) >= common:
+            continue
+        names = [c for c, flag in zip(columns, flags, strict=True) if flag]
+        shapes.append(
+            RowShape(
+                columns=names,
+                rows=n,
+                examples=_shape_examples(connection, table, columns, filled, flags, sensitive),
+            )
+        )
+        if len(shapes) >= MAX_RARE_SHAPES:
+            break
+    return shapes
+
+
+def _shape_examples(
+    connection: duckdb.DuckDBPyConnection,
+    table: str,
+    columns: list[str],
+    filled: list[str],
+    flags: list[bool],
+    sensitive: set[str],
+) -> list[dict[str, str | None]]:
+    match = " AND ".join(f if flag else f"NOT {f}" for f, flag in zip(filled, flags, strict=True))
+    names = [c for c, flag in zip(columns, flags, strict=True) if flag]
+    selected = ", ".join([ROW_COLUMN, *(_quote(c) for c in names)])
+    rows = connection.execute(
+        f"SELECT {selected} FROM {_quote(table)} WHERE {match} "  # noqa: S608
+        f"ORDER BY rowid LIMIT {SHAPE_EXAMPLES}"
+    ).fetchall()
+    examples: list[dict[str, str | None]] = []
+    for row_number, *values in rows:
+        example: dict[str, str | None] = {ROW_COLUMN: row_number}
+        for name, value in zip(names, values, strict=True):
+            example[name] = SENSITIVE_MARK if name in sensitive else str(value)[:SAMPLE_CHARS]
+        examples.append(example)
+    return examples
 
 
 def _profile(connection: duckdb.DuckDBPyConnection, table: str, column: str) -> ColumnProfile:

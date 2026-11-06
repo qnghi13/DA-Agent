@@ -79,6 +79,21 @@ def test_the_prompt_frames_the_profile_and_documents_as_data() -> None:
     assert '"sensitive": true' in prompt
 
 
+def test_the_prompt_shows_rare_row_shapes_with_examples() -> None:
+    from da_agent.ingestion.report import RowShape
+
+    REPORT.tables[0].rare_shapes = [
+        RowShape(columns=["Tổng"], rows=3, examples=[{"_row": "9", "Tổng": "TỔNG NGÀY 01/02"}])
+    ]
+    try:
+        _, adapter = propose([GOOD])
+    finally:
+        REPORT.tables[0].rare_shapes = []
+
+    prompt = "\n".join(m.content or "" for m in adapter.requests[0].messages)
+    assert "TỔNG NGÀY 01/02" in prompt
+
+
 def test_invalid_json_is_sent_back_for_repair() -> None:
     result, adapter = propose(['{"tables": [{"source": "don", "name": "Bad Name"}]}', GOOD])
 

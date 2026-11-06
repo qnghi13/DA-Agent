@@ -4,7 +4,8 @@
 
 Every identifier is quoted and every literal escaped, and only values from the spec's fixed choices
 reach the SQL, so a spec cannot inject SQL. Values that fail to parse become NULL and are copied to
-`_quarantine` with their source and row, so nothing is dropped silently.
+`_quarantine` with their source and row, and rows that exclude rules remove, such as subtotals, are
+copied to `_excluded`, so nothing is dropped silently.
 """
 
 from pathlib import Path
@@ -14,10 +15,18 @@ from pydantic import BaseModel, Field
 
 from da_agent.ingestion.raw import slug
 from da_agent.ingestion.report import IngestReport
-from da_agent.ingestion.spec import META_COLUMNS, ColumnSpec, DatasetSpec, TableSpec
+from da_agent.ingestion.spec import (
+    META_COLUMNS,
+    ColumnSpec,
+    DatasetSpec,
+    RowCondition,
+    RowRule,
+    TableSpec,
+)
 
 CLEAN_DATABASE = "dataset.duckdb"
 QUARANTINE = "_quarantine"
+EXCLUDED = "_excluded"
 FAILED_SAMPLES = 5
 DEFAULT_TRUE = ("true", "1", "yes", "y", "x", "có", "co", "đúng", "dung", "rồi")
 DEFAULT_FALSE = ("false", "0", "no", "n", "không", "khong", "sai", "chưa")
@@ -45,6 +54,11 @@ class ColumnBuild(BaseModel):
         return self.parsed / self.non_blank if self.non_blank else 1.0
 
 
+class ExcludedRule(BaseModel):
+    reason: str
+    rows: int = 0
+
+
 class TableBuild(BaseModel):
     name: str
     source: str
@@ -52,6 +66,7 @@ class TableBuild(BaseModel):
     rows: int = 0
     columns: list[ColumnBuild] = Field(default_factory=list)
     hidden: list[str] = Field(default_factory=list)
+    excluded: list[ExcludedRule] = Field(default_factory=list)
     error: str | None = None
 
 
@@ -166,6 +181,42 @@ def parse_expression(column: ColumnSpec, raw: str) -> str:
     )
 
 
+def _condition(condition: RowCondition) -> str:
+    """SQL for one raw-cell test. Text tests are trimmed and case-insensitive."""
+    cell = q(condition.column)
+    blank = f"({cell} IS NULL OR trim({cell}) = '')"
+    if condition.op == "blank":
+        return blank
+    if condition.op == "not_blank":
+        return f"NOT {blank}"
+    text, value = f"lower(trim({cell}))", lit(condition.value.strip().lower())
+    if condition.op == "equals":
+        return f"coalesce({text} = {value}, false)"
+    if condition.op == "starts_with":
+        return f"coalesce(starts_with({text}, {value}), false)"
+    return f"coalesce(contains({text}, {value}), false)"
+
+
+def _rule_labels(rules: list[RowRule]) -> list[str]:
+    """One distinct label per rule: its reason, numbered when two rules share one."""
+    labels: list[str] = []
+    for position, rule in enumerate(rules, start=1):
+        label = rule.reason or f"rule {position}"
+        labels.append(label if label not in labels else f"{label} ({position})")
+    return labels
+
+
+def _exclusion_reason(rules: list[RowRule]) -> str:
+    """SQL naming the first rule a row matches, or NULL when it matches none."""
+    if not rules:
+        return "CAST(NULL AS VARCHAR)"
+    branches = " ".join(
+        f"WHEN {' AND '.join(_condition(c) for c in rule.when)} THEN {lit(label)}"
+        for rule, label in zip(rules, _rule_labels(rules), strict=True)
+    )
+    return f"CASE {branches} END"
+
+
 def build(
     raw_database: Path, spec: DatasetSpec, report: IngestReport, out_dir: Path
 ) -> BuildReport:
@@ -181,6 +232,10 @@ def build(
         connection.execute(
             f"CREATE TABLE {QUARANTINE} (table_name VARCHAR, column_name VARCHAR, "
             "_source VARCHAR, _row BIGINT, raw_value VARCHAR)"
+        )
+        connection.execute(
+            f"CREATE TABLE {EXCLUDED} (table_name VARCHAR, reason VARCHAR, "
+            "_source VARCHAR, _row BIGINT, raw_values VARCHAR)"
         )
         for table in tables:
             if table.source not in raw_columns:
@@ -240,6 +295,19 @@ def _build_table(
         columns.append(specs[source])
 
     stage = f"__stage_{table.name}"
+    marked = f"__marked_{table.name}"
+    # Exclusion sees raw values before fill_down, so a subtotal row never fills the rows below it.
+    connection.execute(
+        f"CREATE TEMP TABLE {q(marked)} AS SELECT *, CAST(_row AS BIGINT) AS __row, "
+        f"{_exclusion_reason(table.exclude_rows)} AS __excluded FROM raw.{q(table.source)}"
+    )
+    visible = [s for s in raw_columns if s not in hidden]
+    values = ", ".join(f"{lit(s)}, {q(s)}" for s in visible)
+    raw_values = f"CAST(json_object({values}) AS VARCHAR)" if visible else "'{}'"
+    connection.execute(
+        f"INSERT INTO {EXCLUDED} SELECT {lit(table.name)}, __excluded, _source, __row, "
+        f"{raw_values} FROM {q(marked)} WHERE __excluded IS NOT NULL ORDER BY _source, __row"
+    )
     filled = [
         (
             f"last_value({q(s)} IGNORE NULLS) OVER (PARTITION BY _source ORDER BY __row "
@@ -256,7 +324,7 @@ def _build_table(
     connection.execute(
         f"CREATE TEMP TABLE {q(stage)} AS SELECT * FROM ("
         f"SELECT {', '.join(filled)}, _source, __row FROM ("
-        f"SELECT *, CAST(_row AS BIGINT) AS __row FROM raw.{q(table.source)})) {dedupe}"
+        f"SELECT * FROM {q(marked)} WHERE __excluded IS NULL)) {dedupe}"
     )
     selected = [f"{parse_expression(c, c.source)} AS {q(c.name)}" for c in columns]
     connection.execute(
@@ -264,11 +332,15 @@ def _build_table(
         f"FROM {q(stage)} ORDER BY _source, __row"
     )
     report = TableBuild(name=table.name, source=table.source, hidden=hidden)
-    report.raw_rows = _scalar(connection, f"SELECT count(*) FROM raw.{q(table.source)}")
+    report.raw_rows = _scalar(connection, f"SELECT count(*) FROM {q(marked)}")
+    for label in _rule_labels(table.exclude_rows):
+        excluded = f"SELECT count(*) FROM {q(marked)} WHERE __excluded = {lit(label)}"
+        report.excluded.append(ExcludedRule(reason=label, rows=_scalar(connection, excluded)))
     report.rows = _scalar(connection, f"SELECT count(*) FROM {q(stage)}")
     for column in columns:
         report.columns.append(_check_column(connection, table.name, stage, column))
     connection.execute(f"DROP TABLE {q(stage)}")
+    connection.execute(f"DROP TABLE {q(marked)}")
     return report
 
 

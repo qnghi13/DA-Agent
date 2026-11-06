@@ -207,3 +207,43 @@ def test_profile_pattern_names_are_read_as_date_formats() -> None:
 
     assert spec.tables[0].columns[0].date_formats == ["dmy", "vi_text"]
     assert problems == []
+
+
+def test_text_conditions_need_a_value() -> None:
+    from da_agent.ingestion.spec import RowCondition
+
+    with pytest.raises(ValidationError):
+        RowCondition(column="Ngày", op="starts_with")
+    with pytest.raises(ValidationError):
+        RowCondition(column="Ngày", op="matches", value=".*")
+    assert RowCondition(column="Ngày", op="blank").value == ""
+
+
+def test_exclusion_rules_must_name_raw_columns() -> None:
+    from da_agent.ingestion.spec import RowCondition, RowRule, sanitize_spec
+
+    rules = [
+        RowRule(when=[RowCondition(column="Ngày", op="blank")], reason="ok"),
+        RowRule(when=[RowCondition(column="Ghost", op="blank")], reason="ghost"),
+    ]
+    spec = DatasetSpec(tables=[TableSpec(source="don", name="orders", exclude_rows=rules)])
+
+    assert any("'Ghost'" in problem for problem in check_spec(spec, report()))
+    clean, problems = sanitize_spec(spec, report())
+    assert [r.reason for r in clean.tables[0].exclude_rows] == ["ok"]
+    assert len(problems) == 1 and "'Ghost'" in problems[0]
+
+
+def test_a_broken_exclusion_rule_costs_only_that_rule() -> None:
+    from da_agent.ingestion.spec import parse_spec_lenient
+
+    rules = [
+        {"when": [{"column": "Ngày", "op": "blank"}], "reason": "ok"},
+        {"when": [{"column": "Ngày", "op": "regex", "value": "x"}], "reason": "bad"},
+    ]
+    data = {"tables": [{"source": "don", "name": "orders", "exclude_rows": rules}]}
+
+    spec, problems = parse_spec_lenient(data)
+
+    assert [r.reason for r in spec.tables[0].exclude_rows] == ["ok"]
+    assert len(problems) == 1 and "exclude_rows" in problems[0]

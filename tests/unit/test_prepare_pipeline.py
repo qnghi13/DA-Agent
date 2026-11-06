@@ -127,3 +127,18 @@ def test_parse_problems_name_the_column_rate_and_failing_values() -> None:
     problems = parse_problems(report, min_parse_rate=0.98)
 
     assert problems == ["orders.total (money): parsed 90% of 100 values; failing values: ['abc']"]
+
+
+def test_a_rule_that_excludes_too_many_rows_is_a_problem() -> None:
+    from da_agent.ingestion.build import ExcludedRule
+
+    report = build_report(parsed=100)
+    table = report.tables[0]
+    table.raw_rows = 1000
+    table.excluded = [ExcludedRule(reason="subtotal", rows=20), ExcludedRule(reason="x", rows=300)]
+
+    problems = parse_problems(report, max_excluded_share=0.1)
+
+    assert problems == [
+        "orders: exclude rule 'x' removed 300 of 1000 rows (30%); exclude only summary or note rows"
+    ]

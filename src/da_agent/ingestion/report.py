@@ -39,12 +39,21 @@ class ColumnReport(BaseModel):
     profile: ColumnProfile
 
 
+class RowShape(BaseModel):
+    """A rare set of filled columns, such as subtotal or note rows inside a table."""
+
+    columns: list[str]
+    rows: int
+    examples: list[dict[str, str | None]] = Field(default_factory=list)
+
+
 class TableReport(BaseModel):
     name: str
     sources: list[SourceReport]
     row_count: int
     truncated: bool = False
     columns: list[ColumnReport]
+    rare_shapes: list[RowShape] = Field(default_factory=list)
 
 
 class IngestReport(BaseModel):

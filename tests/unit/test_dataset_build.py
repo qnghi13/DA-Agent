@@ -1,6 +1,7 @@
 """Building clean tables from raw tables and a DatasetSpec, with parse rates and quarantine."""
 
 import datetime as dt
+import json
 from pathlib import Path
 
 import duckdb
@@ -8,7 +9,7 @@ import pytest
 
 from da_agent.ingestion.build import CLEAN_DATABASE, build
 from da_agent.ingestion.raw import RAW_DATABASE, ingest
-from da_agent.ingestion.spec import ColumnSpec, DatasetSpec, TableSpec
+from da_agent.ingestion.spec import ColumnSpec, DatasetSpec, RowCondition, RowRule, TableSpec
 
 
 def raw_upload(tmp_path: Path, files: dict[str, str]) -> tuple[Path, object]:
@@ -314,4 +315,121 @@ def test_one_separator_before_a_suffix_is_a_decimal_point(tmp_path: Path, out: P
         1_350_000_000,
         22_000,
         2_500,
+    ]
+
+
+SUBTOTALS = "Mã đơn,Sản phẩm,Tiền\nD1,Trà,10\n,Cà phê,20\n,,30\nD2,Trà,5\n,,5\n,TỔNG THÁNG 1,35\n"
+SUBTOTAL_RULES = [
+    RowRule(
+        when=[
+            RowCondition(column="Sản phẩm", op="blank"),
+            RowCondition(column="Tiền", op="not_blank"),
+        ],
+        reason="daily subtotal",
+    ),
+    RowRule(
+        when=[RowCondition(column="Sản phẩm", op="starts_with", value="tổng")],
+        reason="monthly total",
+    ),
+]
+
+
+def subtotal_spec(**table: object) -> DatasetSpec:
+    columns = [
+        ColumnSpec(source="Mã đơn", name="order_id"),
+        ColumnSpec(source="Sản phẩm", name="product"),
+        ColumnSpec(source="Tiền", name="amount", type="money"),
+    ]
+    return DatasetSpec(tables=[TableSpec(source="t", name="t", columns=columns, **table)])
+
+
+def test_excluded_rows_leave_the_table_before_fill_down(tmp_path: Path, out: Path) -> None:
+    raw, report = raw_upload(tmp_path, {"t.csv": SUBTOTALS})
+    spec = subtotal_spec(fill_down=["Mã đơn"], exclude_rows=SUBTOTAL_RULES)
+
+    result = build(raw / RAW_DATABASE, spec, report, out)
+
+    assert rows(out, "SELECT order_id, product, amount FROM t ORDER BY _row") == [
+        ("D1", "Trà", 10),
+        ("D1", "Cà phê", 20),
+        ("D2", "Trà", 5),
+    ]
+    table = result.tables[0]
+    assert (table.raw_rows, table.rows) == (6, 3)
+    assert [(e.reason, e.rows) for e in table.excluded] == [
+        ("daily subtotal", 2),
+        ("monthly total", 1),
+    ]
+
+
+def test_excluded_rows_are_kept_with_their_reason_and_raw_values(tmp_path: Path, out: Path) -> None:
+    raw, report = raw_upload(tmp_path, {"t.csv": SUBTOTALS})
+
+    build(raw / RAW_DATABASE, subtotal_spec(exclude_rows=SUBTOTAL_RULES), report, out)
+
+    excluded = rows(out, "SELECT table_name, reason, _source, _row, raw_values FROM _excluded")
+    assert [(t, r, s, n) for t, r, s, n, _ in excluded] == [
+        ("t", "daily subtotal", "t.csv", 4),
+        ("t", "daily subtotal", "t.csv", 6),
+        ("t", "monthly total", "t.csv", 7),
+    ]
+    assert json.loads(excluded[2][4]) == {"Mã đơn": None, "Sản phẩm": "TỔNG THÁNG 1", "Tiền": "35"}
+
+
+def test_excluded_rows_do_not_count_against_parse_rates(tmp_path: Path, out: Path) -> None:
+    raw, report = raw_upload(tmp_path, {"t.csv": "Ngày,Tiền\n01/02/2025,10\nTổng ngày,10\n"})
+    spec = DatasetSpec(
+        tables=[
+            TableSpec(
+                source="t",
+                name="t",
+                columns=[ColumnSpec(source="Ngày", name="day", type="date", date_formats=["dmy"])],
+                exclude_rows=[
+                    RowRule(when=[RowCondition(column="Ngày", op="contains", value="TỔNG")])
+                ],
+            )
+        ]
+    )
+
+    result = build(raw / RAW_DATABASE, spec, report, out)
+
+    assert result.tables[0].columns[0].parse_rate == 1.0
+    assert rows(out, "SELECT count(*) FROM _quarantine") == [(0,)]
+
+
+def test_excluded_raw_values_never_hold_sensitive_columns(tmp_path: Path, out: Path) -> None:
+    raw, report = raw_upload(tmp_path, {"t.csv": "Tên,CCCD\nAn,001099012345\nTổng,001099012346\n"})
+    rule = RowRule(when=[RowCondition(column="Tên", op="equals", value="tổng")], reason="total")
+    spec = DatasetSpec(tables=[TableSpec(source="t", name="t", exclude_rows=[rule])])
+
+    build(raw / RAW_DATABASE, spec, report, out)
+
+    assert rows(out, "SELECT raw_values FROM _excluded") == [('{"Tên":"Tổng"}',)]
+
+
+def test_exclusion_values_stay_data(tmp_path: Path, out: Path) -> None:
+    raw, report = raw_upload(tmp_path, {"t.csv": "a\nx\n\"it's'); DROP TABLE t; --\"\n"})
+    hostile = "it's'); DROP TABLE t; --"
+    rule = RowRule(when=[RowCondition(column="a", op="equals", value=hostile)])
+    spec = DatasetSpec(tables=[TableSpec(source="t", name="t", exclude_rows=[rule])])
+
+    result = build(raw / RAW_DATABASE, spec, report, out)
+
+    assert rows(out, "SELECT a FROM t") == [("x",)]
+    assert result.tables[0].excluded[0].rows == 1
+
+
+def test_rules_sharing_a_reason_are_counted_apart(tmp_path: Path, out: Path) -> None:
+    raw, report = raw_upload(tmp_path, {"t.csv": "a\nx\ny\ny\n"})
+    rules = [
+        RowRule(when=[RowCondition(column="a", op="equals", value=v)], reason="note")
+        for v in ("x", "y")
+    ]
+    spec = DatasetSpec(tables=[TableSpec(source="t", name="t", exclude_rows=rules)])
+
+    result = build(raw / RAW_DATABASE, spec, report, out)
+
+    assert [(e.reason, e.rows) for e in result.tables[0].excluded] == [
+        ("note", 1),
+        ("note (2)", 2),
     ]

@@ -83,13 +83,15 @@ secrets ([ADR 0009](adr/0009-parse-uploads-in-sandbox.md)).
    junk files such as `Zone.Identifier`.
 2. **Raw read:** xlsx, csv (with encoding detection), and SQLite become raw text tables.
 3. **Table detection:** find header rows, drop title rows, split by sheet.
-4. **Profile:** per-column statistics and value patterns.
+4. **Profile:** per-column statistics and value patterns, plus rare row shapes (sets of filled
+   columns) with example rows, which point at subtotal and note rows.
 5. **LLM proposes a `DatasetSpec`** from the profile and the user's description: column types and
-   roles, parsing, fill-down and dedupe rules, relationships, glossary, business rules, data time
-   range, sensitive columns.
+   roles, parsing, fill-down and dedupe rules, rules that exclude non-record rows, relationships,
+   glossary, business rules, data time range, sensitive columns.
 6. **Code validates the spec:** dry-run it and report parse rates. Unparseable values go to a
-   quarantine table and are never silently dropped. Low parse rates go back to the LLM, up to N
-   times.
+   `_quarantine` table and excluded rows to an `_excluded` table, so nothing is silently dropped.
+   Low parse rates, and exclude rules that remove more than 10% of a table, go back to the LLM, up
+   to N times.
 7. **The user approves the spec** in the UI. Evals auto-approve.
 8. **Load into DuckDB:** the agent queries only cleaned views. Original columns stay available for
    cross-checking.
@@ -194,3 +196,4 @@ Reports are standalone HTML, and every number links to the query that produced i
 | How does the Worker call the Runner: internal HTTP or a job table? Today `Runner` is a library with typed requests | Days 3–6 |
 | One container per request, or one per run? This trades startup latency against isolation | Days 3–6 |
 | What are the parse rate thresholds and the retry limit N? Set from real data | Days 3–6 |
+| Add a sandboxed code-transform step beside the declarative spec, for layouts the spec cannot express (pivots, several tables in one sheet)? Its output must pass the same row accounting and parse-rate checks. Kept out for now ([ADR 0006](adr/0006-dataset-spec.md)) | When a dataset needs it |

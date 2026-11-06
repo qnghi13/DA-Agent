@@ -252,3 +252,24 @@ def test_large_round_numbers_are_not_mistaken_for_id_numbers(upload: Path, out: 
     profile = by_name(report, "s").columns[0].profile
     assert not profile.sensitive
     assert profile.samples == ["999999999"]
+
+
+def test_rare_sparse_rows_are_reported_as_shapes(upload: Path, out: Path) -> None:
+    lines = ["Mã,Sản phẩm,Tiền,SĐT,Ghi chú"]
+    lines += [f"D{i},Trà,{i},09123456{i:02d},{'gấp' if i % 3 == 0 else ''}" for i in range(40)]
+    lines += [",,780,0912345699,", "Tổng tháng,,,,"]
+    (upload / "t.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    report = ingest(upload, out)
+
+    shapes = by_name(report, "t").rare_shapes
+    assert [(s.columns, s.rows) for s in shapes] == [(["Tiền", "SĐT"], 1), (["Mã"], 1)]
+    assert shapes[0].examples == [{"_row": "42", "Tiền": "780", "SĐT": "<sensitive>"}]
+
+
+def test_tables_with_one_row_shape_report_no_rare_shapes(upload: Path, out: Path) -> None:
+    (upload / "t.csv").write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
+
+    report = ingest(upload, out)
+
+    assert by_name(report, "t").rare_shapes == []

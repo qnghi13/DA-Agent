@@ -14,3 +14,4 @@ decision, add a new ADR and mark the old one as superseded.
 | [0007](0007-code-first-verification.md) | Verification mostly in code | Accepted |
 | [0008](0008-rules-on-demand.md) | Topic rules fetched on demand with `search_rules` | Accepted |
 | [0009](0009-parse-uploads-in-sandbox.md) | Uploaded files are parsed inside the sandbox | Accepted |
+| [0010](0010-exclude-non-record-rows.md) | Declarative rules exclude subtotal and note rows | Accepted |
