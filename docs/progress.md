@@ -3,38 +3,40 @@
 Loaded into every session, so keep it under 60 lines. Replace stale content instead of appending.
 
 **Last updated:** 2026-11-06
-**Phase:** Days 3–6, Data and tools ([plan §6](plan.md#6-roadmap)). `exclude_rows` checks done, uncommitted.
+**Phase:** Days 3–6, Data and tools ([plan §6](plan.md#6-roadmap)). Agent SQL through the sandbox done, uncommitted.
 
 ## Next step
 
-1. Agent on the clean DuckDB files in `eval/reports/datasets-dev/`, `run_sql` through the Runner.
-   Then the `bootstrap` baseline (ask first), with `datasets-dev-v1` (no exclusion) as the
-   comparison, and the Foundation learning note.
-2. Known gap, left until real data needs it: a heading row holding a group total and the group's
-   date (`syn_total_above`). Excluding it leaves its rows without a date.
+1. First real baselines (ask first, about $0.9 in all, `--max-total-tokens` per run):
+   `bootstrap` (biz_123 only) on `pos.sqlite` in process vs `--datasets-dir datasets-dev`, to
+   check that ingestion keeps accuracy; then `regression --shops` of the 5 shops with subtotals
+   on `datasets-dev` vs `datasets-dev-noexclude`. The scorer counts filtered-out questions as
+   abstained, so compare correct and wrong. Earlier runs were 2–3 questions, not baselines.
+2. Foundation learning note. Known gap: heading rows holding a group total and date.
 
 ## Done
 
-- Dev environment, design docs, ADRs 0001–0010, README, LICENSE, project structure.
+- Dev environment, design docs, ADRs 0001–0011, README, LICENSE, project structure.
 - Scorer (`eval/scorer/`, rulebook §7, §9): 3000/3000 on the real answers. Splits in
   `eval/splits/splits.json`: 24 dev, 6 holdout shops; sets `bootstrap`, `smoke`, `regression`.
 - Minimal agent: `LLMClient`, SQL guard, bounded tool loop, tracing, resumable `eval/datamate`
   runner. Model: Groq `gpt-oss-20b`; `search_rules` (ADR 0008).
-- Runner (`src/da_agent/runner/`) and sandbox image (`sandbox/`): all escape tests pass on real
-  containers.
-- Raw ingestion runs in the sandbox (ADR 0009): csv, xlsx, SQLite to `raw.duckdb`, header detection,
-  masked profiles. All 24 dev shops load (1–46 s).
-- `DatasetSpec` pipeline: LLM proposes, sandbox builds `dataset.duckdb` with `_quarantine`, parse-rate
-  feedback. 24/24 dev shops, parse rates 99.9–100%, in `eval/reports/datasets-dev/` (gitignored).
+- Runner and sandbox image: all escape tests pass on real containers. Raw ingestion in the sandbox
+  (ADR 0009). `DatasetSpec` pipeline: LLM proposes, sandbox builds `dataset.duckdb` with
+  `_quarantine` and parse-rate feedback. Outputs in `eval/reports/` (gitignored).
 - `exclude_rows` (ADR 0010): rules, `_excluded`, rare shapes with sums, and checks for kept
   subtotals and for rules that remove records (full rows, identifiers, share). Rules still failing
   after the last attempt are dropped. Measured with `eval/ingestion/` (labels, synthetic, scorer).
   `datasets-dev/` (prepare-v4, biz_109 and biz_124 from v4b): 24/24 ok, parse 99.98%+, exclusion
-  precision and recall 100% on 2,032 labelled rows. Old build kept in `datasets-dev-v1/`.
+  precision and recall 100% on 2,032 labelled rows.
+- Agent SQL in the sandbox (ADR 0011): DuckDB guard, locked read-only engine, `SqlRun` per query
+  (~0.7 s), `SandboxDataset`, `open_prepared_shop`, `run --datasets-dir/--shops`. `calendar.csv`
+  travels with each upload; `prepare --reuse-specs` rebuilds without the model. `datasets-dev/`
+  has the calendar; `datasets-dev-noexclude/` is the same without exclusion; `-v1` is the old one.
 
 ## Decisions needed
 
-- **Days 3–6:** Worker to Runner transport, container per request or per run ([open questions](architecture.md#open-questions)).
+- None open. Days 3–6 decisions are in ADR 0011 (a sandbox per query, Runner as a library).
 
 ## Not verified
 

@@ -1,0 +1,74 @@
+"""SandboxDataset: the agent's Dataset over a clean DuckDB file, queried through the Runner."""
+
+import pytest
+
+from da_agent.ingestion.build import BuildReport, ColumnBuild, TableBuild
+from da_agent.runner.runner import SqlResult, SqlRun
+from da_agent.storage.sandbox_dataset import SandboxDataset
+from da_agent.storage.sqlite_dataset import QueryError
+
+REPORT = BuildReport(
+    tables=[
+        TableBuild(
+            name="orders",
+            source="don",
+            rows=120,
+            columns=[
+                ColumnBuild(name="order_id", source="Mã", type="text"),
+                ColumnBuild(name="total", source="Tổng", type="money"),
+                ColumnBuild(name="day", source="Ngày", type="date"),
+            ],
+        ),
+        TableBuild(name="broken", source="x", error="build failed"),
+    ]
+)
+
+
+class FakeRunner:
+    def __init__(self, result: SqlResult) -> None:
+        self.result = result
+        self.requests: list[SqlRun] = []
+
+    def query(self, request: SqlRun) -> SqlResult:
+        self.requests.append(request)
+        return self.result
+
+
+def test_describe_lists_built_tables_with_their_column_types() -> None:
+    dataset = SandboxDataset(FakeRunner(SqlResult(status="ok")), "shop_1", REPORT)
+
+    [table] = dataset.describe()
+
+    assert (table.name, table.row_count) == ("orders", 120)
+    assert [(c.name, c.type) for c in table.columns] == [
+        ("order_id", "VARCHAR"),
+        ("total", "BIGINT"),
+        ("day", "DATE"),
+    ]
+
+
+def test_a_query_runs_in_the_sandbox_and_returns_its_rows() -> None:
+    runner = FakeRunner(SqlResult(status="ok", columns=["n"], rows=[[3]], truncated=False))
+    dataset = SandboxDataset(runner, "shop_1", REPORT, max_rows=20)
+
+    result = dataset.query("SELECT count(*) AS n FROM orders;")
+
+    assert (result.columns, result.rows, result.truncated) == (["n"], [[3]], False)
+    assert runner.requests == [SqlRun(dataset_id="shop_1", sql="SELECT count(*) AS n FROM orders",
+                                      max_rows=20)]  # fmt: skip
+
+
+def test_the_guard_rejects_a_query_before_any_sandbox_starts() -> None:
+    runner = FakeRunner(SqlResult(status="ok"))
+    dataset = SandboxDataset(runner, "shop_1", REPORT)
+
+    with pytest.raises(QueryError, match="not allowed"):
+        dataset.query("SELECT * FROM read_csv('/etc/passwd')")
+    assert runner.requests == []
+
+
+def test_sandbox_errors_become_query_errors() -> None:
+    runner = FakeRunner(SqlResult(status="timeout", error="query stopped: over the 15 s limit"))
+
+    with pytest.raises(QueryError, match="over the 15 s limit"):
+        SandboxDataset(runner, "shop_1", REPORT).query("SELECT 1")

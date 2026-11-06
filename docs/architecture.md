@@ -90,8 +90,8 @@ secrets ([ADR 0009](adr/0009-parse-uploads-in-sandbox.md)).
    glossary, business rules, data time range, sensitive columns.
 6. **Code validates the spec:** dry-run it and report parse rates. Unparseable values go to a
    `_quarantine` table and excluded rows to an `_excluded` table, so nothing is silently dropped.
-   Low parse rates, and exclude rules that remove more than 10% of a table, go back to the LLM, up
-   to N times.
+   Parse rates under 98%, and exclude rules that look like they remove records, go back to the LLM,
+   up to 3 attempts. These values held on all 24 dev shops ([ADR 0010](adr/0010-exclude-non-record-rows.md)).
 7. **The user approves the spec** in the UI. Evals auto-approve.
 8. **Load into DuckDB:** the agent queries only cleaned views. Original columns stay available for
    cross-checking.
@@ -193,7 +193,4 @@ Reports are standalone HTML, and every number links to the query that produced i
 
 | Question | Decide by |
 |---|---|
-| How does the Worker call the Runner: internal HTTP or a job table? Today `Runner` is a library with typed requests | Days 3–6 |
-| One container per request, or one per run? This trades startup latency against isolation | Days 3–6 |
-| What are the parse rate thresholds and the retry limit N? Set from real data | Days 3–6 |
 | Add a sandboxed code-transform step beside the declarative spec, for layouts the spec cannot express (pivots, several tables in one sheet)? Its output must pass the same row accounting and parse-rate checks. Kept out for now ([ADR 0006](adr/0006-dataset-spec.md)) | When a dataset needs it |

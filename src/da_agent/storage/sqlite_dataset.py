@@ -52,6 +52,8 @@ def _quote(name: str) -> str:
 
 
 class SqliteDataset:
+    dialect = "SQLite"
+
     def __init__(
         self,
         path: Path,

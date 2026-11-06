@@ -416,3 +416,85 @@ def test_prepare_describes_shops_with_the_rulebook_file_conventions(tmp_path: Pa
 
     assert "giống dòng đầu nhóm" in text
     assert "Đáp án" not in text
+
+
+def test_the_calendar_travels_with_each_upload_and_gets_typed_columns(tmp_path: Path) -> None:
+    from da_agent.ingestion.spec import DatasetSpec, TableSpec
+    from eval.datamate.prepare import with_calendar
+    from eval.ingestion.prepare import copy_upload
+
+    source = tmp_path / "shop"
+    source.mkdir()
+    (source / "sales.csv").write_text("a\n1\n", encoding="utf-8")
+    calendar = tmp_path / "calendar.csv"
+    calendar.write_text("date,holiday\n2026-01-01,New Year\n", encoding="utf-8")
+
+    copy_upload(source, tmp_path / "upload", extra_files=[calendar])
+    spec = with_calendar(DatasetSpec(tables=[TableSpec(source="sales", name="sales")]))
+
+    assert sorted(p.name for p in (tmp_path / "upload").iterdir()) == ["calendar.csv", "sales.csv"]
+    [table] = [t for t in spec.tables if t.source == "calendar"]
+    assert {c.name: c.type for c in table.columns}["date"] == "date"
+    assert with_calendar(spec) == spec
+
+
+def test_a_prepared_shop_queries_its_clean_dataset_through_the_runner(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    from da_agent.ingestion.build import BuildReport, ColumnBuild, TableBuild
+    from da_agent.runner.runner import SqlResult
+    from eval.datamate.adapter import open_prepared_shop
+
+    datasets = tmp_path / "datasets"
+    (datasets / "biz_1").mkdir(parents=True)
+    report = BuildReport(
+        tables=[TableBuild(name="sales", source="s", rows=3,
+                           columns=[ColumnBuild(name="amount", source="Tiền", type="money")])]
+    )  # fmt: skip
+    (datasets / "biz_1" / "build_report.json").write_text(report.model_dump_json(), "utf-8")
+
+    class FakeRunner:
+        def __init__(self) -> None:
+            self.requests: list = []
+
+        def query(self, request):
+            self.requests.append(request)
+            return SqlResult(status="ok", columns=["n"], rows=[[3]])
+
+    runner = FakeRunner()
+    shop = open_prepared_shop(data_dir, "biz_1", datasets, runner)
+
+    assert {d.name for d in shop.documents} == {"rulebook.md", "rulebook-topics.md", "README.md"}
+    assert [t.name for t in shop.dataset.describe()] == ["sales"]
+    assert shop.dataset.query("SELECT count(*) AS n FROM sales").rows == [[3]]
+    assert runner.requests[0].dataset_id == "biz_1"
+    with pytest.raises(UnsupportedShopError, match="biz_2"):
+        open_prepared_shop(data_dir, "biz_2", datasets, runner)
+
+
+def test_run_opens_shops_with_the_given_opener(data_dir: Path, tmp_path: Path) -> None:
+    llm, ledger, _ = make_llm([answer(1)])
+    questions = read_jsonl(data_dir / "questions.jsonl")
+    opened: list[str] = []
+
+    def opener(shop: str):
+        opened.append(shop)
+        if shop != "biz_1":
+            raise UnsupportedShopError(shop)
+        return open_shop(data_dir, shop)
+
+    metrics = run_questions(
+        questions[:1] + questions[2:3], data_dir, llm, ledger, RunConfig(tmp_path / "out"),
+        open_shop_fn=opener,
+    )  # fmt: skip
+
+    assert opened == ["biz_1", "biz_2"]
+    assert metrics["attempted"] == 1 and metrics["skipped_unsupported"] == ["q3"]
+
+
+def test_select_questions_can_keep_only_some_shops(data_dir: Path, splits: Path) -> None:
+    assert select_questions(data_dir, splits, "good", shops=["biz_2"]) == []
+    assert [q["id"] for q in select_questions(data_dir, splits, "good", shops=["biz_1"])] == [
+        "q1",
+        "q2",
+    ]

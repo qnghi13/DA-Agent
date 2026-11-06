@@ -15,3 +15,4 @@ decision, add a new ADR and mark the old one as superseded.
 | [0008](0008-rules-on-demand.md) | Topic rules fetched on demand with `search_rules` | Accepted |
 | [0009](0009-parse-uploads-in-sandbox.md) | Uploaded files are parsed inside the sandbox | Accepted |
 | [0010](0010-exclude-non-record-rows.md) | Declarative rules exclude subtotal and note rows | Accepted |
+| [0011](0011-sql-per-request-sandbox.md) | Agent SQL runs in a new sandbox per query, called as a library | Accepted |

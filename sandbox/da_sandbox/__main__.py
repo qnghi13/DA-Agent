@@ -48,6 +48,17 @@ def run_build(request: dict) -> int:
     return 0
 
 
+def run_sql(request: dict) -> int:
+    sys.path.insert(0, APP)
+    from da_agent.storage.duckdb_query import run_query
+
+    result = run_query(
+        Path("/data/dataset.duckdb"), str(request["sql"]), max_rows=int(request["max_rows"])
+    )
+    print(json.dumps(result, ensure_ascii=False, default=str))
+    return 0
+
+
 def main() -> int:
     request = json.loads(sys.stdin.read())
     # The default SIGALRM action ends the process, and user code cannot catch it as an exception.
@@ -55,6 +66,8 @@ def main() -> int:
     kind = request.get("kind")
     if kind == "python":
         return run_python(request["code"])
+    if kind == "sql":
+        return run_sql(request)
     if kind == "ingest":
         return run_ingest()
     if kind == "build":

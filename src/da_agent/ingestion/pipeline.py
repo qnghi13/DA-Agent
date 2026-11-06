@@ -177,3 +177,23 @@ def prepare_dataset(
         spec=spec,
         dropped_rules=dropped,
     )
+
+
+def rebuild_dataset(
+    upload_id: str,
+    runner: Runner,
+    spec: DatasetSpec,
+    *,
+    min_parse_rate: float = MIN_PARSE_RATE,
+) -> PreparedDataset:
+    """Ingest an upload and build it with an approved spec, without the model. Used when files
+    change under a spec the user already approved."""
+    ingested = runner.ingest(IngestRun(upload_id=upload_id))
+    if ingested.status != "ok" or ingested.report is None or ingested.output_dir is None:
+        return PreparedDataset(status="ingest_failed", ingest=ingested)
+    built = runner.build(BuildRun(ingest_id=ingested.output_dir.name, spec=spec))
+    if built.status != "ok" or built.report is None:
+        return PreparedDataset(status="build_failed", ingest=ingested, build=built, spec=spec)
+    problems = parse_problems(built.report, min_parse_rate)
+    status: PrepareStatus = "problems" if problems else "ok"
+    return PreparedDataset(status=status, ingest=ingested, build=built, spec=spec)

@@ -136,3 +136,57 @@ def test_authorizer_blocks_what_gets_past_the_guard(db_path: Path) -> None:
         dataset._execute_unchecked("ATTACH DATABASE ':memory:' AS other")
     with pytest.raises(QueryError):
         dataset._execute_unchecked("DELETE FROM customers")
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT * FROM read_csv('/etc/passwd')",
+        "SELECT * FROM read_csv_auto('/data/../x.csv')",
+        "SELECT * FROM read_parquet('s3://bucket/x.parquet')",
+        "SELECT * FROM read_text('/proc/self/environ')",
+        "SELECT * FROM read_blob('/etc/shadow')",
+        "SELECT * FROM '/etc/passwd'",
+        "SELECT * FROM 'other_shop/dataset.duckdb'",
+        "SELECT * FROM glob('/*')",
+        "SELECT getenv('GROQ_API_KEY')",
+        "SELECT * FROM duckdb_settings()",
+        "SELECT * FROM duckdb_secrets()",
+        "SELECT current_setting('home_directory')",
+        "SELECT * FROM sniff_csv('/etc/passwd')",
+        "SELECT * FROM query('SELECT 1')",
+        "SELECT * FROM sales s JOIN read_json('/x.json') j ON true",
+        "SELECT (SELECT count(*) FROM read_csv('/etc/passwd'))",
+        "ATTACH '/data/other.duckdb' AS other",
+        "COPY sales TO '/tmp/out.csv'",
+        "INSTALL httpfs",
+        "LOAD httpfs",
+        "SET enable_external_access = true",
+        "CALL pragma_version()",
+        "PRAGMA database_list",
+        "SUMMARIZE sales",
+        "CREATE TEMP TABLE x AS SELECT 1",
+        "EXPORT DATABASE '/tmp/x'",
+    ],
+)
+def test_duckdb_guard_rejects_files_settings_and_side_effects(sql: str) -> None:
+    with pytest.raises(SqlRejectedError):
+        validate_select(sql, dialect="duckdb")
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "SELECT sum(amount) FROM sales WHERE sale_date >= DATE '2025-03-01'",
+        "FROM sales SELECT product, sum(amount) GROUP BY ALL ORDER BY 2 DESC LIMIT 5",
+        "SELECT date_trunc('month', sale_date) AS m, count(*) FROM sales GROUP BY 1",
+        "SELECT * FROM sales QUALIFY row_number() OVER (PARTITION BY product) = 1",
+        "SELECT x FROM range(3) t(x)",
+        "SELECT unnest([1, 2, 3])",
+        "SELECT * FROM generate_series(DATE '2025-01-01', DATE '2025-01-31', INTERVAL 1 DAY)",
+        "WITH t AS (SELECT 1 AS a) SELECT a FROM t",
+        "SELECT name FROM customers WHERE name LIKE '%read_csv%'",
+    ],
+)
+def test_duckdb_guard_accepts_ordinary_queries(sql: str) -> None:
+    assert validate_select(sql, dialect="duckdb")

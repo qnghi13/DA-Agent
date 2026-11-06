@@ -28,6 +28,16 @@ FORBIDDEN_FUNCTIONS = frozenset(
 )
 
 
+# DuckDB can read files, URLs, the environment, and its own settings through functions. The engine
+# runs with external access off as well; this list stops such queries before they reach it.
+DUCKDB_FORBIDDEN_FUNCTIONS = frozenset(
+    {"getenv", "glob", "current_setting", "sniff_csv", "query", "query_table", "load_extension"}
+)
+DUCKDB_FORBIDDEN_PREFIXES = ("read_", "parquet_", "duckdb_", "pragma_", "sqlite_", "iceberg_")
+# Table functions that only generate values.
+DUCKDB_TABLE_FUNCTIONS = frozenset({"range", "generate_series", "unnest"})
+
+
 class SqlRejectedError(ValueError):
     """The query is not allowed. The message is safe to show to the model."""
 
@@ -58,4 +68,33 @@ def validate_select(sql: str, dialect: str = "sqlite") -> str:
             raise SqlRejectedError("only SELECT queries are allowed")
         if _function_name(node) in FORBIDDEN_FUNCTIONS:
             raise SqlRejectedError(f"function not allowed: {_function_name(node)}")
+        if dialect == "duckdb":
+            _check_duckdb(node)
     return sql.strip().rstrip(";").strip()
+
+
+def _check_duckdb(node: exp.Expr) -> None:
+    if isinstance(node, exp.ReadCSV):
+        raise SqlRejectedError("reading files is not allowed; query the dataset's tables")
+    name = _function_name(node)
+    if name is not None and (
+        name in DUCKDB_FORBIDDEN_FUNCTIONS or name.startswith(DUCKDB_FORBIDDEN_PREFIXES)
+    ):
+        raise SqlRejectedError(f"function not allowed: {name}")
+    if isinstance(node, exp.Table):
+        source = node.this
+        if isinstance(source, exp.Identifier) and not _looks_like_path(source):
+            return
+        function = _function_name(source) if isinstance(source, exp.Expr) else None
+        if function in DUCKDB_TABLE_FUNCTIONS:
+            return
+        raise SqlRejectedError(
+            f"table {node.sql(dialect='duckdb')!r} is not allowed; query the dataset's tables "
+            "by name"
+        )
+
+
+def _looks_like_path(identifier: exp.Identifier) -> bool:
+    # DuckDB reads a quoted name such as '/etc/passwd' or 'x.csv' as a file.
+    name = identifier.name
+    return identifier.quoted and ("/" in name or "." in name or ":" in name)

@@ -8,6 +8,8 @@ from typing import Any
 from da_agent.agent.answer import AgentResult
 from da_agent.agent.loop_types import Document
 from da_agent.agent.rules import split_sections
+from da_agent.agent.tools import Dataset
+from da_agent.storage.sandbox_dataset import BUILD_REPORT, QueryRunner, SandboxDataset
 from da_agent.storage.sqlite_dataset import ReferenceTable, SqliteDataset
 
 KIND_TO_TYPE = {
@@ -33,12 +35,12 @@ HIDDEN_COLUMNS = frozenset(
 
 
 class UnsupportedShopError(ValueError):
-    """The shop's files need ingestion, which does not exist yet."""
+    """The shop cannot be opened this way: no pos.sqlite, or no prepared dataset."""
 
 
 @dataclass(frozen=True)
 class ShopContext:
-    dataset: SqliteDataset
+    dataset: Dataset
     documents: list[Document]
 
 
@@ -94,8 +96,26 @@ def rulebook_documents(text: str) -> tuple[Document, Document]:
     )
 
 
+def _documents(data_dir: Path, shop: str) -> list[Document]:
+    rulebook = agent_rulebook((data_dir / "rulebook.md").read_text(encoding="utf-8"))
+    readme = (data_dir / "data" / shop / "README.md").read_text(encoding="utf-8")
+    return [*rulebook_documents(rulebook), Document("README.md", readme)]
+
+
+def open_prepared_shop(
+    data_dir: Path, shop: str, datasets_root: Path, runner: QueryRunner
+) -> ShopContext:
+    """Open a shop's clean dataset, built by eval.datamate.prepare. Queries run in the sandbox,
+    and the calendar is a table of the dataset."""
+    if not (datasets_root / shop / BUILD_REPORT).is_file():
+        raise UnsupportedShopError(f"{shop} has no prepared dataset in {datasets_root}")
+    return ShopContext(SandboxDataset.open(runner, datasets_root, shop), _documents(data_dir, shop))
+
+
 def open_shop(data_dir: Path, shop: str) -> ShopContext:
-    """Open one shop. This reads only the rulebook, the calendar, and that shop's directory."""
+    """Open a shop's pos.sqlite in this process. Only for trusted files: the original SQLite
+    baseline. Prepared datasets use open_prepared_shop. Reads only the rulebook, the calendar,
+    and that shop's directory."""
     directory = data_dir / "data" / shop
     database = directory / "pos.sqlite"
     if not database.is_file():
@@ -105,9 +125,4 @@ def open_shop(data_dir: Path, shop: str) -> ShopContext:
         hidden_columns=HIDDEN_COLUMNS,
         reference_tables={"calendar": _load_calendar(data_dir / "calendar.csv")},
     )
-    rulebook = agent_rulebook((data_dir / "rulebook.md").read_text(encoding="utf-8"))
-    documents = [
-        *rulebook_documents(rulebook),
-        Document("README.md", (directory / "README.md").read_text(encoding="utf-8")),
-    ]
-    return ShopContext(dataset, documents)
+    return ShopContext(dataset, _documents(data_dir, shop))

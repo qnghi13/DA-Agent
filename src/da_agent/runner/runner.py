@@ -15,7 +15,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, Literal
+from typing import IO, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -28,6 +28,7 @@ SANDBOX_LABEL = "da-agent.sandbox"
 # Extra time for container start and teardown before the Runner kills the container itself.
 STARTUP_GRACE_SECONDS = 15
 MAX_CODE_CHARS = 50_000
+MAX_SQL_CHARS = 20_000
 _CHUNK = 65_536
 
 # 128 + signal number: SIGKILL (memory limit or docker kill) and SIGALRM (the in-sandbox timer).
@@ -46,6 +47,28 @@ class PythonRun(BaseModel):
     dataset_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
     code: str = Field(max_length=MAX_CODE_CHARS)
     timeout_seconds: int = Field(default=20, ge=1, le=60)
+
+
+class SqlRun(BaseModel):
+    """Run one read-only query on one clean dataset, mounted read-only at /data. See ADR 0011."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["sql"] = "sql"
+    dataset_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+    sql: str = Field(max_length=MAX_SQL_CHARS)
+    max_rows: int = Field(default=50, ge=1, le=500)
+    timeout_seconds: int = Field(default=15, ge=1, le=60)
+
+
+class SqlResult(BaseModel):
+    status: RunStatus
+    columns: list[str] = Field(default_factory=list)
+    rows: list[list[Any]] = Field(default_factory=list)
+    truncated: bool = False
+    # A message for the model. Sandbox stderr is never passed on.
+    error: str | None = None
+    duration_seconds: float = 0.0
 
 
 class IngestRun(BaseModel):
@@ -174,7 +197,10 @@ class Runner:
         self._kill = kill or self._docker_kill
 
     def build_command(
-        self, request: PythonRun | IngestRun | BuildRun, name: str, output_dir: Path | None = None
+        self,
+        request: PythonRun | SqlRun | IngestRun | BuildRun,
+        name: str,
+        output_dir: Path | None = None,
     ) -> list[str]:
         c = self.config
         if isinstance(request, (IngestRun, BuildRun)):
@@ -211,7 +237,47 @@ class Runner:
             c.image,
         ]
 
-    def run(self, request: PythonRun) -> RunResult:
+    def query(self, request: SqlRun) -> SqlResult:
+        """Run one query in a fresh sandbox and return a bounded result or an error message."""
+        run = self.run(request)
+        if run.status == "timeout":
+            message = f"query stopped: over the {request.timeout_seconds} s time limit"
+            return SqlResult(status="timeout", error=message, duration_seconds=run.duration_seconds)
+        if run.status == "killed":
+            message = "query stopped: over the memory limit; aggregate or filter more"
+            return SqlResult(status="killed", error=message, duration_seconds=run.duration_seconds)
+        try:
+            payload = json.loads(run.stdout) if run.status == "ok" else None
+        except json.JSONDecodeError:
+            payload = None
+        if not isinstance(payload, dict):
+            return SqlResult(
+                status="error",
+                error="the query sandbox returned no result",
+                duration_seconds=run.duration_seconds,
+            )
+        if "error" in payload:
+            return SqlResult(
+                status="error",
+                error=str(payload["error"])[:500],
+                duration_seconds=run.duration_seconds,
+            )
+        try:
+            return SqlResult(
+                status="ok",
+                columns=payload.get("columns", []),
+                rows=payload.get("rows", []),
+                truncated=bool(payload.get("truncated")) or run.truncated,
+                duration_seconds=run.duration_seconds,
+            )
+        except ValidationError:
+            return SqlResult(
+                status="error",
+                error="the query sandbox returned no result",
+                duration_seconds=run.duration_seconds,
+            )
+
+    def run(self, request: PythonRun | SqlRun) -> RunResult:
         name = f"da-sbx-{uuid.uuid4().hex[:12]}"
         command = self.build_command(request, name)
         payload = json.dumps(request.model_dump()).encode()

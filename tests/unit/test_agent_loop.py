@@ -401,3 +401,13 @@ def test_search_rules_is_not_offered_without_on_demand_documents(dataset: Sqlite
     _, adapter = run(dataset, [submit("number", 350)])
 
     assert "search_rules" not in [tool.name for tool in adapter.requests[0].tools]
+
+
+def test_run_sql_names_the_dataset_sql_dialect() -> None:
+    from da_agent.agent.tools import tool_specs
+
+    [duckdb_sql] = [s for s in tool_specs(None, dialect="DuckDB") if s.name == "run_sql"]
+    [default_sql] = [s for s in tool_specs(None) if s.name == "run_sql"]
+
+    assert "DuckDB" in duckdb_sql.description
+    assert "SQLite" in default_sql.description

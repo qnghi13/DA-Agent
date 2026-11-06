@@ -3,7 +3,9 @@
 **Status: mostly design.** Controls are planned unless noted. A control counts as done only when a
 test proves it. Done so far: the SQL guard and hidden columns on SQLite (`tests/security/`), keeping
 answers away from the model during eval runs (`tests/unit/test_datamate_eval.py`), and the sandbox
-limits in the first two rows below (`tests/security/test_sandbox_escape.py`, `tests/unit/test_runner.py`).
+limits in the first two rows below (`tests/security/test_sandbox_escape.py`, `tests/unit/test_runner.py`),
+and the DuckDB SQL path: guard, engine settings, and a sandbox per query, each tested without the
+layers before it (`tests/security/test_sql_boundary.py`, `test_duckdb_engine.py`, `test_sandbox_sql.py`).
 
 ## Assets
 
@@ -41,7 +43,7 @@ Injection is assumed to succeed sometimes. Permissions, not prompts, must limit 
 |---|---|---|
 | LLM-generated code or a malicious upload attacks the host or network | Container with `--network none`, read-only, non-root, `--cap-drop ALL`, `no-new-privileges`, RAM, CPU, PID, and time limits, no secrets. Uploads are parsed here too ([ADR 0009](adr/0009-parse-uploads-in-sandbox.md)) | **Done:** tests attempt network, file writes, env reads, other datasets, the Docker socket, fork bomb, memory exhaustion, endless loops, output floods |
 | Runner compromised through its Docker socket | Only the Runner holds the socket. It accepts typed requests and builds container options itself, so callers cannot set mounts or flags | **Done:** request fields cannot change mounts or flags, dataset ids cannot name paths or follow symlinks out |
-| SQL reads files, writes, or attaches databases | sqlglot allows only `SELECT`. DuckDB opens read-only with `enable_external_access` off and a timeout | Tests attempt `COPY`, `read_csv`, `ATTACH` |
+| SQL reads files, writes, or attaches databases | sqlglot allows only `SELECT` on plain table names, with no file, settings, or environment functions. DuckDB opens read-only with `enable_external_access` off and its configuration locked, in a new sandbox per query with only that dataset mounted and a timeout ([ADR 0011](adr/0011-sql-per-request-sandbox.md)) | Tests attempt `COPY`, `read_csv`, `ATTACH`, file paths as tables, `INSTALL`, `SET`, and another dataset, with and without the guard |
 | Prompt injection from cells or descriptions | File content is always framed as data. Tools have least privilege | Injection suite through cells and descriptions |
 | Malicious spreadsheet: zip bomb, external entities, huge sheets | Parsing runs in the sandbox. Size, compression ratio, row, column, and cell limits. `defusedxml` guards openpyxl. Macros are ignored | **Done:** zip bomb, oversized, broken, and unreadable file tests (`tests/unit/test_ingestion_raw.py`) |
 | Sandbox output tricks the Runner: symlinks in `/out`, huge output | The Runner refuses links and special files, caps the output size, and opens the report with `O_NOFOLLOW` | **Done:** `tests/unit/test_runner.py` |

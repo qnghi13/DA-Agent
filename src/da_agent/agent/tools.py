@@ -72,14 +72,23 @@ SEARCH_RULES_SPEC = ToolSpec(
 )
 
 
-def tool_specs(rules: RuleIndex | None) -> list[ToolSpec]:
-    """search_rules is offered only when there are sections to search."""
+def tool_specs(rules: RuleIndex | None, dialect: str = "SQLite") -> list[ToolSpec]:
+    """search_rules is offered only when there are sections to search. run_sql names the SQL
+    dialect of the dataset, so the model writes functions that exist."""
+    specs = [
+        spec.model_copy(update={"description": spec.description.replace("SQLite", dialect)})
+        if spec.name == "run_sql"
+        else spec
+        for spec in TOOL_SPECS
+    ]
     if rules is not None and rules.sections:
-        return [*TOOL_SPECS, SEARCH_RULES_SPEC]
-    return list(TOOL_SPECS)
+        return [*specs, SEARCH_RULES_SPEC]
+    return specs
 
 
 class Dataset(Protocol):
+    dialect: str
+
     def describe(self) -> list[TableInfo]: ...
 
     def query(self, sql: str) -> QueryResult: ...

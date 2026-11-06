@@ -18,16 +18,19 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from da_agent.ingestion.pipeline import parse_problems, prepare_dataset
+from da_agent.ingestion.pipeline import parse_problems, prepare_dataset, rebuild_dataset
+from da_agent.ingestion.spec import DatasetSpec
 from da_agent.llm.client import CostLedger, LLMClient, RunBudget
 from da_agent.llm.factory import build_routes
 from da_agent.runner.runner import Runner, RunnerConfig
 
 
-def copy_upload(source: Path, target: Path) -> None:
-    """Copy an upload, readable by the sandbox user."""
+def copy_upload(source: Path, target: Path, extra_files: list[Path] | None = None) -> None:
+    """Copy an upload and any extra files into it, readable by the sandbox user."""
     shutil.rmtree(target, ignore_errors=True)
     shutil.copytree(source, target, symlinks=False)
+    for extra in extra_files or []:
+        shutil.copyfile(extra, target / extra.name)
     for path in [target, *target.rglob("*")]:
         path.chmod(0o755 if path.is_dir() else 0o644)
 
@@ -49,32 +52,42 @@ def prepare_uploads(
     sources: dict[str, Path],
     output_dir: Path,
     runner: Runner,
-    llm: LLMClient,
+    llm: LLMClient | None,
     ledger: CostLedger,
     *,
     description: str,
     max_cost: float,
     max_tokens_per_upload: int,
+    extra_files: list[Path] | None = None,
+    specs: dict[str, DatasetSpec] | None = None,
 ) -> list[dict[str, Any]]:
-    """Prepare each named upload into output_dir/datasets/<name>, and summarise each run."""
+    """Prepare each named upload into output_dir/datasets/<name>, and summarise each run.
+
+    Uploads with a saved spec in `specs` are rebuilt with it and no model call."""
     uploads = runner.config.uploads_root
     if uploads is None:
         raise ValueError("the runner needs an uploads root")
     summary: list[dict[str, Any]] = []
     for name, source in sources.items():
-        if ledger.totals().cost_usd >= max_cost:
+        if source.resolve() != (uploads / name).resolve():
+            copy_upload(source, uploads / name, extra_files)
+        if specs is not None and name in specs:
+            prepared = rebuild_dataset(name, runner, specs[name])
+        elif llm is None:
+            summary.append({"shop": name, "status": "skipped_no_spec"})
+            continue
+        elif ledger.totals().cost_usd >= max_cost:
             summary.append({"shop": name, "status": "skipped_cost_limit"})
             continue
-        if source.resolve() != (uploads / name).resolve():
-            copy_upload(source, uploads / name)
-        prepared = prepare_dataset(
-            name,
-            runner,
-            llm,
-            run_id=name,
-            description=description,
-            budget=RunBudget(max_total_tokens=max_tokens_per_upload),
-        )
+        else:
+            prepared = prepare_dataset(
+                name,
+                runner,
+                llm,
+                run_id=name,
+                description=description,
+                budget=RunBudget(max_total_tokens=max_tokens_per_upload),
+            )
         totals = ledger.totals(name)
         row: dict[str, Any] = {
             "shop": name,

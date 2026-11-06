@@ -99,7 +99,7 @@ def _loop(
     steps: list[ToolStep] = []
     nudges = 0
     rules = RuleIndex(documents)
-    tools = tool_specs(rules)
+    tools = tool_specs(rules, getattr(dataset, "dialect", "SQLite"))
 
     for iteration in range(1, limits.max_iterations + 1):
         request = LLMRequest(messages=messages, tools=tools)

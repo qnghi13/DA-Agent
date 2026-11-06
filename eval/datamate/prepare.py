@@ -6,6 +6,11 @@ docker build -f sandbox/Dockerfile -t da-agent-sandbox:dev .
 uv run --env-file .env python -m eval.datamate.prepare --data-dir train \\
     --routes groq:openai/gpt-oss-20b --output-dir eval/reports/prepare --max-cost 0.10
 
+Rebuild saved specs, with the calendar added and no model call:
+
+uv run python -m eval.datamate.prepare --data-dir train --output-dir eval/reports/rebuild \\
+    --reuse-specs eval/reports/datasets-dev --max-cost 0
+
 Shop files are copied into an uploads directory, because Runner mounts must sit under its roots.
 Holdout shops are refused.
 """
@@ -18,12 +23,48 @@ from pathlib import Path
 from typing import Any
 
 from da_agent.agent.rules import split_sections
+from da_agent.ingestion.spec import ColumnSpec, DatasetSpec, TableSpec
 from da_agent.llm.client import CostLedger, LLMClient
 from da_agent.llm.factory import build_routes
 from da_agent.runner.runner import Runner
 from eval.ingestion.prepare import make_runner, prepare_uploads, write_summary
 
 DEFAULT_SPLITS = Path("eval/splits/splits.json")
+CALENDAR = "calendar.csv"
+# The rulebook says the calendar sits next to the shop files, so it travels with each upload.
+CALENDAR_SPEC = TableSpec(
+    source="calendar",
+    name="calendar",
+    description="One row per solar date, with its lunar date and public holiday, if any.",
+    columns=[
+        ColumnSpec(source="date", name="date", type="date"),
+        ColumnSpec(source="weekday", name="weekday", type="integer"),
+        ColumnSpec(source="lunar_day", name="lunar_day", type="integer"),
+        ColumnSpec(source="lunar_month", name="lunar_month", type="integer"),
+        ColumnSpec(source="lunar_year", name="lunar_year", type="integer"),
+        ColumnSpec(source="lunar_leap", name="lunar_leap", type="boolean"),
+        ColumnSpec(source="holiday", name="holiday"),
+    ],
+)
+
+
+def with_calendar(spec: DatasetSpec) -> DatasetSpec:
+    """Add the calendar table to a saved spec that predates it."""
+    if any(table.source == CALENDAR_SPEC.source for table in spec.tables):
+        return spec
+    return spec.model_copy(update={"tables": [*spec.tables, CALENDAR_SPEC]})
+
+
+def load_specs(directory: Path, shops: list[str]) -> dict[str, DatasetSpec]:
+    """Saved specs from a datasets directory, one <shop>/spec.json each, with the calendar."""
+    specs = {}
+    for shop in shops:
+        path = directory / shop / "spec.json"
+        if path.is_file():
+            specs[shop] = with_calendar(
+                DatasetSpec.model_validate_json(path.read_text(encoding="utf-8"))
+            )
+    return specs
 
 
 def select_shops(splits_path: Path, shops: list[str] | None) -> list[str]:
@@ -51,24 +92,29 @@ def prepare_shops(
     data_dir: Path,
     output_dir: Path,
     runner: Runner,
-    llm: LLMClient,
+    llm: LLMClient | None,
     ledger: CostLedger,
     *,
     max_cost: float,
     max_tokens_per_shop: int,
+    specs: dict[str, DatasetSpec] | None = None,
 ) -> list[dict[str, Any]]:
     return prepare_uploads(
         {shop: data_dir / "data" / shop for shop in shops},
         output_dir, runner, llm, ledger,
         description=file_conventions(data_dir),
         max_cost=max_cost, max_tokens_per_upload=max_tokens_per_shop,
+        extra_files=[data_dir / CALENDAR], specs=specs,
     )  # fmt: skip
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Prepare clean datasets for DataMate dev shops.")
     parser.add_argument("--data-dir", type=Path, required=True)
-    parser.add_argument("--routes", required=True)
+    parser.add_argument("--routes", help="needed unless every shop has a saved spec")
+    parser.add_argument(
+        "--reuse-specs", type=Path, help="datasets directory whose spec.json files are rebuilt"
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--splits", type=Path, default=DEFAULT_SPLITS)
     parser.add_argument("--shops", nargs="*")
@@ -81,10 +127,11 @@ def main() -> int:
     root = args.output_dir.resolve()
     runner = make_runner(root, args.image)
     ledger = CostLedger(root / "ledger.jsonl")
-    llm = LLMClient(build_routes(args.routes, os.environ), ledger)
+    specs = load_specs(args.reuse_specs, shops) if args.reuse_specs else None
+    llm = LLMClient(build_routes(args.routes, os.environ), ledger) if args.routes else None
     summary = prepare_shops(
         shops, args.data_dir, root, runner, llm, ledger,
-        max_cost=args.max_cost, max_tokens_per_shop=args.max_tokens_per_shop,
+        max_cost=args.max_cost, max_tokens_per_shop=args.max_tokens_per_shop, specs=specs,
     )  # fmt: skip
     write_summary(root, summary, ledger)
     return 0

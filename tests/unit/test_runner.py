@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from da_agent.runner.runner import Captured, PythonRun, Runner, RunnerConfig
+from da_agent.runner.runner import Captured, PythonRun, Runner, RunnerConfig, SqlRun
 
 ROOT_FLAGS = {
     "--network=none",
@@ -295,3 +295,58 @@ def test_build_returns_the_build_report(ingest_config: RunnerConfig) -> None:
 def test_build_refuses_unknown_ingest_outputs(ingest_config: RunnerConfig) -> None:
     with pytest.raises(ValueError, match="unknown ingest output"):
         Runner(ingest_config).build(BuildRun(ingest_id="ing_9", spec=DatasetSpec(tables=[])))
+
+
+def sql_runner(config: RunnerConfig, captured: Captured, calls: list | None = None) -> Runner:
+    def fake_execute(command: list[str], **kwargs) -> Captured:
+        if calls is not None:
+            calls.append({"command": command, **kwargs})
+        return captured
+
+    return Runner(config, execute=fake_execute)
+
+
+def test_sql_mounts_only_the_dataset_and_sends_the_query_on_stdin(config: RunnerConfig) -> None:
+    calls: list = []
+    output = b'{"columns": ["n"], "rows": [[3]], "truncated": false}'
+    runner = sql_runner(config, Captured(0, output, b"", truncated=False), calls)
+
+    result = runner.query(SqlRun(dataset_id="shop_1", sql="SELECT 3 AS n"))
+
+    command = calls[0]["command"]
+    mounts = [arg for arg in command if arg.startswith("--mount=")]
+    dataset = (config.datasets_root / "shop_1").resolve()
+    assert mounts == [f"--mount=type=bind,source={dataset},target=/data,readonly"]
+    assert set(command) >= ROOT_FLAGS
+    assert all("SELECT 3" not in arg for arg in command)
+    assert b"SELECT 3 AS n" in calls[0]["input"]
+    assert (result.status, result.columns, result.rows, result.error) == ("ok", ["n"], [[3]], None)
+
+
+def test_a_query_error_comes_back_as_a_message(config: RunnerConfig) -> None:
+    output = b'{"error": "Binder Error: column missing not found"}'
+    runner = sql_runner(config, Captured(0, output, b"", truncated=False))
+
+    result = runner.query(SqlRun(dataset_id="shop_1", sql="SELECT missing"))
+
+    assert result.status == "error"
+    assert result.error == "Binder Error: column missing not found"
+
+
+@pytest.mark.parametrize(
+    ("captured", "status", "words"),
+    [
+        (Captured(142, b"", b"", truncated=False), "timeout", "time limit"),
+        (Captured(137, b"", b"", truncated=False), "killed", "memory"),
+        (Captured(0, b"not json", b"", truncated=False), "error", "no result"),
+        (Captured(1, b"", b"Traceback", truncated=False), "error", "no result"),
+    ],
+)
+def test_sandbox_failures_become_messages_the_model_can_act_on(
+    config: RunnerConfig, captured: Captured, status: str, words: str
+) -> None:
+    result = sql_runner(config, captured).query(SqlRun(dataset_id="shop_1", sql="SELECT 1"))
+
+    assert result.status == status
+    assert result.error is not None and words in result.error
+    assert "Traceback" not in result.error

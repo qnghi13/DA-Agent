@@ -223,3 +223,29 @@ def test_only_rules_actually_removed_are_reported_as_dropped() -> None:
     safer, dropped = _without_record_rules(spec, report)
 
     assert (safer, dropped) == (spec, [])
+
+
+def test_a_saved_spec_is_rebuilt_without_the_model(tmp_path: Path) -> None:
+    from da_agent.ingestion.pipeline import rebuild_dataset
+    from da_agent.ingestion.spec import DatasetSpec
+
+    spec = DatasetSpec.model_validate_json(GOOD)
+    runner = FakeRunner(tmp_path, [build_report(parsed=100)])
+
+    prepared = rebuild_dataset("up", runner, spec)  # type: ignore[arg-type]
+
+    assert prepared.status == "ok"
+    assert runner.specs == [spec] and prepared.spec == spec
+    assert prepared.proposal is None
+
+
+def test_a_rebuild_reports_problems_but_keeps_the_build(tmp_path: Path) -> None:
+    from da_agent.ingestion.pipeline import rebuild_dataset
+    from da_agent.ingestion.spec import DatasetSpec
+
+    runner = FakeRunner(tmp_path, [build_report(parsed=50)])
+
+    prepared = rebuild_dataset("up", runner, DatasetSpec.model_validate_json(GOOD))  # type: ignore[arg-type]
+
+    assert prepared.status == "problems"
+    assert prepared.build is not None and prepared.build.output_dir == tmp_path / "build1"
