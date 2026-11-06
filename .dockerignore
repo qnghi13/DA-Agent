@@ -1,0 +1,7 @@
+# Allowlist: the sandbox image gets only what it runs. Never secrets, data, or eval answers.
+*
+!sandbox/requirements.txt
+!sandbox/da_sandbox/
+!src/da_agent/__init__.py
+!src/da_agent/ingestion/
+**/__pycache__

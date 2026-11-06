@@ -391,3 +391,28 @@ def test_rulebook_keeps_answer_rules_inline_and_topics_on_demand() -> None:
         assert rule in inline.text
     assert "Doanh thu không tính đơn huỷ" in topics.text
     assert "Doanh thu không tính đơn huỷ" not in inline.text
+
+
+def test_prepare_refuses_holdout_and_unknown_shops(splits: Path) -> None:
+    from eval.datamate.prepare import select_shops
+
+    holdout = json.loads(splits.read_text(encoding="utf-8"))["holdout_shops"]
+    with pytest.raises(ValueError, match="holdout"):
+        select_shops(splits, [holdout[0]])
+    with pytest.raises(ValueError, match="unknown"):
+        select_shops(splits, ["biz_999"])
+
+
+def test_prepare_describes_shops_with_the_rulebook_file_conventions(tmp_path: Path) -> None:
+    from eval.datamate.prepare import file_conventions
+
+    (tmp_path / "rulebook.md").write_text(
+        "# R\n\n## 7. Khác\nx\n\n## 8. Cách ghi trong file\nÔ để trống: giống dòng đầu nhóm.\n"
+        "\n## 9. Đáp án\ny\n",
+        encoding="utf-8",
+    )
+
+    text = file_conventions(tmp_path)
+
+    assert "giống dòng đầu nhóm" in text
+    assert "Đáp án" not in text

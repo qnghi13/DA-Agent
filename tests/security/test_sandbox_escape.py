@@ -19,6 +19,14 @@ IMAGE = "da-agent-sandbox:test"
 CANARY = "SANDBOX-CANARY-4417"
 
 
+def build_image() -> None:
+    subprocess.run(
+        ["docker", "build", "-q", "-f", str(REPO / "sandbox/Dockerfile"), "-t", IMAGE, str(REPO)],
+        check=True,
+        capture_output=True,
+    )
+
+
 def _docker_ready() -> bool:
     if shutil.which("docker") is None:
         return False
@@ -29,11 +37,7 @@ def _docker_ready() -> bool:
 def runner(tmp_path_factory: pytest.TempPathFactory) -> Runner:
     if not _docker_ready():
         pytest.skip("Docker is not available")
-    subprocess.run(
-        ["docker", "build", "-q", "-t", IMAGE, str(REPO / "sandbox")],
-        check=True,
-        capture_output=True,
-    )
+    build_image()
     root = tmp_path_factory.mktemp("datasets")
     root.chmod(0o755)
     shop = root / "shop_1"

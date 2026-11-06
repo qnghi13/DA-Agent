@@ -97,6 +97,16 @@ secrets ([ADR 0009](adr/0009-parse-uploads-in-sandbox.md)).
 `DatasetSpec` is declarative data interpreted by our code. It never contains executable code. There
 is no fixed canonical schema and no DataMate-specific code ([ADR 0006](adr/0006-dataset-spec.md)).
 
+Implemented in `src/da_agent/ingestion/`:
+- `raw.py` (steps 1–4, sandbox job `ingest`), `propose.py` (step 5, Worker), `build.py` (steps 6
+  and 8, sandbox job `build`), and `pipeline.py`, which repairs a spec up to 3 times.
+- Code, not the model, settles what code can tell: groups of three digits always mean thousands,
+  and a column cannot be both day-first and month-first.
+- Columns the raw profile marks sensitive are always hidden. The spec can hide more, never fewer.
+- Invalid parts of a proposal are dropped one column at a time and sent back for repair.
+- A parse rate shows how many values parsed, not whether they parsed correctly. A wrong number
+  format once read `22,000` as 22 at a 99% parse rate.
+
 ## Agent graph
 
 ```

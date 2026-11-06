@@ -6,10 +6,13 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
 dependencies = [
+    "defusedxml>=0.7.1",
+    "duckdb>=2.0.0",
     "google-genai>=2.34.0",
     "httpx>=0.28.1",
     "httpx2>=2.16.0",
     "openai>=3.46.0",
+    "openpyxl>=3.1.5",
     "opentelemetry-exporter-otlp-proto-http>=1.45.2",
     "opentelemetry-sdk>=1.45.2",
     "pydantic>=2.14.3",

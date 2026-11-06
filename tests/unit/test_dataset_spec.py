@@ -1,0 +1,209 @@
+"""DatasetSpec schema and its checks against the raw report."""
+
+import pytest
+from pydantic import ValidationError
+
+from da_agent.ingestion.report import ColumnProfile, ColumnReport, IngestReport, TableReport
+from da_agent.ingestion.spec import ColumnSpec, DatasetSpec, Relationship, TableSpec, check_spec
+
+
+def report() -> IngestReport:
+    def table(name: str, columns: list[str]) -> TableReport:
+        return TableReport(
+            name=name,
+            sources=[],
+            row_count=1,
+            columns=[ColumnReport(name=c, profile=ColumnProfile()) for c in [*columns, "_source"]],
+        )
+
+    return IngestReport(tables=[table("don", ["Mã đơn", "Ngày"]), table("kh", ["Mã KH"])])
+
+
+def test_a_valid_spec_has_no_problems() -> None:
+    spec = DatasetSpec(
+        tables=[
+            TableSpec(
+                source="don",
+                name="orders",
+                columns=[
+                    ColumnSpec(source="Mã đơn", name="order_id"),
+                    ColumnSpec(source="Ngày", name="order_date", type="date", date_formats=["dmy"]),
+                ],
+                fill_down=["Mã đơn"],
+            ),
+            TableSpec(
+                source="kh", name="customers", columns=[ColumnSpec(source="Mã KH", name="id")]
+            ),
+        ],
+        relationships=[
+            Relationship(
+                from_table="orders", from_column="order_id", to_table="customers", to_column="id"
+            )
+        ],
+    )
+
+    assert check_spec(spec, report()) == []
+
+
+@pytest.mark.parametrize("name", ["Orders", "1x", "a b", 'x"; DROP TABLE y; --', "", "a" * 64])
+def test_clean_names_must_be_plain_identifiers(name: str) -> None:
+    with pytest.raises(ValidationError):
+        ColumnSpec(source="x", name=name)
+
+
+def test_unknown_fields_and_types_are_rejected() -> None:
+    with pytest.raises(ValidationError):
+        ColumnSpec.model_validate({"source": "x", "name": "x", "sql": "SELECT 1"})
+    with pytest.raises(ValidationError):
+        ColumnSpec.model_validate({"source": "x", "name": "x", "type": "python"})
+
+
+def test_check_reports_problems_a_model_can_fix() -> None:
+    spec = DatasetSpec(
+        tables=[
+            TableSpec(
+                source="don",
+                name="orders",
+                columns=[
+                    ColumnSpec(source="Mã", name="order_id"),
+                    ColumnSpec(source="Ngày", name="order_id", type="date"),
+                ],
+                fill_down=["Nope"],
+            ),
+            TableSpec(source="ghost", name="ghost"),
+        ],
+        relationships=[
+            Relationship(from_table="orders", from_column="x", to_table="kh", to_column="y")
+        ],
+    )
+
+    problems = "\n".join(check_spec(spec, report()))
+
+    assert "column 'Mã' is not in the raw table" in problems
+    assert "'order_id' is used twice" in problems
+    assert "fill_down column 'Nope'" in problems
+    assert "table 'ghost' is not in the raw profile" in problems
+    assert "unknown column orders.x" in problems
+
+
+def test_lenient_parsing_keeps_valid_parts_and_lists_the_rest() -> None:
+    from da_agent.ingestion.spec import parse_spec_lenient
+
+    data = {
+        "tables": [
+            {
+                "source": "don",
+                "name": "orders",
+                "columns": [
+                    {"source": "Mã đơn", "name": "order_id"},
+                    {"source": "Ngày", "name": "day", "type": "python"},
+                ],
+            },
+            {"source": "kh", "name": "Bad Name"},
+        ],
+        "relationships": [{"from_table": "orders"}],
+        "notes": ["n"],
+    }
+
+    spec, problems = parse_spec_lenient(data)
+
+    assert [t.name for t in spec.tables] == ["orders"]
+    assert [c.name for c in spec.tables[0].columns] == ["order_id"]
+    assert spec.notes == ["n"]
+    text = "\n".join(problems)
+    assert "orders column 'Ngày'" in text and "type" in text
+    assert "table 'kh'" in text
+    assert "relationship 1" in text
+
+
+def test_number_format_hints_are_not_part_of_the_spec() -> None:
+    with pytest.raises(ValidationError):
+        ColumnSpec.model_validate({"source": "x", "name": "x", "number_format": "comma_decimal"})
+
+
+def test_day_first_and_month_first_cannot_share_a_column() -> None:
+    column = ColumnSpec(source="Ngày", name="day", type="date", date_formats=["dmy", "mdy"])
+    spec = DatasetSpec(tables=[TableSpec(source="don", name="orders", columns=[column])])
+
+    assert any("both dmy and mdy" in problem for problem in check_spec(spec, report()))
+
+
+def test_sanitize_drops_only_the_broken_parts() -> None:
+    from da_agent.ingestion.spec import sanitize_spec
+
+    spec = DatasetSpec(
+        tables=[
+            TableSpec(
+                source="don",
+                name="orders",
+                columns=[
+                    ColumnSpec(source="Mã đơn", name="order_id"),
+                    ColumnSpec(source="Ghost", name="ghost"),
+                    ColumnSpec(source="Ngày", name="order_id", type="date"),
+                ],
+                fill_down=["Mã đơn", "Nope"],
+            ),
+            TableSpec(source="nowhere", name="nowhere"),
+        ],
+        relationships=[
+            Relationship(from_table="orders", from_column="order_id", to_table="x", to_column="y")
+        ],
+    )
+
+    clean, problems = sanitize_spec(spec, report())
+
+    assert [t.name for t in clean.tables] == ["orders"]
+    assert [(c.source, c.name) for c in clean.tables[0].columns] == [
+        ("Mã đơn", "order_id"),
+        ("Ngày", "order_id_2"),
+    ]
+    assert clean.tables[0].fill_down == ["Mã đơn"]
+    assert clean.relationships == []
+    assert len(problems) == 5
+    assert check_spec(clean, report()) == []
+
+
+def test_sources_given_as_file_labels_map_to_their_table() -> None:
+    from da_agent.ingestion.report import SourceReport
+    from da_agent.ingestion.spec import sanitize_spec
+
+    raw = report()
+    raw.tables[0].sources = [
+        SourceReport(source="Don.xlsx#Sheet1", header_row=1, skipped_rows=0, rows=1)
+    ]
+    spec = DatasetSpec(tables=[TableSpec(source="Don.xlsx#Sheet1", name="orders")])
+
+    clean, problems = sanitize_spec(spec, raw)
+
+    assert clean.tables[0].source == "don"
+    assert problems == []
+
+
+def test_unknown_date_formats_are_ignored_not_fatal() -> None:
+    from da_agent.ingestion.spec import parse_spec_lenient
+
+    column = {
+        "source": "Ngày",
+        "name": "day",
+        "type": "datetime",
+        "date_formats": ["julian", "dmy"],
+    }
+    data = {"tables": [{"source": "don", "name": "orders", "columns": [column]}]}
+
+    spec, problems = parse_spec_lenient(data)
+
+    assert spec.tables[0].columns[0].date_formats == ["dmy"]
+    assert "'julian'" in problems[0]
+
+
+def test_profile_pattern_names_are_read_as_date_formats() -> None:
+    from da_agent.ingestion.spec import parse_spec_lenient
+
+    formats = ["date_dmy", "datetime_iso", "date_text_vi"]
+    column = {"source": "Ngày", "name": "day", "type": "date", "date_formats": formats}
+    data = {"tables": [{"source": "don", "name": "orders", "columns": [column]}]}
+
+    spec, problems = parse_spec_lenient(data)
+
+    assert spec.tables[0].columns[0].date_formats == ["dmy", "vi_text"]
+    assert problems == []

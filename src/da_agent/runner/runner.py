@@ -5,6 +5,9 @@ cannot widen what a sandbox may do. Code travels on stdin and never becomes part
 """
 
 import json
+import os
+import shutil
+import stat
 import subprocess
 import threading
 import time
@@ -14,7 +17,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
+from da_agent.ingestion.build import BuildReport
+from da_agent.ingestion.report import IngestReport
+from da_agent.ingestion.spec import DatasetSpec
 
 # Containers carry this label, so leftovers can be found and removed.
 SANDBOX_LABEL = "da-agent.sandbox"
@@ -41,6 +48,41 @@ class PythonRun(BaseModel):
     timeout_seconds: int = Field(default=20, ge=1, le=60)
 
 
+class IngestRun(BaseModel):
+    """Parse one upload, mounted read-only at /input, into a fresh output directory at /out."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["ingest"] = "ingest"
+    upload_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+    timeout_seconds: int = Field(default=600, ge=1, le=1800)
+
+
+class BuildRun(BaseModel):
+    """Build clean tables from an ingest output, mounted read-only at /input, into /out."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["build"] = "build"
+    ingest_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+    spec: DatasetSpec
+    timeout_seconds: int = Field(default=600, ge=1, le=1800)
+
+
+class JobResult[ReportT: BaseModel](BaseModel):
+    status: RunStatus
+    exit_code: int | None
+    stderr: str
+    report: ReportT | None
+    # Set only when the run succeeded and the output passed every check.
+    output_dir: Path | None
+    duration_seconds: float
+
+
+IngestResult = JobResult[IngestReport]
+BuildResult = JobResult[BuildReport]
+
+
 class RunResult(BaseModel):
     status: RunStatus
     exit_code: int | None
@@ -63,6 +105,11 @@ class RunnerConfig:
     user: str = "65534:65534"
     max_output_bytes: int = 100_000
     docker: str = "docker"
+    uploads_root: Path | None = None
+    staging_root: Path | None = None
+    ingest_memory_mb: int = 2048
+    max_ingest_output_bytes: int = 5_000_000_000
+    max_report_bytes: int = 20_000_000
 
 
 @dataclass(frozen=True)
@@ -126,9 +173,23 @@ class Runner:
         self._execute = execute
         self._kill = kill or self._docker_kill
 
-    def build_command(self, request: PythonRun, name: str) -> list[str]:
-        dataset = self._dataset_path(request.dataset_id)
+    def build_command(
+        self, request: PythonRun | IngestRun | BuildRun, name: str, output_dir: Path | None = None
+    ) -> list[str]:
         c = self.config
+        if isinstance(request, (IngestRun, BuildRun)):
+            if output_dir is None:
+                raise ValueError("a job run needs an output directory")
+            source = self._job_input(request)
+            memory = c.ingest_memory_mb
+            mounts = [
+                f"--mount=type=bind,source={source},target=/input,readonly",
+                f"--mount=type=bind,source={output_dir},target=/out",
+            ]
+        else:
+            dataset = self._child(c.datasets_root, request.dataset_id, "dataset")
+            memory = c.memory_mb
+            mounts = [f"--mount=type=bind,source={dataset},target=/data,readonly"]
         return [
             c.docker,
             "run",
@@ -141,12 +202,12 @@ class Runner:
             "--cap-drop=ALL",
             "--security-opt=no-new-privileges",
             f"--user={c.user}",
-            f"--memory={c.memory_mb}m",
-            f"--memory-swap={c.memory_mb}m",
+            f"--memory={memory}m",
+            f"--memory-swap={memory}m",
             f"--cpus={c.cpus}",
             f"--pids-limit={c.pids_limit}",
             f"--tmpfs=/tmp:rw,noexec,nosuid,nodev,size={c.tmp_mb}m",
-            f"--mount=type=bind,source={dataset},target=/data,readonly",
+            *mounts,
             c.image,
         ]
 
@@ -182,16 +243,104 @@ class Runner:
             duration_seconds=_now() - started,
         )
 
-    def _dataset_path(self, dataset_id: str) -> Path:
-        root = self.config.datasets_root.resolve()
-        path = (root / dataset_id).resolve()
+    @staticmethod
+    def _child(root: Path | None, child_id: str, what: str) -> Path:
+        if root is None:
+            raise ValueError(f"no {what} root is configured")
+        resolved_root = root.resolve()
+        path = (resolved_root / child_id).resolve()
         # resolve() follows symlinks, so a link that points outside the root fails this check.
-        if path.parent != root or not path.is_dir():
-            raise ValueError(f"unknown dataset {dataset_id!r}")
+        if path.parent != resolved_root or not path.is_dir():
+            raise ValueError(f"unknown {what} {child_id!r}")
         return path
 
+    def _job_input(self, request: IngestRun | BuildRun) -> Path:
+        if isinstance(request, IngestRun):
+            return self._child(self.config.uploads_root, request.upload_id, "upload")
+        return self._child(self.config.staging_root, request.ingest_id, "ingest output")
+
+    def ingest(self, request: IngestRun) -> IngestResult:
+        """Run the raw ingestion stage in a sandbox. Output files are checked before use."""
+        return self._job(request, "report.json", IngestReport)
+
+    def build(self, request: BuildRun) -> BuildResult:
+        """Build clean tables from an ingest output in a sandbox."""
+        return self._job(request, "build_report.json", BuildReport)
+
+    def _job[ReportT: BaseModel](
+        self, request: IngestRun | BuildRun, report_name: str, model: type[ReportT]
+    ) -> JobResult[ReportT]:
+        self._job_input(request)
+        if self.config.staging_root is None:
+            raise ValueError("no staging root is configured")
+        staging = self.config.staging_root.resolve()
+        name = f"da-sbx-{uuid.uuid4().hex[:12]}"
+        output_dir = staging / name
+        output_dir.mkdir()
+        # The sandbox user is not the Runner's user, so it needs write access to this one directory.
+        output_dir.chmod(0o777)
+        command = self.build_command(request, name, output_dir)
+        payload = request.model_dump_json().encode()
+        started = _now()
+
+        def failure(status: RunStatus, exit_code: int | None, stderr: str) -> JobResult[ReportT]:
+            shutil.rmtree(output_dir, ignore_errors=True)
+            return JobResult[model](
+                status=status,
+                exit_code=exit_code,
+                stderr=stderr,
+                report=None,
+                output_dir=None,
+                duration_seconds=_now() - started,
+            )
+
+        try:
+            captured = self._execute(
+                command,
+                input=payload,
+                timeout=request.timeout_seconds + STARTUP_GRACE_SECONDS,
+                limit=self.config.max_output_bytes,
+            )
+        except subprocess.TimeoutExpired:
+            self._kill(name)
+            return failure("timeout", None, "")
+        stderr = captured.stderr[: self.config.max_output_bytes].decode("utf-8", errors="replace")
+        status = _status(captured.exit_code)
+        if status != "ok":
+            return failure(status, captured.exit_code, stderr)
+        try:
+            report = model.model_validate_json(self._read_report(output_dir, report_name))
+        except (OSError, ValueError, ValidationError) as error:
+            message = f"{stderr}\nrejected sandbox output: {type(error).__name__}: {error}"[-2000:]
+            return failure("error", captured.exit_code, message)
+        return JobResult[model](
+            status="ok",
+            exit_code=captured.exit_code,
+            stderr=stderr,
+            report=report,
+            output_dir=output_dir,
+            duration_seconds=_now() - started,
+        )
+
+    def _read_report(self, output_dir: Path, report_name: str) -> bytes:
+        total = 0
+        for entry in output_dir.rglob("*"):
+            mode = entry.lstat().st_mode
+            if stat.S_ISLNK(mode) or not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+                raise ValueError(f"unexpected file type at {entry.name}")
+            total += entry.lstat().st_size
+        if total > self.config.max_ingest_output_bytes:
+            raise ValueError(f"output is {total} bytes, over the limit")
+        # O_NOFOLLOW: a link that appeared after the scan makes the open fail, not follow it.
+        descriptor = os.open(output_dir / report_name, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(descriptor, "rb") as file:
+            data = file.read(self.config.max_report_bytes + 1)
+        if len(data) > self.config.max_report_bytes:
+            raise ValueError("report is over the size limit")
+        return data
+
     def _docker_kill(self, name: str) -> None:
-        # `name` is generated by run(), never taken from a request.
+        # `name` is generated by this class, never taken from a request.
         subprocess.run(  # noqa: S603
             [self.config.docker, "kill", name], capture_output=True, check=False, timeout=30
         )

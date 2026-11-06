@@ -3,27 +3,32 @@
 Loaded into every session, so keep it under 60 lines. Replace stale content instead of appending.
 
 **Last updated:** 2026-11-06
-**Phase:** Days 3–6, Data and tools ([plan §6](plan.md#6-roadmap)). Runner and sandbox done,
-uncommitted. File parsing runs in the sandbox ([ADR 0009](adr/0009-parse-uploads-in-sandbox.md)).
+**Phase:** Days 3–6, Data and tools ([plan §6](plan.md#6-roadmap)). `DatasetSpec` pipeline done,
+uncommitted.
 
 ## Next step
 
-1. Ingestion as a plain library, run in the sandbox through a new Runner job kind: safety checks,
-   raw read (csv, xlsx, SQLite), table detection, profile. Then `DatasetSpec`, DuckDB loader, and
-   `run_sql` through the Runner. Exit: 30/30 shops load with parse and quarantine reports.
-2. Then `bootstrap` baseline with gpt-oss-20b (ask first, about $0.18) and the Foundation learning note.
+1. Subtotal rows ("TỔNG THÁNG 2", blank-product total rows) sit inside sales tables of at least
+   biz_104, 107, 110, 130 and would double count sums. Proposed: a declarative `exclude_rows` rule
+   in the spec, a profile hint, and an `_excluded` table. Needs the user's OK to rerun proposals.
+2. Agent on the clean DuckDB files (`eval/reports/datasets-dev/<shop>/`), `run_sql` through the
+   Runner. Then the `bootstrap` baseline (ask first) and the Foundation learning note.
 
 ## Done
 
 - Dev environment, design docs, ADRs 0001–0009, README, LICENSE, project structure.
 - Scorer (`eval/scorer/`, rulebook §7 and §9), checked on the real answers: 3000/3000 when correct.
 - Splits (`eval/splits/splits.json`): 24 dev and 6 holdout shops; sets `bootstrap`, `smoke`, `regression`.
-- Minimal agent (`src/da_agent`): `LLMClient`, Groq and Gemini adapters, SQL guard, read-only SQLite
-  dataset, bounded tool loop, tracing. `eval/datamate` runs it and stays resumable.
-- Checked end to end with a scripted model on biz_123, with spans arriving in Phoenix.
-- Model: Groq `openai/gpt-oss-20b`, paid. `search_rules` halves the prompt (ADR 0008).
-- Runner (`src/da_agent/runner/`) and sandbox image (`sandbox/`): 11 escape tests pass on real
+- Minimal agent: `LLMClient`, adapters, SQL guard, SQLite dataset, bounded tool loop, tracing,
+  resumable `eval/datamate` runner. Model: Groq `gpt-oss-20b`; `search_rules` (ADR 0008).
+- Runner (`src/da_agent/runner/`) and sandbox image (`sandbox/`): escape tests pass on real
   containers (network, writes, env, other datasets, socket, caps, fork bomb, memory, timeout, output).
+- Raw ingestion (`src/da_agent/ingestion/`) runs in the sandbox as an `ingest` job: csv, xlsx,
+  SQLite to text tables in `raw.duckdb` with `_source`/`_row`, header detection, same-header sheets
+  merged, profiles with sensitive columns masked. All 24 dev shops load (1–46 s each).
+- `DatasetSpec` (`spec.py`, `propose.py`, `build.py`, `pipeline.py`): LLM proposes, sandbox builds
+  `dataset.duckdb` with `_quarantine`, parse-rate feedback. 24/24 dev shops ok, parse rates
+  99.9–100%, in `eval/reports/datasets-dev/` (gitignored).
 
 ## Decisions needed
 
@@ -32,12 +37,9 @@ uncommitted. File parsing runs in the sandbox ([ADR 0009](adr/0009-parse-uploads
 
 ## Not verified
 
-- Gemini has made no real call. Local Ollama (qwen3.5:2b, qwen3:4b on a 4 GB GPU) was too slow
-  and never answered; container `da-agent-ollama` is stopped.
+- Gemini has made no real call. Local Ollama on a 4 GB GPU was too slow (container stopped).
 - `deploy/compose.dev.yml` has not run, because this machine lacks the Compose plugin. Phoenix runs
   through `docker run` as container `da-agent-phoenix`.
-- Subagents are registered but unused. `permissionMode: plan` on `system-architect` is untested.
-- Most security controls in the threat model are still planned.
 
 ## Waiting on the user
 
@@ -47,7 +49,7 @@ uncommitted. File parsing runs in the sandbox ([ADR 0009](adr/0009-parse-uploads
 - **Before going public:** check the organizer's data rules, whether `cccd` and phone are fake, the
   licenses of skills in `.agents/`, and the `brainstorming` scripts.
 
-## Spend so far: about $0.06 (Groq gpt-oss-20b, 3 runs of 3 questions plus a cache probe).
+## Spend so far: about $0.25 (agent runs $0.06, spec proposals $0.19).
 
 ## Watch out
 

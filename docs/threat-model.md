@@ -43,7 +43,8 @@ Injection is assumed to succeed sometimes. Permissions, not prompts, must limit 
 | Runner compromised through its Docker socket | Only the Runner holds the socket. It accepts typed requests and builds container options itself, so callers cannot set mounts or flags | **Done:** request fields cannot change mounts or flags, dataset ids cannot name paths or follow symlinks out |
 | SQL reads files, writes, or attaches databases | sqlglot allows only `SELECT`. DuckDB opens read-only with `enable_external_access` off and a timeout | Tests attempt `COPY`, `read_csv`, `ATTACH` |
 | Prompt injection from cells or descriptions | File content is always framed as data. Tools have least privilege | Injection suite through cells and descriptions |
-| Malicious spreadsheet: zip bomb, external entities, huge sheets | Size, type, and row limits before parsing. Macros are ignored | Malformed file tests. See the open item below |
+| Malicious spreadsheet: zip bomb, external entities, huge sheets | Parsing runs in the sandbox. Size, compression ratio, row, column, and cell limits. `defusedxml` guards openpyxl. Macros are ignored | **Done:** zip bomb, oversized, broken, and unreadable file tests (`tests/unit/test_ingestion_raw.py`) |
+| Sandbox output tricks the Runner: symlinks in `/out`, huge output | The Runner refuses links and special files, caps the output size, and opens the report with `O_NOFOLLOW` | **Done:** `tests/unit/test_runner.py` |
 | Path traversal through upload names | Generated storage names. Original names are kept only as metadata | Unit tests |
 | Cross-workspace access | Every query carries `workspace_id`. One DuckDB file per dataset. The sandbox mounts one dataset | Isolation test across two workspaces |
 | Stolen or guessed API key | Keys stored hashed, rate limits, audit log | Unit and API tests |

@@ -143,3 +143,155 @@ def test_bounded_execute_keeps_only_the_limit_and_drains_the_rest() -> None:
 
     assert (captured.exit_code, len(captured.stdout), captured.stderr) == (0, 100, b"e" * 10)
     assert captured.truncated
+
+
+# Ingest jobs: the upload is mounted read-only, and a fresh output directory is the only writable
+# mount. The Runner treats everything in that directory as untrusted.
+
+from da_agent.runner.runner import IngestRun  # noqa: E402
+
+
+@pytest.fixture
+def ingest_config(tmp_path: Path) -> RunnerConfig:
+    (tmp_path / "uploads" / "up_1").mkdir(parents=True)
+    (tmp_path / "staging").mkdir()
+    (tmp_path / "datasets").mkdir()
+    return RunnerConfig(
+        image="da-agent-sandbox:test",
+        datasets_root=tmp_path / "datasets",
+        uploads_root=tmp_path / "uploads",
+        staging_root=tmp_path / "staging",
+    )
+
+
+def output_mount(command: list[str]) -> Path:
+    mount = next(arg for arg in command if "target=/out" in arg)
+    return Path(mount.split("source=", 1)[1].split(",", 1)[0])
+
+
+def test_ingest_mounts_the_upload_read_only_and_a_fresh_output(ingest_config: RunnerConfig) -> None:
+    out = ingest_config.staging_root / "job"
+    out.mkdir()
+    command = Runner(ingest_config).build_command(IngestRun(upload_id="up_1"), "n1", out)
+
+    upload = (ingest_config.uploads_root / "up_1").resolve()
+    mounts = [arg for arg in command if arg.startswith("--mount=")]
+    assert mounts == [
+        f"--mount=type=bind,source={upload},target=/input,readonly",
+        f"--mount=type=bind,source={out},target=/out",
+    ]
+    assert f"--memory={ingest_config.ingest_memory_mb}m" in command
+    assert set(command) >= ROOT_FLAGS
+
+
+def test_unknown_uploads_are_refused(ingest_config: RunnerConfig) -> None:
+    with pytest.raises(ValueError, match="unknown upload"):
+        Runner(ingest_config).ingest(IngestRun(upload_id="up_2"))
+
+
+def fake_ingest(write) -> object:
+    def execute(command: list[str], **kwargs) -> Captured:
+        write(output_mount(command))
+        return Captured(0, b"", b"", truncated=False)
+
+    return execute
+
+
+def test_ingest_returns_the_report_and_the_output_directory(ingest_config: RunnerConfig) -> None:
+    def write(out: Path) -> None:
+        (out / "report.json").write_text('{"tables": [], "warnings": ["w"]}', encoding="utf-8")
+        (out / "raw.duckdb").write_bytes(b"db")
+
+    result = Runner(ingest_config, execute=fake_ingest(write)).ingest(IngestRun(upload_id="up_1"))
+
+    assert result.status == "ok"
+    assert result.report is not None and result.report.warnings == ["w"]
+    assert result.output_dir is not None and (result.output_dir / "raw.duckdb").exists()
+    assert result.output_dir.parent == ingest_config.staging_root.resolve()
+
+
+def test_a_symlink_in_the_output_is_refused(ingest_config: RunnerConfig, tmp_path: Path) -> None:
+    secret = tmp_path / "host_secret.txt"
+    secret.write_text('{"warnings": ["HOST-SECRET"]}', encoding="utf-8")
+
+    def write(out: Path) -> None:
+        (out / "report.json").symlink_to(secret)
+
+    result = Runner(ingest_config, execute=fake_ingest(write)).ingest(IngestRun(upload_id="up_1"))
+
+    assert result.status == "error"
+    assert result.report is None
+    assert "HOST-SECRET" not in result.model_dump_json()
+
+
+def test_an_oversized_output_is_refused_and_removed(ingest_config: RunnerConfig) -> None:
+    small = RunnerConfig(**{**ingest_config.__dict__, "max_ingest_output_bytes": 100})
+
+    def write(out: Path) -> None:
+        (out / "report.json").write_text("{}", encoding="utf-8")
+        (out / "raw.duckdb").write_bytes(b"x" * 1000)
+
+    result = Runner(small, execute=fake_ingest(write)).ingest(IngestRun(upload_id="up_1"))
+
+    assert result.status == "error"
+    assert result.output_dir is None
+    assert list(small.staging_root.iterdir()) == []
+
+
+def test_a_missing_or_invalid_report_is_an_error(ingest_config: RunnerConfig) -> None:
+    for content in (None, "not json", '{"tables": "wrong"}'):
+
+        def write(out: Path, content: str | None = content) -> None:
+            if content is not None:
+                (out / "report.json").write_text(content, encoding="utf-8")
+
+        runner = Runner(ingest_config, execute=fake_ingest(write))
+        result = runner.ingest(IngestRun(upload_id="up_1"))
+
+        assert result.status == "error", content
+        assert result.report is None
+
+
+# Build jobs: the ingest output is mounted read-only, and a fresh output directory receives the
+# clean dataset.
+
+from da_agent.ingestion.spec import DatasetSpec  # noqa: E402
+from da_agent.runner.runner import BuildRun  # noqa: E402
+
+
+def test_build_mounts_the_ingest_output_read_only(ingest_config: RunnerConfig) -> None:
+    (ingest_config.staging_root / "ing_1").mkdir()
+    out = ingest_config.staging_root / "job"
+    out.mkdir()
+    request = BuildRun(ingest_id="ing_1", spec=DatasetSpec(tables=[]))
+
+    command = Runner(ingest_config).build_command(request, "n1", out)
+
+    source = (ingest_config.staging_root / "ing_1").resolve()
+    mounts = [arg for arg in command if arg.startswith("--mount=")]
+    assert mounts == [
+        f"--mount=type=bind,source={source},target=/input,readonly",
+        f"--mount=type=bind,source={out},target=/out",
+    ]
+
+
+def test_build_returns_the_build_report(ingest_config: RunnerConfig) -> None:
+    (ingest_config.staging_root / "ing_1").mkdir()
+
+    def write(out: Path) -> None:
+        (out / "build_report.json").write_text(
+            '{"tables": [{"name": "t", "source": "t", "rows": 3}]}', encoding="utf-8"
+        )
+        (out / "dataset.duckdb").write_bytes(b"db")
+
+    runner = Runner(ingest_config, execute=fake_ingest(write))
+    result = runner.build(BuildRun(ingest_id="ing_1", spec=DatasetSpec(tables=[])))
+
+    assert result.status == "ok"
+    assert result.report is not None and result.report.tables[0].rows == 3
+    assert result.output_dir is not None and (result.output_dir / "dataset.duckdb").exists()
+
+
+def test_build_refuses_unknown_ingest_outputs(ingest_config: RunnerConfig) -> None:
+    with pytest.raises(ValueError, match="unknown ingest output"):
+        Runner(ingest_config).build(BuildRun(ingest_id="ing_9", spec=DatasetSpec(tables=[])))
