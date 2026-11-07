@@ -11,7 +11,7 @@ def lit(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-SHORTHAND = r"^(\d+)(tr|triệu|k)(\d{1,3})$"
+SHORTHAND = r"^(-?)(\d+)(tr|triệu|k)(\d{1,3})$"
 
 
 def number_sql(text: str) -> str:
@@ -20,7 +20,7 @@ def number_sql(text: str) -> str:
     Without a suffix, groups of three digits mean thousands whatever the separator, so 22,000 can
     never become 22, and one separator without three digits after it is a decimal point: 2,5.
     Before a suffix, one separator is always a decimal point: 151,036tr is 151.036 million.
-    Shorthand such as 1tr270 (1,270,000) and 1k5 (1,500) is read too.
+    Shorthand such as 1tr270 (1,270,000), 1k5 (1,500), and -2tr250 (a refund) is read too.
     """
     compact = f"regexp_replace(lower(trim({text})), '\\s+', '', 'g')"
     bare = f"regexp_replace({compact}, '(vnđ|vnd|đồng|đ)$', '')"
@@ -40,11 +40,12 @@ def number_sql(text: str) -> str:
         f"WHEN regexp_matches({digits}, '^-?\\d+[.,]\\d+$') THEN replace({digits}, ',', '.') "
         f"ELSE {digits} END"
     )
-    major = f"TRY_CAST(regexp_extract({bare}, {lit(SHORTHAND)}, 1) AS DOUBLE)"
-    unit = f"regexp_extract({bare}, {lit(SHORTHAND)}, 2)"
-    minor = f"TRY_CAST(rpad(regexp_extract({bare}, {lit(SHORTHAND)}, 3), 3, '0') AS DOUBLE)"
+    sign = f"CASE WHEN regexp_extract({bare}, {lit(SHORTHAND)}, 1) = '-' THEN -1 ELSE 1 END"
+    major = f"TRY_CAST(regexp_extract({bare}, {lit(SHORTHAND)}, 2) AS DOUBLE)"
+    unit = f"regexp_extract({bare}, {lit(SHORTHAND)}, 3)"
+    minor = f"TRY_CAST(rpad(regexp_extract({bare}, {lit(SHORTHAND)}, 4), 3, '0') AS DOUBLE)"
     shorthand = (
-        f"CASE WHEN {unit} = 'k' THEN {major} * 1000 + {minor} "
+        f"({sign}) * CASE WHEN {unit} = 'k' THEN {major} * 1000 + {minor} "
         f"ELSE {major} * 1000000 + {minor} * 1000 END"
     )
     return (

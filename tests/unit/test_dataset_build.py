@@ -258,6 +258,23 @@ def test_vietnamese_shorthand_amounts(tmp_path: Path, out: Path) -> None:
     ]
 
 
+def test_negative_shorthand_amounts(tmp_path: Path, out: Path) -> None:
+    """Refunds and returns are written with a minus sign, as in -2tr250."""
+    values = ["-2tr250", "-1tr04", "-1k5", "-15tr"]
+    raw, report = raw_upload(tmp_path, {"t.csv": "v\n" + "\n".join(values)})
+
+    build(
+        raw / RAW_DATABASE, one_table(ColumnSpec(source="v", name="v", type="money")), report, out
+    )
+
+    assert [r[0] for r in rows(out, "SELECT v FROM t ORDER BY _row")] == [
+        -2_250_000,
+        -1_040_000,
+        -1500,
+        -15_000_000,
+    ]
+
+
 def test_day_month_dates_take_the_year_from_the_sheet_or_file(tmp_path: Path, out: Path) -> None:
     upload = tmp_path / "upload"
     upload.mkdir()
