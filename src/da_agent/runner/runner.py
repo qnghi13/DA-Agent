@@ -153,6 +153,11 @@ def _drain(stream: IO[bytes], limit: int, kept: bytearray, overflow: list[bool])
             overflow[0] = True
 
 
+def _not_started(error: OSError) -> str:
+    """Docker missing or not running. Says what failed without paths or host details."""
+    return f"the sandbox could not start ({type(error).__name__}); try again later"
+
+
 def bounded_execute(command: list[str], *, input: bytes, timeout: float, limit: int) -> Captured:
     """Run a command with bounded memory for its output. Raises subprocess.TimeoutExpired."""
     # The Runner builds `command` from its own config. Request data only travels on stdin.
@@ -246,6 +251,10 @@ class Runner:
         if run.status == "killed":
             message = "query stopped: over the memory limit; aggregate or filter more"
             return SqlResult(status="killed", error=message, duration_seconds=run.duration_seconds)
+        if run.status == "error" and run.exit_code is None:
+            return SqlResult(
+                status="error", error=run.stderr, duration_seconds=run.duration_seconds
+            )
         try:
             payload = json.loads(run.stdout) if run.status == "ok" else None
         except json.JSONDecodeError:
@@ -297,6 +306,15 @@ class Runner:
                 exit_code=None,
                 stdout="",
                 stderr="",
+                truncated=False,
+                duration_seconds=_now() - started,
+            )
+        except OSError as error:
+            return RunResult(
+                status="error",
+                exit_code=None,
+                stdout="",
+                stderr=_not_started(error),
                 truncated=False,
                 duration_seconds=_now() - started,
             )
@@ -370,6 +388,8 @@ class Runner:
         except subprocess.TimeoutExpired:
             self._kill(name)
             return failure("timeout", None, "")
+        except OSError as error:
+            return failure("error", None, _not_started(error))
         stderr = captured.stderr[: self.config.max_output_bytes].decode("utf-8", errors="replace")
         status = _status(captured.exit_code)
         if status != "ok":

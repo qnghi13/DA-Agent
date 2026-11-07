@@ -3,6 +3,8 @@
 import json
 from typing import Any, Protocol
 
+from opentelemetry import trace
+
 from da_agent.agent.answer import ANSWER_KINDS, ToolStep
 from da_agent.agent.rules import RuleIndex
 from da_agent.llm.types import ToolCall, ToolSpec
@@ -141,7 +143,22 @@ def _error(tool: str, message: str, sql: str | None = None) -> tuple[str, ToolSt
 def execute_tool(
     call: ToolCall, dataset: Dataset, rules: RuleIndex | None = None
 ) -> tuple[str, ToolStep]:
-    """Run a read-only tool. Returns the text for the model and a record of the step."""
+    """Run a read-only tool. Returns the text for the model and a record of the step.
+
+    A crash in a tool, such as a lost sandbox, becomes an error result the model can act on
+    within its turn limit. The model sees only the error type: the message may hold host paths.
+    The trace keeps the full exception.
+    """
+    try:
+        return _execute(call, dataset, rules)
+    except Exception as error:  # Any crash becomes a tool error, by design.
+        trace.get_current_span().record_exception(error)
+        message = f"the tool failed unexpectedly ({type(error).__name__}); try again once"
+        sql = call.arguments.get("sql") if call.name == "run_sql" else None
+        return _error(call.name, message, sql=sql if isinstance(sql, str) else None)
+
+
+def _execute(call: ToolCall, dataset: Dataset, rules: RuleIndex | None) -> tuple[str, ToolStep]:
     if call.arguments_error:
         return _error(call.name, f"could not read the tool arguments: {call.arguments_error}")
     if call.name == "describe_dataset":

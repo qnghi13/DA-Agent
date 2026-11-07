@@ -14,13 +14,15 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from da_agent.agent.graph import run_graph
 from da_agent.agent.loop_types import AgentLimits, Document
-from da_agent.llm.client import CostLedger, LLMClient, Route, RunBudget
+from da_agent.llm.client import CostLedger, LLMClient, ModelPrice, Route, RunBudget
 from da_agent.llm.types import (
     InvalidToolCallError,
     LLMRequest,
     LLMResponse,
     PermanentLLMError,
+    RateLimitedError,
     ToolCall,
+    TransientLLMError,
     Usage,
 )
 from da_agent.storage.sqlite_dataset import SqliteDataset
@@ -106,10 +108,13 @@ def run(
     checkpointer: InMemorySaver | None = None,
     interactive: bool = False,
     reply: str | None = None,
+    client: LLMClient | None = None,
     **limits: Any,
 ):
     adapter = adapter or ScriptedAdapter(script)
-    client = LLMClient([Route(adapter, "m")], CostLedger(), sleep=lambda _: None, max_retries=0)
+    client = client or LLMClient(
+        [Route(adapter, "m")], CostLedger(), sleep=lambda _: None, max_retries=0
+    )
     result = run_graph(
         "Total revenue?",
         as_of="2026-06-28",
@@ -533,3 +538,97 @@ def test_an_answer_that_leaves_out_unreadable_values_is_withheld(tmp_path: Path)
     assert (result.stop_reason, result.answer) == ("unreadable_values", None)
     assert "orders.total" in (result.error or "")
     assert len(adapter.requests) == 3
+
+
+class FlakyDataset:
+    """A dataset whose backend crashes on the first queries, as a lost sandbox would."""
+
+    def __init__(self, inner: SqliteDataset, crashes: int) -> None:
+        self.inner, self.dialect, self.crashes = inner, inner.dialect, crashes
+
+    def describe(self) -> list:
+        return self.inner.describe()
+
+    def query(self, sql: str):
+        if self.crashes:
+            self.crashes -= 1
+            raise RuntimeError("backend exploded at /srv/secret/path")
+        return self.inner.query(sql)
+
+
+def test_a_crashing_tool_becomes_an_error_the_model_can_act_on(dataset: SqliteDataset) -> None:
+    flaky = FlakyDataset(dataset, crashes=1)
+    script = [plan(), sql(), sql(), submit("number", 350)]
+
+    result, adapter = run(flaky, script)  # type: ignore[arg-type]
+
+    assert (result.stop_reason, result.answer.value) == ("answered", 350)
+    assert len([s for s in result.steps if s.tool == "run_sql" and not s.ok]) == 1
+    seen = [m.content or "" for m in adapter.requests[2].messages if m.role == "tool"]
+    assert any("RuntimeError" in text for text in seen)
+    assert not any("/srv/secret" in text for text in seen)
+
+
+def test_a_crash_in_a_verification_probe_does_not_stop_the_answer(tmp_path: Path) -> None:
+    path = tmp_path / "lines.sqlite"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        "CREATE TABLE orders (id INTEGER, total INTEGER);"
+        "INSERT INTO orders VALUES (1, 100), (2, 250);"
+        "CREATE TABLE lines (order_id INTEGER, amount INTEGER);"
+        "INSERT INTO lines VALUES (1, 40), (2, 250);"
+    )
+    connection.commit()
+    connection.close()
+
+    class ProbeCrashes(FlakyDataset):
+        def query(self, sql: str):
+            if "rowid" in sql:
+                raise RuntimeError("probe backend exploded")
+            return self.inner.query(sql)
+
+    joined = "SELECT sum(l.amount) AS t FROM orders o JOIN lines l ON o.id = l.order_id"
+    script = [plan(), sql(joined), submit("number", 290)]
+
+    result, _ = run(ProbeCrashes(SqliteDataset(path), 0), script)  # type: ignore[arg-type]
+
+    assert (result.stop_reason, result.answer.value) == ("answered", 290)
+
+
+# Provider failures through the graph
+
+
+def test_a_rate_limited_turn_waits_and_the_run_finishes(dataset: SqliteDataset) -> None:
+    adapter = ScriptedAdapter(
+        [plan(), RateLimitedError("429", retry_after=7), sql(), submit("number", 350)]
+    )
+    waits: list[float] = []
+    client = LLMClient([Route(adapter, "m")], CostLedger(), sleep=waits.append, max_retries=2)
+
+    result, _ = run(dataset, [], client=client)
+
+    assert result.stop_reason == "answered"
+    assert waits == [7]
+
+
+def test_a_provider_that_keeps_timing_out_falls_back_to_the_next(dataset: SqliteDataset) -> None:
+    down = ScriptedAdapter([TransientLLMError("timed out")] * 20)
+    backup = ScriptedAdapter([plan(), sql(), submit("number", 350)])
+    routes = [Route(down, "primary"), Route(backup, "backup")]
+    client = LLMClient(routes, CostLedger(), sleep=lambda _: None, max_retries=1)
+
+    result, _ = run(dataset, [], client=client)
+
+    assert (result.stop_reason, result.answer.value) == ("answered", 350)
+    assert len(backup.requests) == 3
+
+
+def test_the_money_budget_stops_the_run_cleanly(dataset: SqliteDataset) -> None:
+    adapter = ScriptedAdapter([plan()] + [sql()] * 5)
+    price = ModelPrice(input_per_million=1000.0, output_per_million=1000.0)
+    client = LLMClient([Route(adapter, "m", price)], CostLedger(), sleep=lambda _: None)
+
+    result, _ = run(dataset, [], client=client, budget=RunBudget(max_cost_usd=0.04))
+
+    assert (result.stop_reason, result.answer) == ("budget_exceeded", None)
+    assert len(adapter.requests) < 6

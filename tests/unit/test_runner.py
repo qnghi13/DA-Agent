@@ -350,3 +350,25 @@ def test_sandbox_failures_become_messages_the_model_can_act_on(
     assert result.status == status
     assert result.error is not None and words in result.error
     assert "Traceback" not in result.error
+
+
+def broken_docker(command: list[str], **kwargs) -> Captured:
+    raise FileNotFoundError(2, "No such file or directory", "docker")
+
+
+def test_a_sandbox_that_cannot_start_is_a_query_error_not_a_crash(config: RunnerConfig) -> None:
+    runner = Runner(config, execute=broken_docker)
+
+    result = runner.query(SqlRun(dataset_id="shop_1", sql="SELECT 1"))
+
+    assert result.status == "error"
+    assert result.error is not None and "could not start" in result.error
+
+
+def test_a_job_whose_sandbox_cannot_start_fails_cleanly(ingest_config: RunnerConfig) -> None:
+    result = Runner(ingest_config, execute=broken_docker).ingest(IngestRun(upload_id="up_1"))
+
+    assert result.status == "error"
+    assert "could not start" in result.stderr
+    assert result.output_dir is None
+    assert list(ingest_config.staging_root.iterdir()) == []

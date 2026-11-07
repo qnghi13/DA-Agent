@@ -18,6 +18,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 import sqlglot
+from opentelemetry import trace
 from sqlglot import exp
 
 from da_agent.agent.tools import Dataset
@@ -93,6 +94,9 @@ def _first_row(dataset: Dataset, sql: str) -> list | None:
     try:
         result = dataset.query(sql)
     except QueryError:
+        return None
+    except Exception as error:  # A crashed probe must not stop a run.
+        trace.get_current_span().record_exception(error)
         return None
     return result.rows[0] if result.rows else None
 

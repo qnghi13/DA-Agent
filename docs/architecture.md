@@ -204,7 +204,8 @@ Reports are standalone HTML, and every number links to the query that produced i
 |---|---|
 | Worker killed mid-run | Another worker resumes from the last checkpoint and does not repeat finished steps |
 | LLM 429 or timeout | Retry with backoff, then fall back to another provider, then fail the run cleanly |
-| Tool or sandbox crash | Structured tool error returned to the model, within the iteration limit |
+| Tool or sandbox crash | Structured tool error returned to the model, within the iteration limit. The model sees the error type only; the trace keeps the exception |
+| Sandbox cannot start (Docker down) | The Runner returns an error result instead of raising; verification probes that crash are skipped |
 | Budget exceeded | Stop cleanly with partial work and a clear status |
 | Verification keeps failing | Abstain after 2 repair attempts instead of returning an unverified answer |
 | Answer reads values the build could not parse | Withhold it, naming the column and the row count |
