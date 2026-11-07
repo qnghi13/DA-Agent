@@ -478,3 +478,24 @@ def test_an_answer_over_a_period_without_data_is_repaired_into_unanswerable(
 
     assert (result.stop_reason, result.answer.kind) == ("answered", "unanswerable")
     assert any("2026-06-28" in t for t in user_texts(adapter.requests[-1]))
+
+
+def test_a_sum_that_a_join_inflates_is_repaired(tmp_path: Path) -> None:
+    path = tmp_path / "lines.sqlite"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        "CREATE TABLE orders (id INTEGER, total INTEGER);"
+        "INSERT INTO orders VALUES (1, 100), (2, 250);"
+        "CREATE TABLE lines (order_id INTEGER, amount INTEGER);"
+        "INSERT INTO lines VALUES (1, 40), (1, 60), (2, 250);"
+    )
+    connection.commit()
+    connection.close()
+    inflated = "SELECT sum(o.total) AS t FROM orders o JOIN lines l ON o.id = l.order_id"
+    script = [plan(), sql(inflated), submit("number", 450), sql(), submit("number", 350)]
+
+    result, adapter = run(SqliteDataset(path), script)
+
+    assert (result.stop_reason, result.answer.value) == ("answered", 350)
+    repair = user_texts(adapter.requests[3])[-1]
+    assert "orders" in repair and "3" in repair

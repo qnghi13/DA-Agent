@@ -256,18 +256,23 @@ def _query_results(messages: list[Message]) -> list[tuple[str, list[float], list
     return found
 
 
-def _period_problems(
-    answer: AgentAnswer, messages: list[Message], ranges: DateRanges, dialect: str
-) -> list[str]:
+def evidence_queries(answer: AgentAnswer, messages: list[Message]) -> list[str]:
+    """The queries behind an answer: those whose results hold its numbers, or the last successful
+    query when the answer has no numbers. Probes the model ran on the way are left out."""
     results = _query_results(messages)
     if not results:
         return []
     values = answer_numbers(answer)
+    if not values:
+        return [results[-1][0]]
     percent = answer.kind == "percent"
-    evidence = [
-        sql for sql, numbers, _ in results if any(_traced(v, numbers, percent) for v in values)
-    ] if values else [results[-1][0]]  # fmt: skip
-    for sql in evidence:
+    return [sql for sql, numbers, _ in results if any(_traced(v, numbers, percent) for v in values)]
+
+
+def _period_problems(
+    answer: AgentAnswer, messages: list[Message], ranges: DateRanges, dialect: str
+) -> list[str]:
+    for sql in evidence_queries(answer, messages):
         for period in query_periods(sql, dialect):
             known = ranges.get(period.column)
             if known and not _overlaps(period, known):

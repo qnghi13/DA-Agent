@@ -33,6 +33,7 @@ from da_agent.agent.answer import (
     ToolStep,
     parse_answer,
 )
+from da_agent.agent.fanout import fanout_problems
 from da_agent.agent.loop_types import AgentLimits, Document
 from da_agent.agent.planning import (
     PLAN_SPEC,
@@ -51,7 +52,7 @@ from da_agent.agent.prompts import (
 )
 from da_agent.agent.rules import RuleIndex
 from da_agent.agent.tools import SUBMIT_ANSWER, Dataset, describe_tables, execute_tool, tool_specs
-from da_agent.agent.verify import DateRanges, check_answer, date_ranges
+from da_agent.agent.verify import DateRanges, check_answer, date_ranges, evidence_queries
 from da_agent.llm.client import LLMClient
 from da_agent.llm.types import (
     BudgetExceededError,
@@ -263,9 +264,13 @@ def verify_node(state: AgentState, runtime: Runtime[AgentContext]) -> dict[str, 
     answer = AgentAnswer(**(state.get("proposed") or {}))
     messages = [Message.model_validate(m) for m in state.get("messages", [])]
     queries_ok = sum(1 for s in state.get("steps", []) if s["tool"] == "run_sql" and s["ok"])
-    problems = check_answer(
-        answer, messages, queries_ok, runtime.context.ranges, runtime.context.dialect
-    )
+    context = runtime.context
+    problems = check_answer(answer, messages, queries_ok, context.ranges, context.dialect)
+    if not problems and answer.kind != "unanswerable":
+        # Runs read-only probes in the sandbox, so it comes after the free checks.
+        evidence = evidence_queries(answer, messages)
+        problems = fanout_problems(evidence, context.dataset, context.dialect)
+    trace.get_current_span().set_attribute("da_agent.verify.problems", len(problems))
     if not problems:
         return {"verified": True}
     repairs = state.get("repairs", 0)

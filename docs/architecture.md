@@ -166,10 +166,14 @@ Mostly code, not LLM self-assessment ([ADR 0007](adr/0007-code-first-verificatio
 - The queries behind the answer filter dates to a period the data covers. Periods are read from
   the SQL with sqlglot, and the build records each date column's range, which `describe_dataset`
   also shows. A period entirely outside the data means no rows, not 0.
+- Joins do not repeat the rows an answer aggregates. For each SELECT that sums, averages, or
+  counts across a join, one read-only probe with the same FROM, JOIN, and WHERE compares how
+  often each table's rows appear with how many there are (`count(rowid)` against
+  `count(DISTINCT rowid)`). An aggregate fails only when every table it reads repeats, so a
+  lookup price repeated per line passes. A probe that errors is skipped.
 
 Planned for the reliability phase:
 
-- Joins do not multiply rows.
 - Parse rates of the columns used are acceptable.
 - Important answers are recomputed a second way.
 
