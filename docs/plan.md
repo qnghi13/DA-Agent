@@ -69,7 +69,9 @@ Moved to [architecture.md](architecture.md). Security controls are in
    DataMate data.
 2. **Day 2:** run `smoke` on biz_123 to see whether free models handle tool calls and SQL. Free-tier
    limits came from secondary sources, so check them directly.
-3. **Days 7–11, when `regression` is needed:** add $5–10 of Haiku 5.5. Tell the user first.
+3. **Days 7–11:** stay on Groq `gpt-oss-20b` (2026-11-07, user: no budget for a paid model; the
+   project values building over model tuning). An `openrouter` route with a pinned provider is
+   ready for DeepSeek V4.1 Flash, unverified until credits exist.
 4. **Optional at the end:** rent a GPU, run vLLM, and compare with the API on the same eval set.
 
 ## 5. Repo layout

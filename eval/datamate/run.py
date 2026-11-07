@@ -5,6 +5,8 @@ uv run --env-file .env python -m eval.datamate.run --data-dir train --set bootst
     --datasets-dir eval/reports/datasets-dev
 
 With --datasets-dir, every shop is a prepared clean dataset and SQL runs in the sandbox (ADR 0011).
+--agent graph runs the LangGraph workflow (ADR 0013); --checkpoint-url keeps its checkpoints in
+Postgres, so a killed run continues each unfinished question where it stopped.
 
 The run never reads answers.jsonl. Scoring happens afterwards in a separate scorer process.
 """
@@ -17,10 +19,15 @@ import sys
 import time
 from collections import Counter
 from collections.abc import Callable
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
+from langgraph.checkpoint.base import BaseCheckpointSaver
+
+from da_agent.agent.checkpoints import postgres_checkpointer
+from da_agent.agent.graph import run_graph
 from da_agent.agent.loop import AgentLimits, run_agent
 from da_agent.llm.client import CostLedger, LLMClient, RunBudget
 from da_agent.llm.factory import build_routes
@@ -47,6 +54,12 @@ class RunConfig:
     max_total_tokens: int | None = None
     delay_seconds: float = 0.0
     max_consecutive_failures: int = 3
+    agent: Literal["loop", "graph"] = "loop"
+
+
+def thread_id(output_dir: Path, question_id: str) -> str:
+    """Saved graph runs are per eval run, so a new run never reads an old run's answer."""
+    return f"{output_dir.resolve()}::{question_id}"
 
 
 def select_questions(
@@ -111,10 +124,13 @@ def run_questions(
     config: RunConfig,
     sleep: Callable[[float], None] = time.sleep,
     open_shop_fn: Callable[[str], ShopContext] | None = None,
+    checkpointer: BaseCheckpointSaver | None = None,
 ) -> dict[str, Any]:
     """Run questions in order, saving after each one so that a later run can resume.
 
-    open_shop_fn opens a shop by id. By default it opens the shop's pos.sqlite in this process."""
+    open_shop_fn opens a shop by id. By default it opens the shop's pos.sqlite in this process.
+    With the graph agent and a checkpointer, a question cut off by a killed run continues where it
+    stopped."""
     opener = open_shop_fn or (lambda shop_id: open_shop(data_dir, shop_id))
     config.output_dir.mkdir(parents=True, exist_ok=True)
     submission_path = config.output_dir / "submission.jsonl"
@@ -150,15 +166,28 @@ def run_questions(
             break
 
         started = time.monotonic()
-        result = run_agent(
-            question["question"],
-            as_of=question["as_of_date"],
-            dataset=shop.dataset,
-            documents=shop.documents,
-            llm=llm,
-            run_id=id_,
-            limits=limits,
-        )
+        if config.agent == "graph":
+            result = run_graph(
+                question["question"],
+                as_of=question["as_of_date"],
+                dataset=shop.dataset,
+                documents=shop.documents,
+                llm=llm,
+                run_id=id_,
+                limits=limits,
+                checkpointer=checkpointer,
+                thread_id=thread_id(config.output_dir, id_),
+            )
+        else:
+            result = run_agent(
+                question["question"],
+                as_of=question["as_of_date"],
+                dataset=shop.dataset,
+                documents=shop.documents,
+                llm=llm,
+                run_id=id_,
+                limits=limits,
+            )
         latency = time.monotonic() - started
 
         # A provider failure says nothing about the question, so keep it open for a later run.
@@ -262,6 +291,10 @@ def main() -> int:
         help="prepared datasets, queried in the sandbox; without it, pos.sqlite runs in process",
     )
     parser.add_argument("--image", default="da-agent-sandbox:dev")
+    parser.add_argument("--agent", choices=["loop", "graph"], default="loop")
+    parser.add_argument(
+        "--checkpoint-url", help="Postgres URL; graph runs then survive a killed eval process"
+    )
     args = parser.parse_args()
 
     provider = None
@@ -281,6 +314,7 @@ def main() -> int:
             max_tokens_per_question=args.max_tokens_per_question,
             max_total_tokens=args.max_total_tokens,
             delay_seconds=args.delay,
+            agent=args.agent,
         )
         opener = None
         if args.datasets_dir:
@@ -290,11 +324,15 @@ def main() -> int:
             def opener(shop_id: str) -> ShopContext:
                 return open_prepared_shop(args.data_dir, shop_id, datasets, runner)
 
-        report: dict[str, Any] = {
-            "metrics": run_questions(
-                questions, args.data_dir, llm, ledger, config, open_shop_fn=opener
-            )
-        }
+        with ExitStack() as stack:
+            saver = None
+            if args.checkpoint_url:
+                saver = stack.enter_context(postgres_checkpointer(args.checkpoint_url))
+            metrics = run_questions(
+                questions, args.data_dir, llm, ledger, config, open_shop_fn=opener,
+                checkpointer=saver,
+            )  # fmt: skip
+        report: dict[str, Any] = {"metrics": metrics}
         if not args.no_score:
             report["score"] = score_run(
                 args.data_dir / "answers.jsonl", args.output_dir, args.splits, args.question_set

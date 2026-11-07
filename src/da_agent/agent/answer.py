@@ -39,6 +39,8 @@ class AgentResult:
     steps: list[ToolStep] = field(default_factory=list)
     iterations: int = 0
     error: str | None = None
+    # Set when an interactive run paused to ask the user, with stop_reason "needs_clarification".
+    question_for_user: str | None = None
 
 
 def _is_number(value: Any) -> bool:

@@ -1,4 +1,4 @@
-"""Build LLM routes from a spec such as 'groq:model-a,gemini:model-b'.
+"""Build LLM routes from a spec such as 'groq:model-a,openrouter:org/model-b'.
 
 A paid model must have an entry in PRICES, or the cost ledger and money budgets would treat it as
 free. Models without an entry, such as local Ollama models, cost zero.
@@ -16,12 +16,27 @@ from da_agent.llm.types import LLMAdapter
 # A small local GPU can take minutes on a long prompt, especially when loading the model.
 LOCAL_TIMEOUT_SECONDS = 900.0
 
-# USD per million tokens, from console.groq.com/docs/model/openai/gpt-oss-20b on 2026-11-06.
+# USD per million tokens. Groq from console.groq.com/docs/model/openai/gpt-oss-20b on 2026-11-06.
+# OpenRouter from its endpoints API on 2026-11-07, for the DeepSeek provider: other providers of the
+# same model charge differently, so pin OPENROUTER_PROVIDER=deepseek when using this price.
 PRICES: dict[tuple[str, str], ModelPrice] = {
     ("groq", "openai/gpt-oss-20b"): ModelPrice(
         input_per_million=0.075, output_per_million=0.30, cached_input_per_million=0.037
     ),
+    ("openrouter", "deepseek/deepseek-v4.1-flash-1017"): ModelPrice(
+        input_per_million=0.15, output_per_million=0.60, cached_input_per_million=0.003
+    ),
 }
+
+
+def _openrouter_routing(env: Mapping[str, str]) -> dict[str, object]:
+    """Only providers that support every request field, such as tools. With OPENROUTER_PROVIDER
+    set, only that provider, so weights and prices stay the same across eval runs."""
+    routing: dict[str, object] = {"require_parameters": True}
+    pinned = env.get("OPENROUTER_PROVIDER")
+    if pinned:
+        routing = {"order": [pinned], "allow_fallbacks": False, **routing}
+    return {"provider": routing}
 
 
 def _require_key(env: Mapping[str, str], name: str) -> str:
@@ -41,6 +56,14 @@ def _build_adapter(
             api_key=_require_key(env, "GROQ_API_KEY"),
             http_client=http_client,
         )
+    if provider == "openrouter":
+        return OpenAICompatibleAdapter(
+            provider="openrouter",
+            base_url="https://openrouter.ai/api/v1",
+            api_key=_require_key(env, "OPENROUTER_API_KEY"),
+            http_client=http_client,
+            extra_body=_openrouter_routing(env),
+        )
     if provider == "gemini":
         return GeminiAdapter(api_key=_require_key(env, "GEMINI_API_KEY"))
     if provider == "ollama":
@@ -51,7 +74,7 @@ def _build_adapter(
             timeout=LOCAL_TIMEOUT_SECONDS,
             http_client=http_client,
         )
-    raise ValueError(f"unknown provider {provider!r}, expected groq, gemini, or ollama")
+    raise ValueError(f"unknown provider {provider!r}, expected groq, openrouter, gemini, or ollama")
 
 
 def build_routes(

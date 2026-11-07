@@ -1,5 +1,7 @@
 """Tracing setup and building routes from configuration."""
 
+import json
+
 import httpx2
 import pytest
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -90,3 +92,58 @@ def test_paid_groq_models_carry_their_price() -> None:
 def test_unpriced_models_stay_free() -> None:
     assert build_routes("ollama:qwen", {})[0].price.input_per_million == 0
     assert build_routes("groq:unknown-model", ENV)[0].price.output_per_million == 0
+
+
+def test_openrouter_points_at_openrouter_and_pins_the_provider() -> None:
+    """A pinned provider keeps every request on the same weights, so eval runs compare."""
+    seen: dict = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen["url"] = str(request.url)
+        seen["auth"] = request.headers["authorization"]
+        seen["body"] = json.loads(request.content)
+        return httpx2.Response(500, json={"error": {"message": "x"}})
+
+    env = {"OPENROUTER_API_KEY": "or-secret", "OPENROUTER_PROVIDER": "deepseek"}
+    client = httpx2.Client(transport=httpx2.MockTransport(handler))
+    route = build_routes("openrouter:deepseek/deepseek-v4.1-flash-1017", env, http_client=client)[0]
+
+    with pytest.raises(TransientLLMError):
+        route.adapter.complete(LLMRequest(messages=[Message(role="user", content="q")]), "m")
+
+    assert seen["url"].startswith("https://openrouter.ai/api/v1/")
+    assert seen["auth"] == "Bearer or-secret"
+    assert seen["body"]["provider"] == {
+        "order": ["deepseek"],
+        "allow_fallbacks": False,
+        "require_parameters": True,
+    }
+
+
+def test_openrouter_without_a_pinned_provider_still_requires_tool_support() -> None:
+    seen: dict = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen["body"] = json.loads(request.content)
+        return httpx2.Response(500, json={"error": {"message": "x"}})
+
+    client = httpx2.Client(transport=httpx2.MockTransport(handler))
+    route = build_routes("openrouter:m", {"OPENROUTER_API_KEY": "k"}, http_client=client)[0]
+
+    with pytest.raises(TransientLLMError):
+        route.adapter.complete(LLMRequest(messages=[Message(role="user", content="q")]), "m")
+
+    assert seen["body"]["provider"] == {"require_parameters": True}
+
+
+def test_openrouter_needs_its_key() -> None:
+    with pytest.raises(ValueError, match="OPENROUTER_API_KEY"):
+        build_routes("openrouter:m", {})
+
+
+def test_the_pinned_deepseek_model_carries_its_price() -> None:
+    route = build_routes(
+        "openrouter:deepseek/deepseek-v4.1-flash-1017", {"OPENROUTER_API_KEY": "k"}
+    )[0]
+    assert route.price.input_per_million > route.price.cached_input_per_million > 0
+    assert route.price.output_per_million > 0

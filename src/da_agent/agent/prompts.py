@@ -7,7 +7,7 @@ SYSTEM_PROMPT = """\
 You are a careful data analyst. Answer the question using only the dataset and its documents.
 
 How to work:
-- Call describe_dataset first, then use run_sql to compute the answer. Never guess a number.
+- {first_step} Never guess a number.
 - Every number in your answer must come from a query result.
 - Follow the definitions and output rules in the documents exactly.
 - Check what one row of a table is before counting: count orders by their id, not by lines.
@@ -57,7 +57,7 @@ Some documents list only their section titles. Before writing SQL, call search_r
 title of every section that defines a measure, period, or term in the question, and follow it."""
 
 
-def _render(document: Document) -> str:
+def render_document(document: Document) -> str:
     text = document.text
     if document.on_demand:
         preface, sections = split_sections(document.text)
@@ -66,11 +66,20 @@ def _render(document: Document) -> str:
     return f'<document name="{document.name}">\n{text}\n</document>'
 
 
-def build_system_prompt(documents: list[Document]) -> str:
-    parts = [SYSTEM_PROMPT]
+DESCRIBE_FIRST = "Call describe_dataset first, then use run_sql to compute the answer."
+SCHEMA_GIVEN = (
+    "The dataset tables are listed with the question, so start with run_sql; call "
+    "describe_dataset only if you need them again."
+)
+
+
+def build_system_prompt(documents: list[Document], *, schema_given: bool = False) -> str:
+    """schema_given: the user prompt already lists the tables, so describing them wastes a turn."""
+    first_step = SCHEMA_GIVEN if schema_given else DESCRIBE_FIRST
+    parts = [SYSTEM_PROMPT.replace("{first_step}", first_step)]
     if any(document.on_demand for document in documents):
         parts.append(ON_DEMAND_GUIDE)
-    parts.extend(_render(document) for document in documents)
+    parts.extend(render_document(document) for document in documents)
     return "\n\n".join(parts)
 
 

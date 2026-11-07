@@ -115,33 +115,35 @@ Implemented in `src/da_agent/ingestion/`:
 ## Agent graph
 
 ```
-understand → plan → execute (bounded tool loop) → verify ─┬─ pass ────────> answer
-    │                  ^                                  ├─ wrong ───────> back to execute (max 2)
-    │                  └──────────────────────────────────┘
-    ├─ ambiguous ──> clarify (interrupt, wait for user)   └─ missing data ─> abstain (with reason)
+plan ─┬─ ambiguous and interactive ─> clarify (interrupt, at most once) ─> plan
+      └─> agent ⇄ tools ─(submit_answer)─> verify ─┬─ pass ────────────────> answer
+            ^                                     ├─ fail, repairs left (2) ┘
+            └─────────────────────────────────────└─ fail, none left ───────> abstain
 ```
 
 | Node | Job |
 |---|---|
-| `understand` | Interpret the question and detect ambiguity |
-| `plan` | Choose the steps and data needed |
-| `execute` | Run a bounded tool loop |
+| `plan` | One model call: steps, ambiguity, and a question for the user, from the question, documents, and schema |
+| `clarify` | Interrupt and wait for the user, in interactive runs only |
+| `agent` | One model turn of the bounded tool loop |
+| `tools` | Run that turn's tool calls; all read-only |
 | `verify` | Run code checks and route the result |
-| `answer` | Build `AgentAnswer` from verified results |
-| `clarify` | Interrupt and wait for the user |
-| `abstain` | Explain what data is missing |
+| `answer` | Return the verified `AgentAnswer` |
+| `abstain` | Stop with a reason: limits, budget, or an answer that failed verification |
 
-Rules:
+Rules ([ADR 0013](adr/0013-agent-graph.md)):
 
 - Every loop has hard limits: tool iterations, repair attempts, tokens, and money.
 - Routing is code. The LLM supplies judgment, not control flow that code can decide.
-- A node does one job and is safe to resume. Side effects are idempotent or keyed by `run_id` and
-  step, so a checkpoint resume does not repeat them.
+- Each model turn is a checkpoint. A resume repeats at most the running turn, and tools only read.
+- A provider failure leaves the run open at its last checkpoint, so a retry continues it.
+- Eval runs never interrupt: the plan follows the documents' defaults for ambiguous questions.
 
 ### State
 
-`run_id, workspace_id, dataset_id, question, as_of, plan, steps, artifact_refs, verification, budget,
-status`
+Now: `question, as_of, clarifications, plan_steps, messages, steps, iterations, nudges, repairs,
+proposed, verified, answer, stop_reason, error`. Later: `workspace_id, dataset_id, artifact_refs`.
+The dataset, model client, and tracer are runtime context, not state.
 
 State stays small and serializable. Large results are stored as artifacts, and state keeps only a
 preview and a reference. Each field has one owner node, and accumulating fields have explicit
@@ -157,12 +159,13 @@ results the model can act on, and do not crash the graph.
 
 ### Verification
 
-Mostly code, not LLM self-assessment ([ADR 0007](adr/0007-code-first-verification.md)):
+Mostly code, not LLM self-assessment ([ADR 0007](adr/0007-code-first-verification.md)). Done:
+an answer needs a successful query, and every number in it must match a query result within
+rounding. Planned for the reliability phase:
 
 - The asked period falls inside the data range.
 - Joins do not multiply rows.
 - Parse rates of the columns used are acceptable.
-- Every number in the answer appears in a tool result.
 - Important answers are recomputed a second way.
 
 ### Memory and RAG

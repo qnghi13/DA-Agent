@@ -9,6 +9,8 @@ from da_agent.llm.client import RunBudget
 class AgentLimits:
     max_iterations: int = 10
     max_nudges: int = 2
+    # Verification failures sent back to the tool loop before the answer is withheld.
+    max_repairs: int = 2
     budget: RunBudget | None = None
 
 

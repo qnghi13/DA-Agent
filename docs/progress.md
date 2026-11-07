@@ -2,23 +2,22 @@
 
 Loaded into every session, so keep it under 60 lines. Replace stale content instead of appending.
 **Last updated:** 2026-11-07
-**Phase:** Days 3–6, Data and tools ([plan §6](plan.md#6-roadmap)). B5 +14, C2 +10; row descriptions uncommitted.
+**Phase:** Days 7–10, Agent workflow ([plan §6](plan.md#6-roadmap)). LangGraph graph done (ADR 0013), uncommitted.
 
 ## Next step
 
-1. Remaining patterns (B5 4 wrong, C2 8 wrong): cancellation rate per order (3), stated price vs
-   unit (1), keyless logs judged unanswerable (1); abstentions are mostly `gpt-oss-20b` limits.
-2. Days 7–11 (LangGraph, Haiku 5.5) once the user adds budget. General patterns only.
+1. `regression` (150 questions) baseline with `--agent graph`, about $0.40 (ask first): Days 7–10
+   exit criterion. Then decide whether `graph` becomes the default agent.
+2. Then reliability: period, join fan-out, and recomputation checks in `verify`.
 ## Baselines (`bootstrap`, biz_123, 30 questions; correct / wrong / abstained, score)
 
-- A `pos.sqlite` 3/8/19 −5; A2 turn notices −9; B sandbox −11; B2 known values −10; B3 source
-  names 6/15/9 −9; **B4 dedupe and text-match hint 16/3/11 +13.**
+- A `pos.sqlite` −5; B sandbox −11; B3 source names −9; **B4 dedupe 16/3/11 +13.**
   Runs in `eval/reports/baseline-*`; dev answers read only for error patterns (user, 2026-11-07).
-- `regression`, 5 subtotal shops: C with exclusion 13/9/8 +4, D without 16/11/3 +5: no measurable
-  effect. In 4 shops subtotal rows have no date, so date filters already drop them; only biz_107
-  fills dates down onto them.
+- 5 subtotal shops: with exclusion +4, without +5: no effect, since subtotal rows lack dates.
 - Row descriptions in `describe_dataset` and status guidance in the prompt: C2 18/8/4 +10 (from
-  +4), B5 18/4/8 +14 (from +13). Learning note 02 written.
+  +4), B5 18/4/8 +14 (from +13). `smoke` (19 shops) S1 13/6/11 +7, $0.06: Days 3–6 closed.
+- Graph (`--agent graph`, plan reads all rules): B7 18/7/5 +11, C4 16/7/7 +9, S3 18/7/5 +11 = +31,
+  same total as the loop (+31), ~13% more tokens. Plan with rule titles only gave +2 on bootstrap.
 ## Done
 
 - Dev environment, design docs, ADRs 0001–0011, README, LICENSE. Scorer (`eval/scorer/`, rulebook §7, §9): 3000/3000 on the real answers. Splits in
@@ -43,14 +42,15 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
 
 ## Not verified
 
-- Gemini: no real call. Ollama too slow. `compose.dev.yml` never ran. Phoenix: `da-agent-phoenix`.
+- Gemini and `openrouter` (needs credits): no real call. `compose.dev.yml` never ran. Postgres:
+  container `da-agent-postgres` on 127.0.0.1:5433 (dev password); tests read `DA_AGENT_TEST_POSTGRES_URL`.
 
 ## Waiting on the user
 
-- Days 7–11: $5–10 for Haiku 5.5. Before Day 20: Compose plugin. Before pushing: `gh` or a repo. **Before going public:** check the organizer's data rules, whether `cccd` and phone are fake, the
+- Before Day 20: Compose plugin. Before pushing: `gh` or a repo. **Before going public:** check the organizer's data rules, whether `cccd` and phone are fake, the
   licenses of skills in `.agents/`, and the `brainstorming` scripts.
 
-## Spend so far: about $1.28 (agent runs $0.84, spec proposals $0.44).
+## Spend so far: about $1.76 (agent runs $1.32, spec proposals $0.44).
 ## Watch out
 
 - A run of 30 questions costs about $0.05–0.10. `gpt-oss-20b` varies run to run: compare totals.

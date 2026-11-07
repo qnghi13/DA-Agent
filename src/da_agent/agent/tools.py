@@ -125,6 +125,11 @@ def _describe_table(table: TableInfo) -> dict[str, Any]:
     return described
 
 
+def describe_tables(dataset: Dataset) -> list[dict[str, Any]]:
+    """The compact schema that describe_dataset returns."""
+    return [_describe_table(table) for table in dataset.describe()]
+
+
 def _error(tool: str, message: str, sql: str | None = None) -> tuple[str, ToolStep]:
     return json.dumps({"error": message}, ensure_ascii=False), ToolStep(
         tool=tool, ok=False, sql=sql, error=message
@@ -138,7 +143,7 @@ def execute_tool(
     if call.arguments_error:
         return _error(call.name, f"could not read the tool arguments: {call.arguments_error}")
     if call.name == "describe_dataset":
-        tables = [_describe_table(table) for table in dataset.describe()]
+        tables = describe_tables(dataset)
         return json.dumps({"tables": tables}, ensure_ascii=False), ToolStep(tool=call.name, ok=True)
     if call.name == "run_sql":
         return _run_sql_on(dataset, call.arguments)

@@ -80,9 +80,12 @@ class OpenAICompatibleAdapter:
         api_key: str,
         http_client: httpx2.Client | None = None,
         timeout: float = 60.0,
+        extra_body: dict[str, Any] | None = None,
     ) -> None:
         self.provider = provider
         self.timeout_seconds = timeout
+        # Provider-specific request fields, such as OpenRouter's provider routing.
+        self._extra_body = dict(extra_body or {})
         # Retries belong to LLMClient, so the SDK must not add its own.
         self._client = openai.OpenAI(
             base_url=base_url,
@@ -96,6 +99,8 @@ class OpenAICompatibleAdapter:
         # Typed as Any because the SDK's message types are exact shapes that we build dynamically.
         messages: Any = [_to_wire_message(message) for message in request.messages]
         options: dict[str, Any] = {}
+        if self._extra_body:
+            options["extra_body"] = self._extra_body
         if request.tools:
             options["tools"] = [
                 {"type": "function", "function": tool.model_dump()} for tool in request.tools

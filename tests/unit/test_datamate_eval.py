@@ -515,3 +515,31 @@ def test_results_keep_tool_errors_for_later_diagnosis(data_dir: Path, tmp_path: 
     assert row["failed_tools"] == 1
     assert len(row["errors"]) == 1
     assert "nope" in row["errors"][0] or "x" in row["errors"][0]
+
+
+def test_the_graph_agent_plans_queries_and_answers(data_dir: Path, tmp_path: Path) -> None:
+    def tool(name: str, arguments: dict) -> LLMResponse:
+        call = ToolCall(id=f"c_{name}", name=name, arguments=arguments)
+        return LLMResponse(tool_calls=[call], usage=Usage(input_tokens=40, output_tokens=10))
+
+    script = [
+        tool("submit_plan", {"steps": ["count"]}),
+        tool("run_sql", {"sql": "SELECT 7 AS n"}),
+        answer(7),
+    ]
+    llm, ledger, adapter = make_llm(script)
+    questions = read_jsonl(data_dir / "questions.jsonl")[:1]
+
+    metrics = run_questions(
+        questions, data_dir, llm, ledger, RunConfig(tmp_path / "out", agent="graph")
+    )
+
+    assert metrics["stop_reasons"] == {"answered": 1}
+    assert read_jsonl(tmp_path / "out" / "submission.jsonl")[0]["answer"] == 7
+    assert [tool.name for tool in adapter.requests[0].tools] == ["submit_plan"]
+
+
+def test_graph_runs_keep_threads_apart_across_output_dirs() -> None:
+    from eval.datamate.run import thread_id
+
+    assert thread_id(Path("eval/reports/a"), "q1") != thread_id(Path("eval/reports/b"), "q1")
