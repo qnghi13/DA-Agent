@@ -25,3 +25,4 @@ decision, add a new ADR and mark the old one as superseded.
 | [0018](0018-worker.md) | The worker: heartbeat thread, error classes, and the job id as the graph thread | Accepted |
 | [0019](0019-dataset-lifecycle.md) | Dataset lifecycle: ingest proposes, the user approves, runs open only ready datasets | Accepted |
 | [0020](0020-http-api.md) | The HTTP API: bearer keys, uploads by safe name, and "not found" across workspaces | Accepted |
+| [0021](0021-progress-events.md) | Run progress as events in Postgres, streamed with SSE | Accepted |

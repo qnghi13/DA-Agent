@@ -18,6 +18,7 @@ from da_agent.agent.loop_types import Document
 from da_agent.llm.client import CostLedger, LLMClient, Route
 from da_agent.llm.types import TransientLLMError
 from da_agent.storage.db import connect
+from da_agent.storage.events import RunEvents
 from da_agent.storage.jobs import Job, JobQueue
 from da_agent.storage.sqlite_dataset import SqliteDataset
 from da_agent.worker.runs import RunHandler
@@ -229,3 +230,17 @@ def test_a_permanent_error_fails_the_job_with_its_message(
 
     failed = job(conn, job_id, workspace)
     assert (failed.status, failed.last_error) == ("failed", "the dataset is not ready")
+
+
+def test_a_run_job_records_its_progress_events(
+    schema: str, conn: psycopg.Connection, workspace: UUID, dataset: SqliteDataset
+) -> None:
+    job_id = enqueue_run(conn, workspace)
+    adapter = ScriptedAdapter([plan(), sql(), submit("number", 350)])
+
+    Worker(config(schema, "w1"), {"run": run_handler(adapter, dataset, schema)}).run_once()
+
+    events = RunEvents(conn).after(job_id, workspace, after_id=0)
+    assert [e.type for e in events] == ["plan", "turn", "tool", "turn", "tool", "verify", "done"]
+    assert events[2].data["sql"] == "SELECT SUM(total) AS t FROM orders"
+    assert [e.id for e in events] == sorted(e.id for e in events)

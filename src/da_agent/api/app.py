@@ -6,7 +6,9 @@ found", so ids from another workspace reveal nothing. See docs/adr/0020.
 """
 
 import datetime as dt
+import json
 import shutil
+import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -16,7 +18,7 @@ from uuid import UUID
 
 import psycopg
 from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from da_agent.agent.answer import result_from_json
@@ -30,6 +32,7 @@ from da_agent.storage.datasets import (
     InvalidSpecError,
 )
 from da_agent.storage.db import connect
+from da_agent.storage.events import RunEvent, RunEvents
 from da_agent.storage.jobs import Job, JobQueue
 from da_agent.storage.keys import KEY_PATTERN, KeyIdentity, authenticate
 from da_agent.storage.uploads import UploadRejectedError, storage_name
@@ -45,6 +48,11 @@ class ApiSettings:
     schema: str | None = None
     max_files: int = 50
     max_file_bytes: int = 200 * 1024 * 1024
+    # Event streams: how often to look for new events, when to send a keep-alive comment, and
+    # how long one connection lasts before the client reconnects with Last-Event-ID.
+    events_poll_seconds: float = 0.5
+    events_keepalive_seconds: float = 15.0
+    events_max_seconds: float = 300.0
 
 
 class ApproveRequest(BaseModel):
@@ -281,3 +289,60 @@ def get_report(run_id: str, conn: Db, caller: Caller) -> HTMLResponse:
         "X-Content-Type-Options": "nosniff",
     }
     return HTMLResponse(page, headers=headers)
+
+
+FINISHED = ("succeeded", "failed")
+
+
+def _sse(event: RunEvent) -> str:
+    return f"id: {event.id}\nevent: {event.type}\ndata: {json.dumps(event.data)}\n\n"
+
+
+def _event_stream(
+    settings: ApiSettings, job_id: UUID, workspace_id: UUID, after_id: int
+) -> Iterator[str]:
+    """Events after after_id, as they arrive, then an `end` event once the run is finished.
+
+    Its own connection: the request's connection closes when the handler returns."""
+    started = last_sent = time.monotonic()
+    with connect(settings.database_url, schema=settings.schema) as conn:
+        events, queue = RunEvents(conn), JobQueue(conn)
+        while True:
+            batch = events.after(job_id, workspace_id, after_id=after_id)
+            for event in batch:
+                yield _sse(event)
+                after_id = event.id
+            if batch:
+                last_sent = time.monotonic()
+                continue
+            job = queue.get(job_id, workspace_id)
+            if job is None or job.status in FINISHED:
+                # Events written just before the job finished may have arrived since the last read.
+                for event in events.after(job_id, workspace_id, after_id=after_id, limit=10_000):
+                    yield _sse(event)
+                status = job.status if job else "missing"
+                yield f"event: end\ndata: {json.dumps({'status': status})}\n\n"
+                return
+            now = time.monotonic()
+            if now - started > settings.events_max_seconds:
+                return
+            if now - last_sent > settings.events_keepalive_seconds:
+                yield ": keep-alive\n\n"
+                last_sent = now
+            time.sleep(settings.events_poll_seconds)
+
+
+@router.get("/runs/{run_id}/events")
+def stream_run_events(
+    run_id: str, request: Request, conn: Db, caller: Caller, settings: Settings
+) -> StreamingResponse:
+    """Server-sent events: plan, turn, tool, verify, done, and question, then `end` with the run's
+    status. Reconnect with the Last-Event-ID header to continue where the stream stopped."""
+    job = run_job(run_id, conn, caller)
+    last = request.headers.get("last-event-id", "0")
+    after_id = int(last) if last.isdigit() else 0
+    return StreamingResponse(
+        _event_stream(settings, job.id, caller.workspace_id, after_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

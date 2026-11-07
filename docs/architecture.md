@@ -143,7 +143,7 @@ Rules ([ADR 0013](adr/0013-agent-graph.md)):
 ### State
 
 Now: `question, as_of, clarifications, plan_steps, messages, steps, iterations, nudges, repairs,
-proposed, verified, answer, stop_reason, error`. Later: `workspace_id, dataset_id, artifact_refs`.
+proposed, verified, verify_problems, answer, stop_reason, error`. Later: `workspace_id, dataset_id, artifact_refs`.
 The dataset, model client, and tracer are runtime context, not state.
 
 State stays small and serializable. Large results are stored as artifacts, and state keeps only a

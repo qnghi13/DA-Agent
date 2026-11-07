@@ -92,6 +92,8 @@ class AgentState(TypedDict, total=False):
     repairs: int
     proposed: dict[str, Any] | None
     verified: bool
+    # The problems verify found in the last answer, for progress events.
+    verify_problems: list[str]
     answer: dict[str, Any] | None
     stop_reason: str | None
     error: str | None
@@ -299,17 +301,26 @@ def verify_node(state: AgentState, runtime: Runtime[AgentContext]) -> dict[str, 
             unreadable = unreadable_problems(evidence, context.dataset, context.dialect)
             span.set_attribute("da_agent.verify.unreadable", bool(unreadable))
             if unreadable:
-                return {"verified": False, **_stop("unreadable_values", "; ".join(unreadable))}
+                return {
+                    "verified": False,
+                    "verify_problems": unreadable,
+                    **_stop("unreadable_values", "; ".join(unreadable)),
+                }
     span.set_attribute("da_agent.verify.problems", len(problems))
     if not problems:
-        return {"verified": True}
+        return {"verified": True, "verify_problems": []}
     repairs = state.get("repairs", 0)
     turns_left = limits.max_iterations - state.get("iterations", 0)
     if repairs >= limits.max_repairs or turns_left < 2:
-        return {"verified": False, **_stop("unverified", "; ".join(problems))}
+        return {
+            "verified": False,
+            "verify_problems": problems,
+            **_stop("unverified", "; ".join(problems)),
+        }
     notice = REPAIR_NOTICE.format(problems="; ".join(problems))
     return {
         "verified": False,
+        "verify_problems": problems,
         "repairs": repairs + 1,
         "proposed": None,
         "messages": [Message(role="user", content=notice).model_dump()],
@@ -378,6 +389,56 @@ def build_graph(checkpointer: BaseCheckpointSaver | None = None) -> Any:
     return graph.compile(checkpointer=checkpointer)
 
 
+# Progress events
+
+
+EventSink = Callable[[dict[str, Any]], None]
+
+
+def node_events(node: str, update: dict[str, Any]) -> list[dict[str, Any]]:
+    """Small progress events for one node's state update. They name tools, queries, and verdicts,
+    and never carry query rows or message text."""
+    if node == "plan":
+        return [{"type": "plan", "steps": update.get("plan_steps", [])}]
+    if node == "agent":
+        calls = [
+            call["name"]
+            for message in update.get("messages", [])
+            if message.get("role") == "assistant"
+            for call in message.get("tool_calls") or []
+        ]
+        return [{"type": "turn", "iteration": update.get("iterations"), "tools": calls}]
+    if node == "tools":
+        return [
+            {
+                "type": "tool",
+                "tool": step["tool"],
+                "ok": step["ok"],
+                "sql": step.get("sql"),
+                "row_count": step.get("row_count"),
+                "error": step.get("error"),
+                "chart": step.get("chart") is not None,
+            }
+            for step in update.get("steps", [])
+        ]
+    if node == "verify":
+        passed = bool(update.get("verified"))
+        return [{"type": "verify", "passed": passed, "problems": update.get("verify_problems", [])}]
+    if node in ("answer", "abstain"):
+        return [{"type": "done", "stop_reason": update.get("stop_reason")}]
+    return []
+
+
+def _emit(sink: EventSink | None, events: list[dict[str, Any]]) -> None:
+    if sink is None:
+        return
+    for event in events:
+        try:
+            sink(event)
+        except Exception as error:  # Progress is best effort: the run must not fail over it.
+            trace.get_current_span().record_exception(error)
+
+
 # Entry point
 
 
@@ -396,6 +457,28 @@ def _result(values: dict[str, Any], question_for_user: str | None = None) -> Age
     )
 
 
+def _stream(
+    app: Any, command: Any, config: dict[str, Any], context: AgentContext, sink: EventSink | None
+) -> tuple[dict[str, Any], str | None]:
+    """Run the graph, sending progress events. Returns the final state and the question an
+    interactive run paused on, if any."""
+    values: dict[str, Any] = {}
+    asked: str | None = None
+    for mode, chunk in app.stream(
+        command, config, context=context, stream_mode=["updates", "values"]
+    ):
+        if mode == "values":
+            values = chunk
+            continue
+        for node, update in chunk.items():
+            if node == "__interrupt__":
+                asked = update[0].value.get("question") if update else None
+                _emit(sink, [{"type": "question", "question": asked}])
+            elif isinstance(update, dict):
+                _emit(sink, node_events(node, update))
+    return values, asked
+
+
 def run_graph(
     question: str,
     *,
@@ -411,6 +494,7 @@ def run_graph(
     tracer: Tracer | None = None,
     thread_id: str | None = None,
     charts: bool = False,
+    on_event: EventSink | None = None,
 ) -> AgentResult:
     """Answer one question, or continue the run saved under run_id.
 
@@ -418,7 +502,8 @@ def run_graph(
     continues from its last finished step, and a finished run returns its saved result. reply
     answers the question an interactive run paused on. thread_id names the saved run, and
     defaults to run_id, which also keys the cost ledger. charts offers make_chart, whose specs
-    come back in AgentResult.charts.
+    come back in AgentResult.charts. on_event receives progress events (see node_events) as the
+    run goes; a resumed run may repeat the events of the step that was running.
     """
     limits = limits or AgentLimits()
     tracer = tracer or trace.get_tracer("da_agent.agent")
@@ -447,22 +532,20 @@ def run_graph(
         span.set_attribute("openinference.span.kind", "AGENT")
         span.set_attribute("da_agent.run_id", run_id)
         if saved is not None and saved.values and not saved.next:
-            values = dict(saved.values)
+            values, asked = dict(saved.values), None
         else:
             if saved is not None and saved.next:
                 command: Any = Command(resume=reply) if reply is not None else None
             else:
                 command = {"question": question, "as_of": as_of}
             try:
-                values = app.invoke(command, config, context=context)
+                values, asked = _stream(app, command, config, context, on_event)
             except LLMError as error:
                 # Every route failed. The run keeps its last checkpoint, so a later call retries.
                 current = app.get_state(config).values if checkpointer is not None else {}
                 result = _result({**current, "stop_reason": "llm_error", "error": str(error)})
                 span.set_attribute("da_agent.stop_reason", result.stop_reason)
                 return result
-        pending = values.get("__interrupt__") or []
-        asked = pending[0].value.get("question") if pending else None
         result = _result(values, asked)
         span.set_attribute("da_agent.stop_reason", result.stop_reason)
         span.set_attribute("da_agent.iterations", result.iterations)

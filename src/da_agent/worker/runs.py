@@ -2,7 +2,8 @@
 
 The job id is the graph's thread id, so a job claimed again after a killed worker or a provider
 failure continues from its last checkpoint instead of starting over. A provider failure is
-retryable; the run keeps its checkpoint and the retry continues it.
+retryable; the run keeps its checkpoint and the retry continues it. Progress events go to
+run_events as the graph runs.
 """
 
 import threading
@@ -20,7 +21,8 @@ from da_agent.agent.graph import run_graph
 from da_agent.agent.loop_types import AgentLimits, Document
 from da_agent.agent.tools import Dataset
 from da_agent.llm.client import LLMClient
-from da_agent.storage.db import search_path_option
+from da_agent.storage.db import connect, search_path_option
+from da_agent.storage.events import RunEvents
 from da_agent.storage.jobs import Job
 from da_agent.worker.worker import RetryableJobError
 
@@ -54,7 +56,11 @@ class RunHandler:
     def __call__(self, job: Job, lost: threading.Event) -> dict[str, Any]:
         payload = job.payload
         dataset, documents = self.datasets(job.workspace_id, payload["dataset_id"])
-        with self._checkpoint_connection() as conn:
+        with (
+            self._checkpoint_connection() as conn,
+            connect(self.checkpoint_url, schema=self.schema) as events_conn,
+        ):
+            events = RunEvents(events_conn)
             saver = PostgresSaver(conn)
             saver.setup()
             result = run_graph(
@@ -67,6 +73,7 @@ class RunHandler:
                 limits=self.limits,
                 checkpointer=saver,
                 charts=bool(payload.get("charts", True)),
+                on_event=lambda event: events.append(job.id, job.workspace_id, event),
             )
         if result.stop_reason == "llm_error":
             raise RetryableJobError("the model provider failed; the run will continue later")

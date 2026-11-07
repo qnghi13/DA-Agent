@@ -4,6 +4,9 @@ Handlers only read and write Postgres and the uploads directory; jobs are comple
 instead of by a worker. Needs Postgres (DA_AGENT_TEST_POSTGRES_URL).
 """
 
+import json
+import threading
+import time
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -15,6 +18,8 @@ from fastapi.testclient import TestClient
 from da_agent.agent.answer import AgentAnswer, AgentResult, QueryRecord, ToolStep, result_to_json
 from da_agent.api.app import ApiSettings, create_app
 from da_agent.storage.datasets import DatasetStore
+from da_agent.storage.db import connect
+from da_agent.storage.events import RunEvents
 from da_agent.storage.jobs import JobQueue
 from da_agent.storage.keys import create_key, revoke_key
 from da_agent.storage.workspaces import create_workspace
@@ -334,3 +339,111 @@ def test_a_dataset_job_id_is_not_a_run(
 def test_malformed_ids_are_not_found(client: TestClient, key: str) -> None:
     assert client.get("/v1/datasets/not-a-uuid", headers=auth(key)).status_code == 404
     assert client.get("/v1/runs/../../etc", headers=auth(key)).status_code == 404
+
+
+# Progress events
+
+
+def stream_events(
+    client: TestClient, run_id: str, key: str, **headers: str
+) -> list[tuple[str, str, dict]]:
+    """(id, event, data) for each event of the stream, read until the server ends it."""
+    found: list[tuple[str, str, dict]] = []
+    with client.stream(
+        "GET", f"/v1/runs/{run_id}/events", headers={**auth(key), **headers}
+    ) as response:
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        current: dict[str, str] = {}
+        for line in response.iter_lines():
+            if line.startswith(":"):
+                continue
+            if not line:
+                if current:
+                    found.append(
+                        (
+                            current.get("id", ""),
+                            current.get("event", ""),
+                            json.loads(current.get("data", "{}")),
+                        )
+                    )
+                current = {}
+                continue
+            field, _, value = line.partition(": ")
+            current[field] = value
+    return found
+
+
+def queued_run(client: TestClient, conn: psycopg.Connection, key: str) -> tuple[str, UUID]:
+    dataset_id = ready_dataset(client, conn, key)
+    run_id = client.post(
+        "/v1/runs", headers=auth(key), json={"dataset_id": dataset_id, "question": "Total?"}
+    ).json()["id"]
+    return run_id, UUID(run_id)
+
+
+def finish(conn: psycopg.Connection) -> None:
+    queue = JobQueue(conn)
+    while (job := queue.claim("w", lease_seconds=30)) is not None:
+        queue.complete(job.id, "w", {})
+
+
+def test_events_stream_in_order_and_end_with_the_run_status(
+    client: TestClient, conn: psycopg.Connection, key: str, workspace: UUID
+) -> None:
+    run_id, job_id = queued_run(client, conn, key)
+    events = RunEvents(conn)
+    events.append(job_id, workspace, {"type": "plan", "steps": ["sum"]})
+    events.append(job_id, workspace, {"type": "done", "stop_reason": "answered"})
+    finish(conn)
+
+    received = stream_events(client, run_id, key)
+
+    assert [e[1] for e in received] == ["plan", "done", "end"]
+    assert received[0][2] == {"type": "plan", "steps": ["sum"]}
+    assert received[-1][2] == {"status": "succeeded"}
+
+
+def test_a_reconnecting_client_gets_only_the_events_it_missed(
+    client: TestClient, conn: psycopg.Connection, key: str, workspace: UUID
+) -> None:
+    run_id, job_id = queued_run(client, conn, key)
+    events = RunEvents(conn)
+    for step in ("plan", "turn", "tool"):
+        events.append(job_id, workspace, {"type": step})
+    finish(conn)
+    first = stream_events(client, run_id, key)
+
+    again = stream_events(client, run_id, key, **{"Last-Event-ID": first[0][0]})
+
+    assert [e[1] for e in again] == ["turn", "tool", "end"]
+
+
+def test_events_arrive_while_the_run_is_still_going(
+    client: TestClient, conn: psycopg.Connection, key: str, workspace: UUID, schema: str
+) -> None:
+    run_id, job_id = queued_run(client, conn, key)
+
+    def later() -> None:
+        assert POSTGRES_URL is not None
+        time.sleep(0.6)
+        with connect(POSTGRES_URL, schema=schema) as other:
+            RunEvents(other).append(job_id, workspace, {"type": "done", "stop_reason": "answered"})
+            finish(other)
+
+    worker = threading.Thread(target=later)
+    worker.start()
+    received = stream_events(client, run_id, key)
+    worker.join()
+
+    assert [e[1] for e in received] == ["done", "end"]
+
+
+@pytest.mark.security
+def test_another_workspace_cannot_stream_a_runs_events(
+    client: TestClient, conn: psycopg.Connection, key: str
+) -> None:
+    run_id, _ = queued_run(client, conn, key)
+    intruder = auth(create_key(conn, create_workspace(conn, "intruder")))
+
+    assert client.get(f"/v1/runs/{run_id}/events", headers=intruder).status_code == 404
