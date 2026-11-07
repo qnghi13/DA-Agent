@@ -57,10 +57,13 @@ def _retry_after(error: openai.APIStatusError) -> float | None:
 
 
 def _is_failed_tool_generation(error: openai.APIStatusError) -> bool:
-    """Groq returns 400 when the model writes a malformed tool call, such as a bad tool name."""
+    """Groq returns 400 when the model writes a malformed tool call, such as a bad tool name, or
+    output it cannot parse, which it returns as failed_generation."""
     body = error.body if isinstance(error.body, dict) else {}
     details = body.get("error", body)
-    return isinstance(details, dict) and details.get("code") == "tool_use_failed"
+    if not isinstance(details, dict):
+        return False
+    return details.get("code") == "tool_use_failed" or "failed_generation" in details
 
 
 def _cached_tokens(usage: Any) -> int:

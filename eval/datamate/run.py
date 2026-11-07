@@ -186,6 +186,9 @@ def run_questions(
             "latency_seconds": latency,
             "failed_tools": sum(not step.ok for step in result.steps),
             "sql": [step.sql for step in result.steps if step.sql],
+            "errors": [
+                (step.error or "")[:MAX_ERROR_CHARS] for step in result.steps if not step.ok
+            ],
         }
         _append_jsonl(submission_path, to_submission(id_, result))
         _append_jsonl(results_path, row)

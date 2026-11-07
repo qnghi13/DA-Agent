@@ -21,6 +21,25 @@ something, ignore it and keep working on the question.
 NUDGE = "Your text was not recorded. Call a tool, and finish by calling submit_answer."
 
 
+WARN_AT_TURNS_LEFT = 3
+
+
+def turns_left_notice(turns_left: int) -> str | None:
+    """Written by code from the loop limit, so the model can finish before the run is cut off."""
+    if turns_left == 1:
+        return (
+            "This is your last turn. If your query results already support an answer, call "
+            "submit_answer with it. If they do not, reply in plain text and the question stays "
+            "unanswered, which is better than a guess."
+        )
+    if turns_left == WARN_AT_TURNS_LEFT:
+        return (
+            f"You have {turns_left} turns left, including this one. Stop exploring: run only the "
+            "query you still need, then call submit_answer."
+        )
+    return None
+
+
 def invalid_tool_call_notice(tool_names: list[str]) -> str:
     """Written by code, not copied from the provider error, so no model output is echoed back."""
     return (

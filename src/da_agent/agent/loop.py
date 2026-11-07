@@ -21,6 +21,7 @@ from da_agent.agent.prompts import (
     build_system_prompt,
     build_user_prompt,
     invalid_tool_call_notice,
+    turns_left_notice,
 )
 from da_agent.agent.rules import RuleIndex
 from da_agent.agent.tools import SUBMIT_ANSWER, Dataset, execute_tool, tool_specs
@@ -102,7 +103,13 @@ def _loop(
     tools = tool_specs(rules, getattr(dataset, "dialect", "SQLite"))
 
     for iteration in range(1, limits.max_iterations + 1):
-        request = LLMRequest(messages=messages, tools=tools)
+        turns_left = limits.max_iterations - iteration + 1
+        notice = turns_left_notice(turns_left) if iteration > 1 else None
+        if notice:
+            messages.append(Message(role="user", content=notice))
+        # On the last turn only an answer can still count, so offer nothing else.
+        offered = [t for t in tools if t.name == SUBMIT_ANSWER] if turns_left == 1 else tools
+        request = LLMRequest(messages=messages, tools=offered)
         try:
             response = llm.complete(request, run_id=run_id, budget=limits.budget)
         except BudgetExceededError:
@@ -117,7 +124,7 @@ def _loop(
                     error=str(error),
                 )
             nudges += 1
-            notice = invalid_tool_call_notice([tool.name for tool in tools])
+            notice = invalid_tool_call_notice([tool.name for tool in offered])
             messages.append(Message(role="user", content=notice))
             continue
         except LLMError as error:

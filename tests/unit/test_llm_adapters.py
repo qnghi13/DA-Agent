@@ -181,6 +181,27 @@ def test_openai_reports_a_malformed_tool_call_as_invalid_tool_call() -> None:
         openai_adapter(handler).complete(REQUEST, "m")
 
 
+def test_openai_reports_unparsable_model_output_as_invalid_tool_call() -> None:
+    """Groq rejects output the model wrote but the provider could not parse, and returns it as
+    failed_generation. The model caused it, so the agent should get another try."""
+
+    def handler(_: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            400,
+            json={
+                "error": {
+                    "message": "Parsing failed. The model generated output that could not be "
+                    "parsed.",
+                    "type": "invalid_request_error",
+                    "failed_generation": "<|channel|>analysis ...",
+                }
+            },
+        )
+
+    with pytest.raises(InvalidToolCallError, match="Parsing failed"):
+        openai_adapter(handler).complete(REQUEST, "m")
+
+
 def test_openai_reads_cached_prompt_tokens() -> None:
     usage = {
         "prompt_tokens": 100,
