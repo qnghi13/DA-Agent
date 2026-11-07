@@ -3,7 +3,7 @@
 import json
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 ANSWER_KINDS = ("number", "percent", "date", "boolean", "text", "list", "table", "unanswerable")
@@ -124,3 +124,21 @@ def parse_answer(arguments: dict[str, Any]) -> AgentAnswer:
     if not is_valid(value):
         raise InvalidAnswerError(f"for kind {kind!r}, value_json must be {expected}")
     return AgentAnswer(kind=kind, value=value, reason=reason)
+
+
+def result_to_json(result: AgentResult) -> dict[str, Any]:
+    """The result as plain JSON, for a job row or an API response."""
+    return asdict(result)
+
+
+def result_from_json(data: dict[str, Any]) -> AgentResult:
+    answer = data.get("answer")
+    return AgentResult(
+        answer=AgentAnswer(**answer) if answer else None,
+        stop_reason=data.get("stop_reason", "answered"),
+        steps=[ToolStep(**step) for step in data.get("steps", [])],
+        iterations=data.get("iterations", 0),
+        error=data.get("error"),
+        question_for_user=data.get("question_for_user"),
+        queries=[QueryRecord(**query) for query in data.get("queries", [])],
+    )

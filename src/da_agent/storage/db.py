@@ -19,11 +19,16 @@ _SCHEMA_NAME = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 
 def connect(url: str, *, schema: str | None = None) -> psycopg.Connection:
     """An autocommit connection. schema, for tests, sets the search path to one schema."""
+    return psycopg.connect(url, autocommit=True, options=search_path_option(schema))
+
+
+def search_path_option(schema: str | None) -> str | None:
+    """The connection option that confines a connection to one schema, or None."""
     if schema is None:
-        return psycopg.connect(url, autocommit=True)
+        return None
     if not _SCHEMA_NAME.fullmatch(schema):
         raise ValueError(f"invalid schema name {schema!r}")
-    return psycopg.connect(url, autocommit=True, options=f"-c search_path={schema}")
+    return f"-c search_path={schema}"
 
 
 def returned_id(cursor: psycopg.Cursor[Any]) -> UUID:
