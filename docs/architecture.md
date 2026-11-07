@@ -48,6 +48,7 @@ checkpointer, DuckDB, sqlglot, Vega-Lite, React + Vite + TypeScript.
 | `src/da_agent/agent/` | Graph, nodes, state, tools, verification |
 | `src/da_agent/ingestion/` | Readers, table detection, profiling, `DatasetSpec`, loader |
 | `src/da_agent/llm/` | `LLMClient`, provider adapters, price table |
+| `src/da_agent/reports/` | Standalone HTML reports of a run |
 | `src/da_agent/storage/` | Postgres access and the artifact store |
 | `src/da_agent/security/` | SQL guard and masking |
 | `src/da_agent/telemetry/` | OpenTelemetry setup |
@@ -198,7 +199,8 @@ its successful queries are the evidence behind the answer. The `eval/datamate` a
 the core does not know that format. Charts are Vega-Lite specs that code builds from a query: the model names a mark and result
 columns, never writes the spec, and gets back no rows ([ADR 0015](adr/0015-charts-built-by-code.md)).
 `make_chart` is offered only when a run asks for charts, and `AgentResult.charts` returns the specs.
-Reports are standalone HTML, and every number links to the query that produced it.
+Reports are standalone HTML, and every number links to the query cell that produced it
+([ADR 0016](adr/0016-html-reports.md)). `AgentResult.queries` holds the rows the model saw.
 
 ## Failure handling
 

@@ -543,3 +543,33 @@ def test_graph_runs_keep_threads_apart_across_output_dirs() -> None:
     from eval.datamate.run import thread_id
 
     assert thread_id(Path("eval/reports/a"), "q1") != thread_id(Path("eval/reports/b"), "q1")
+
+
+def test_graph_runs_can_write_a_report_per_question_with_charts(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    def tool(name: str, arguments: dict) -> LLMResponse:
+        call = ToolCall(id=f"c_{name}", name=name, arguments=arguments)
+        return LLMResponse(tool_calls=[call], usage=Usage(input_tokens=40, output_tokens=10))
+
+    script = [
+        tool("submit_plan", {"steps": ["count"]}),
+        tool("run_sql", {"sql": "SELECT count(*) AS n FROM khach_hang"}),
+        answer(1),
+    ]
+    llm, ledger, adapter = make_llm(script)
+    questions = read_jsonl(data_dir / "questions.jsonl")[:1]
+    config = RunConfig(tmp_path / "out", agent="graph", reports=True)
+
+    run_questions(questions, data_dir, llm, ledger, config)
+
+    page = (tmp_path / "out" / "reports" / "q1.html").read_text(encoding="utf-8")
+    assert 'href="#q1-r1-c1"' in page
+    assert "make_chart" in [tool.name for tool in adapter.requests[1].tools]
+
+
+def test_reports_need_the_graph_agent(data_dir: Path, tmp_path: Path) -> None:
+    llm, ledger, _ = make_llm([])
+
+    with pytest.raises(ValueError, match="graph"):
+        run_questions([], data_dir, llm, ledger, RunConfig(tmp_path / "out", reports=True))

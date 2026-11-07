@@ -53,7 +53,13 @@ from da_agent.agent.prompts import (
 )
 from da_agent.agent.rules import RuleIndex
 from da_agent.agent.tools import SUBMIT_ANSWER, Dataset, describe_tables, execute_tool, tool_specs
-from da_agent.agent.verify import DateRanges, check_answer, date_ranges, evidence_queries
+from da_agent.agent.verify import (
+    DateRanges,
+    check_answer,
+    date_ranges,
+    evidence_queries,
+    query_records,
+)
 from da_agent.llm.client import LLMClient
 from da_agent.llm.types import (
     BudgetExceededError,
@@ -386,6 +392,7 @@ def _result(values: dict[str, Any], question_for_user: str | None = None) -> Age
         iterations=values.get("iterations", 0),
         error=values.get("error"),
         question_for_user=question_for_user,
+        queries=query_records([Message.model_validate(m) for m in values.get("messages", [])]),
     )
 
 

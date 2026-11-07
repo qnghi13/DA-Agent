@@ -31,6 +31,7 @@ from da_agent.agent.graph import run_graph
 from da_agent.agent.loop import AgentLimits, run_agent
 from da_agent.llm.client import CostLedger, LLMClient, RunBudget
 from da_agent.llm.factory import build_routes
+from da_agent.reports.html import render_report
 from da_agent.runner.runner import Runner, RunnerConfig
 from da_agent.telemetry.tracing import configure_tracing
 from eval.datamate.adapter import (
@@ -55,6 +56,9 @@ class RunConfig:
     delay_seconds: float = 0.0
     max_consecutive_failures: int = 3
     agent: Literal["loop", "graph"] = "loop"
+    # Offer make_chart and write an HTML report per question to output_dir/reports. Changes the
+    # tools the model sees, so a run with reports is not comparable with the baselines.
+    reports: bool = False
 
 
 def thread_id(output_dir: Path, question_id: str) -> str:
@@ -131,6 +135,8 @@ def run_questions(
     open_shop_fn opens a shop by id. By default it opens the shop's pos.sqlite in this process.
     With the graph agent and a checkpointer, a question cut off by a killed run continues where it
     stopped."""
+    if config.reports and config.agent != "graph":
+        raise ValueError("reports need the graph agent (--agent graph)")
     opener = open_shop_fn or (lambda shop_id: open_shop(data_dir, shop_id))
     config.output_dir.mkdir(parents=True, exist_ok=True)
     submission_path = config.output_dir / "submission.jsonl"
@@ -177,6 +183,7 @@ def run_questions(
                 limits=limits,
                 checkpointer=checkpointer,
                 thread_id=thread_id(config.output_dir, id_),
+                charts=config.reports,
             )
         else:
             result = run_agent(
@@ -219,6 +226,13 @@ def run_questions(
                 (step.error or "")[:MAX_ERROR_CHARS] for step in result.steps if not step.ok
             ],
         }
+        if config.reports:
+            reports_dir = config.output_dir / "reports"
+            reports_dir.mkdir(exist_ok=True)
+            page = render_report(
+                result, question=question["question"], as_of=question["as_of_date"]
+            )
+            (reports_dir / f"{id_}.html").write_text(page, encoding="utf-8")
         _append_jsonl(submission_path, to_submission(id_, result))
         _append_jsonl(results_path, row)
         results.append(row)
@@ -295,6 +309,11 @@ def main() -> int:
     parser.add_argument(
         "--checkpoint-url", help="Postgres URL; graph runs then survive a killed eval process"
     )
+    parser.add_argument(
+        "--report",
+        action="store_true",
+        help="graph agent: offer charts, write reports/<id>.html; not comparable with baselines",
+    )
     args = parser.parse_args()
 
     provider = None
@@ -315,6 +334,7 @@ def main() -> int:
             max_total_tokens=args.max_total_tokens,
             delay_seconds=args.delay,
             agent=args.agent,
+            reports=args.report,
         )
         opener = None
         if args.datasets_dir:

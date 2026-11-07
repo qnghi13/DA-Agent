@@ -20,3 +20,5 @@ decision, add a new ADR and mark the old one as superseded.
 | [0013](0013-agent-graph.md) | The agent graph: one plan call, per-turn checkpoints, and code verification | Accepted |
 | [0014](0014-probe-checks-in-verify.md) | Verification probes the data for join fan-out and unreadable values | Accepted |
 | [0015](0015-charts-built-by-code.md) | Charts are Vega-Lite specs that code builds from a query | Accepted |
+| [0016](0016-html-reports.md) | Reports link every number to the query cell the agent read | Accepted |
+| [0017](0017-queue-leases-and-sql-migrations.md) | Job leases on the database clock, and plain SQL migrations | Accepted |

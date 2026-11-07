@@ -1,13 +1,15 @@
 # Progress
 
 Loaded into every session, so keep it under 60 lines. Replace stale content instead of appending.
-**Last updated:** 2026-11-07
-**Phase:** Days 14–15, Charts, reports, RAG ([plan §6](plan.md#6-roadmap)). Charts: ADR 0015.
+**Last updated:** 2026-11-08
+**Phase:** Days 16–17, Backend ([plan §6](plan.md#6-roadmap)). Days 14–15 closed (note 05).
 
 ## Next step
 
-1. `make_chart` done (ADR 0015, `run_graph(charts=True)`, off in eval). Next: standalone HTML
-   report where every number links to its query, then the RAG experiment (first to cut if late).
+1. Backend: job queue and migrations done (ADR 0017, `storage/jobs.py`). Next: worker (claims,
+   heartbeats, runs the graph with the job id as thread), then API with keys, SSE, isolation.
+   Charts and reports done (ADRs 0015–0016); `--report` writes HTML (`report-sample`, $0.017).
+   RAG experiment cut: plan with titles only +2 vs all rules +11 already answers it (note 05).
 2. `regression` (150, ~$0.40) only at the end, if affordable.
 ## Baselines (`bootstrap`, biz_123, 30 questions; correct / wrong / abstained, score)
 
@@ -18,11 +20,10 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
   same total as the loop (+31), ~13% more tokens. Plan with rule titles only gave +2 on bootstrap.
 - Verify checks replayed on saved graph runs flag 0 correct answers: period, fan-out, unreadable
   values (ADR 0014), typed inputs (12 literal-only answers, 7 correct, inputs all from data).
-  `-2tr250` parses now: `datasets-dev` has no unreadable values (`-v7` older). B8 with all checks:
-  17/7/6 +10 vs B7 +11, $0.11; no new check fired, only number tracing (3 times): noise.
+  B8 with all checks: 17/7/6 +10 vs B7 +11, $0.11; no new check fired: noise.
 ## Done
 
-- Dev environment, design docs, ADRs 0001–0014, README, LICENSE. Scorer (`eval/scorer/`, rulebook §7, §9): 3000/3000 on the real answers. Splits in
+- Dev environment, design docs, ADRs 0001–0017, README, LICENSE. Scorer (`eval/scorer/`, rulebook §7, §9): 3000/3000 on the real answers. Splits in
   `eval/splits/splits.json`: 24 dev, 6 holdout shops; sets `bootstrap`, `smoke`, `regression`.
 - Minimal agent: `LLMClient`, SQL guard, bounded tool loop, tracing, resumable `eval/datamate`
   runner. Model: Groq `gpt-oss-20b`; `search_rules` (ADR 0008).
@@ -43,14 +44,14 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
 ## Not verified
 
 - Gemini and `openrouter` (needs credits): no real call. `compose.dev.yml` never ran. Postgres:
-  container `da-agent-postgres` on 127.0.0.1:5433 (dev password); tests read `DA_AGENT_TEST_POSTGRES_URL`.
+  `da-agent-postgres` on 127.0.0.1:5433; set `DA_AGENT_TEST_POSTGRES_URL` in the same command.
 
 ## Waiting on the user
 
 - Before Day 20: Compose plugin. Before pushing: `gh` or a repo. **Before going public:** check the organizer's data rules, whether `cccd` and phone are fake, the
   licenses of skills in `.agents/`, and the `brainstorming` scripts.
 
-## Spend so far: about $1.87 (agent runs $1.43, spec proposals $0.44).
+## Spend so far: about $1.89 (agent runs $1.45, spec proposals $0.44).
 ## Watch out
 
 - A run of 30 questions costs about $0.05–0.10. `gpt-oss-20b` varies run to run: compare totals.

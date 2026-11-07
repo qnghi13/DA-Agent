@@ -24,7 +24,7 @@ from typing import Any
 import sqlglot
 from sqlglot import exp
 
-from da_agent.agent.answer import AgentAnswer
+from da_agent.agent.answer import AgentAnswer, QueryRecord
 from da_agent.llm.types import Message
 
 RUN_SQL = "run_sql"
@@ -95,7 +95,9 @@ def _tolerance(value: float) -> float:
     return 0.5 * 10.0**-decimals
 
 
-def _traced(value: float, numbers: list[float], percent: bool) -> bool:
+def traces(value: float, numbers: list[float], percent: bool) -> bool:
+    """Whether value is one of numbers, within the rounding its written digits allow. A percent
+    may be a ratio times 100."""
     tolerance = _tolerance(value)
     candidates = numbers + ([n * 100 for n in numbers] if percent else [])
     return any(abs(value - n) <= tolerance for n in candidates)
@@ -237,8 +239,8 @@ def _overlaps(period: Period, known: list[tuple[str, str]]) -> bool:
     return False
 
 
-def _query_results(messages: list[Message]) -> list[tuple[str, list[float], list[Any]]]:
-    """Each successful query with the numbers it returned, in order."""
+def query_records(messages: list[Message]) -> list[QueryRecord]:
+    """Each successful query with the result the model saw, in order."""
     sql_by_call = {
         call.id: call.arguments.get("sql")
         for message in messages
@@ -255,9 +257,22 @@ def _query_results(messages: list[Message]) -> list[tuple[str, list[float], list
             payload = json.loads(message.content)
         except json.JSONDecodeError:
             continue
-        if isinstance(payload, dict) and "rows" in payload:
-            found.append((sql, _walk_numbers(payload["rows"]), payload["rows"]))
+        if isinstance(payload, dict) and isinstance(payload.get("rows"), list):
+            columns = payload.get("columns")
+            found.append(
+                QueryRecord(
+                    sql=sql,
+                    columns=columns if isinstance(columns, list) else [],
+                    rows=payload["rows"],
+                    truncated=bool(payload.get("truncated")),
+                )
+            )
     return found
+
+
+def _query_results(messages: list[Message]) -> list[tuple[str, list[float], list[Any]]]:
+    """Each successful query with the numbers it returned, in order."""
+    return [(q.sql, _walk_numbers(q.rows), q.rows) for q in query_records(messages)]
 
 
 def evidence_queries(answer: AgentAnswer, messages: list[Message]) -> list[str]:
@@ -270,7 +285,7 @@ def evidence_queries(answer: AgentAnswer, messages: list[Message]) -> list[str]:
     if not values:
         return [results[-1][0]]
     percent = answer.kind == "percent"
-    return [sql for sql, numbers, _ in results if any(_traced(v, numbers, percent) for v in values)]
+    return [sql for sql, numbers, _ in results if any(traces(v, numbers, percent) for v in values)]
 
 
 def _period_problems(
@@ -328,11 +343,11 @@ def _invented_inputs(answer: AgentAnswer, messages: list[Message], dialect: str)
     percent = answer.kind == "percent"
     invented: list[float] = []
     for value in answer_numbers(answer):
-        behind = [sql for sql, numbers, _ in results if _traced(value, numbers, percent)]
+        behind = [sql for sql, numbers, _ in results if traces(value, numbers, percent)]
         if not behind or any(_reads_data(sql, dialect) for sql in behind):
             continue
         typed = [n for sql in behind for n in _typed_inputs(sql, dialect)]
-        invented += [n for n in typed if not _traced(n, data, False) and n not in invented]
+        invented += [n for n in typed if not traces(n, data, False) and n not in invented]
     return invented
 
 
@@ -355,7 +370,7 @@ def check_answer(
     untraced = [
         value
         for value in answer_numbers(answer)
-        if not _traced(value, numbers, percent=answer.kind == "percent")
+        if not traces(value, numbers, percent=answer.kind == "percent")
     ]
     if untraced:
         shown = ", ".join(_show(value) for value in untraced[:5])

@@ -712,3 +712,11 @@ def test_a_resumed_run_keeps_its_charts(dataset: SqliteDataset) -> None:
     result, _ = run(dataset, [], adapter=adapter, checkpointer=saver, charts=True)
 
     assert (result.stop_reason, len(result.charts)) == ("answered", 1)
+
+
+def test_the_result_keeps_what_each_successful_query_returned(dataset: SqliteDataset) -> None:
+    script = [plan(), sql("SELECT nope FROM orders"), sql(), submit("number", 350)]
+
+    result, _ = run(dataset, script)
+
+    assert [(q.sql, q.columns, q.rows) for q in result.queries] == [(TOTAL_SQL, ["t"], [[350]])]

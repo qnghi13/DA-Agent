@@ -121,3 +121,15 @@ def test_the_spec_keeps_only_what_code_builds() -> None:
     assert set(built["data"]) == {"values"}
     assert set(built["encoding"]) == {"x", "y"}
     assert len(built["title"]) <= 120
+
+
+def test_months_and_days_get_a_time_unit_so_ticks_fall_on_them() -> None:
+    days = QueryResult(
+        columns=["day", "n"], rows=[["2026-01-01", 1], ["2026-01-02", 2]], truncated=False
+    )
+
+    by_month = spec({"mark": "line", "x": "month", "y": "revenue"})
+    by_day = spec({"mark": "line", "x": "day", "y": "n"}, days)
+
+    assert by_month["encoding"]["x"]["timeUnit"] == "yearmonth"
+    assert by_day["encoding"]["x"]["timeUnit"] == "yearmonthdate"

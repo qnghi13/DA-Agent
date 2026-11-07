@@ -13,3 +13,4 @@ Mỗi cột mốc có một ghi chú tiếng Việt, theo khung sau:
 | [02. Dữ liệu, sandbox và đo lường](02-du-lieu-sandbox-va-do-luong.md) | Ingestion, SQL trong sandbox, baseline đầu tiên |
 | [03. Graph và checkpoint](03-graph-va-checkpoint.md) | LangGraph, chạy tiếp sau sự cố, verify |
 | [04. Kiểm tra câu trả lời và độ tin cậy](04-kiem-tra-va-do-tin-cay.md) | Verify bằng code, test lỗi và injection |
+| [05. Biểu đồ, báo cáo và truy nguồn con số](05-bieu-do-va-bao-cao.md) | Vega-Lite do code dựng, báo cáo HTML, cắt RAG |

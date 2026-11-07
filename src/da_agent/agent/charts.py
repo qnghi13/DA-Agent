@@ -78,6 +78,12 @@ def _field_type(values: list[Any]) -> str:
     return "nominal"
 
 
+def _time_unit(values: list[Any]) -> str | None:
+    """Months or days as the unit, so axis ticks fall on them rather than between."""
+    lengths = {len(v) for v in values if isinstance(v, str)}
+    return {7: "yearmonth", 10: "yearmonthdate"}.get(lengths.pop()) if len(lengths) == 1 else None
+
+
 def _field(name: str) -> str:
     # Vega-Lite reads "." and "[]" in a field as nested access, so a flat column escapes them.
     for char in ("\\", ".", "[", "]"):
@@ -122,7 +128,12 @@ def chart_spec(arguments: dict[str, Any], result: QueryResult) -> dict[str, Any]
         )
 
     def encode(role: str) -> dict[str, str]:
-        return {"field": _field(names[role]), "type": types[role]}
+        encoded = {"field": _field(names[role]), "type": types[role]}
+        if types[role] == "temporal":
+            unit = _time_unit([v[names[role]] for v in values])
+            if unit:
+                encoded["timeUnit"] = unit
+        return encoded
 
     if mark == "arc":
         encoding = {"theta": encode("y"), "color": encode("x")}

@@ -35,6 +35,16 @@ class ToolStep:
 
 
 @dataclass(frozen=True)
+class QueryRecord:
+    """A successful query and the bounded result the model saw, for reports and provenance."""
+
+    sql: str
+    columns: list[str]
+    rows: list[list[Any]]
+    truncated: bool = False
+
+
+@dataclass(frozen=True)
 class AgentResult:
     answer: AgentAnswer | None = None
     stop_reason: str = "answered"
@@ -43,6 +53,8 @@ class AgentResult:
     error: str | None = None
     # Set when an interactive run paused to ask the user, with stop_reason "needs_clarification".
     question_for_user: str | None = None
+    # What each successful run_sql returned, in order. Numbers in the answer trace to these.
+    queries: list[QueryRecord] = field(default_factory=list)
 
     @property
     def charts(self) -> list[dict[str, Any]]:
