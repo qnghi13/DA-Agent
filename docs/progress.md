@@ -6,8 +6,8 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
 
 ## Next step
 
-1. Backend: queue (ADR 0017), worker and run jobs (0018), dataset lifecycle with ingest and build
-   jobs (0019) done. Next: API (keys, uploads, SSE), isolation tests, `python -m` entry points.
+1. Backend: queue (ADR 0017), worker (0018), dataset lifecycle (0019), HTTP API with keys, uploads,
+   review, runs, reports, audit, isolation (0020) done. Next: SSE, rate limits, `python -m` entries.
    Charts and reports done (ADRs 0015–0016); `--report` writes HTML (`report-sample`, $0.017).
    RAG experiment cut: plan with titles only +2 vs all rules +11 already answers it (note 05).
 2. `regression` (150, ~$0.40) only at the end, if affordable.
@@ -23,7 +23,7 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
   B8 with all checks: 17/7/6 +10 vs B7 +11, $0.11; no new check fired: noise.
 ## Done
 
-- Dev environment, design docs, ADRs 0001–0019, README, LICENSE. Scorer (`eval/scorer/`, rulebook §7, §9): 3000/3000 on the real answers. Splits in
+- Dev environment, design docs, ADRs 0001–0020, README, LICENSE. Scorer (`eval/scorer/`, rulebook §7, §9): 3000/3000 on the real answers. Splits in
   `eval/splits/splits.json`: 24 dev, 6 holdout shops; sets `bootstrap`, `smoke`, `regression`.
 - Minimal agent: `LLMClient`, SQL guard, bounded tool loop, tracing, resumable `eval/datamate`
   runner. Model: Groq `gpt-oss-20b`; `search_rules` (ADR 0008).

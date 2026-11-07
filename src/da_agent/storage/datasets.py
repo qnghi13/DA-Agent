@@ -26,6 +26,14 @@ class DatasetStateError(Exception):
     The message is safe to show to the workspace."""
 
 
+class DatasetNotFoundError(DatasetStateError):
+    """No such dataset in this workspace."""
+
+
+class InvalidSpecError(DatasetStateError):
+    """An edited spec failed validation."""
+
+
 @dataclass(frozen=True)
 class DatasetRecord:
     id: UUID
@@ -37,6 +45,7 @@ class DatasetRecord:
     summary: dict[str, Any]
     documents: list[dict[str, str]]
     error: str | None
+    files: list[dict[str, Any]]
 
 
 def normalized_spec(spec: dict[str, Any]) -> dict[str, Any]:
@@ -48,27 +57,46 @@ def normalized_spec(spec: dict[str, Any]) -> dict[str, Any]:
             f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}"
             for e in error.errors()[:MAX_SPEC_ERRORS]
         )
-        raise DatasetStateError(f"the edited spec is invalid: {problems}") from error
+        raise InvalidSpecError(f"the edited spec is invalid: {problems}") from error
 
 
 class DatasetStore:
     def __init__(self, conn: psycopg.Connection) -> None:
         self._conn = conn
 
-    def create(self, workspace_id: UUID, name: str, description: str) -> UUID:
+    def create(
+        self,
+        workspace_id: UUID,
+        name: str,
+        description: str,
+        *,
+        dataset_id: UUID | None = None,
+        files: list[dict[str, Any]] | None = None,
+    ) -> UUID:
         return returned_id(
             self._conn.execute(
-                "INSERT INTO datasets (workspace_id, name, description) VALUES (%s, %s, %s) "
-                "RETURNING id",
-                (workspace_id, name, description),
+                "INSERT INTO datasets (id, workspace_id, name, description, files) "
+                "VALUES (coalesce(%s, gen_random_uuid()), %s, %s, %s, %s) RETURNING id",
+                (dataset_id, workspace_id, name, description, Jsonb(files or [])),
             )
         )
+
+    def in_workspace(self, workspace_id: UUID) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT id, name, status, created_at FROM datasets WHERE workspace_id = %s "
+            "ORDER BY created_at DESC LIMIT 200",
+            (workspace_id,),
+        ).fetchall()
+        return [
+            {"id": str(r[0]), "name": r[1], "status": r[2], "created_at": r[3].isoformat()}
+            for r in rows
+        ]
 
     def get(self, dataset_id: UUID, workspace_id: UUID) -> DatasetRecord | None:
         with self._conn.cursor(row_factory=class_row(DatasetRecord)) as cursor:
             return cursor.execute(
                 "SELECT id, workspace_id, name, description, status, spec, summary, documents, "
-                "error FROM datasets WHERE id = %s AND workspace_id = %s",
+                "error, files FROM datasets WHERE id = %s AND workspace_id = %s",
                 (dataset_id, workspace_id),
             ).fetchone()
 
@@ -107,7 +135,7 @@ class DatasetStore:
                 (dataset_id, workspace_id),
             ).fetchone()
             if row is None:
-                raise DatasetStateError("dataset not found")
+                raise DatasetNotFoundError("dataset not found")
             status, proposed = row
             if status != "proposed":
                 raise DatasetStateError(

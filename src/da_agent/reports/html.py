@@ -305,6 +305,14 @@ def _script_hash(script: str) -> str:
     return "'sha256-" + base64.b64encode(digest).decode() + "'"
 
 
+# Sent in the page and, by the API, as a header: only the pinned libraries and the inline script
+# that draws charts may run, and nothing may be fetched or submitted.
+CONTENT_SECURITY_POLICY = (
+    "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; "
+    f"form-action 'none'; script-src {CDN} {_script_hash(DRAW_CHARTS)}"
+)
+
+
 def render_report(result: AgentResult, *, question: str, as_of: str | None = None) -> str:
     """The report as one HTML document. Charts need the pinned libraries from the CDN; without
     them, the report still shows each chart's data and every number's source."""
@@ -318,16 +326,12 @@ def render_report(result: AgentResult, *, question: str, as_of: str | None = Non
             for path, digest in CHART_LIBRARIES
         )
         scripts += f"<script>{DRAW_CHARTS}</script>"
-    policy = (
-        "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; "
-        f"form-action 'none'; script-src {CDN} {_script_hash(DRAW_CHARTS)}"
-    )
     as_of_text = f" · data as of {_e(as_of)}" if as_of else ""
     return (
         "<!doctype html>\n"
         '<html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        f'<meta http-equiv="Content-Security-Policy" content="{policy}">'
+        f'<meta http-equiv="Content-Security-Policy" content="{CONTENT_SECURITY_POLICY}">'
         f"<title>Analysis report</title><style>{STYLE}</style></head><body><main>"
         f"<h1>{_e(question)}</h1>"
         f'<p class="meta">{len(result.queries)} queries · stop reason '
