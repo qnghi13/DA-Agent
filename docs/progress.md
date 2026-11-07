@@ -6,8 +6,8 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
 
 ## Next step
 
-1. Reliability item 3: parse rates of the columns used, then failure-path tests and an
-   injection suite. Measure once at the end of the phase on one 30-question set.
+1. Reliability item 4: failure-path tests (429, timeout, tool crash, budget), then an injection
+   suite. Measure once at the end of the phase on one 30-question set.
 2. `regression` (150, ~$0.40) only at the end, if affordable.
 ## Baselines (`bootstrap`, biz_123, 30 questions; correct / wrong / abstained, score)
 
@@ -18,8 +18,8 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
   +4), B5 18/4/8 +14 (from +13). `smoke` (19 shops) S1 13/6/11 +7, $0.06: Days 3–6 closed.
 - Graph (`--agent graph`, plan reads all rules): B7 18/7/5 +11, C4 16/7/7 +9, S3 18/7/5 +11 = +31,
   same total as the loop (+31), ~13% more tokens. Plan with rule titles only gave +2 on bootstrap.
-- Replayed offline on saved graph runs, 0 correct answers flagged: period check (73 runs; date
-  ranges in build and describe, `-v6` older) and join fan-out (`agent/fanout.py`, 70 runs, 26 probes).
+- Verify checks replayed offline on saved graph runs, 0 correct answers flagged: period (73 runs,
+  `-v6` older); fan-out and unreadable values (`agent/data_checks.py`, ADR 0014; 70 runs, 28 probes).
 ## Done
 
 - Dev environment, design docs, ADRs 0001–0011, README, LICENSE. Scorer (`eval/scorer/`, rulebook §7, §9): 3000/3000 on the real answers. Splits in

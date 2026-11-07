@@ -499,3 +499,35 @@ def test_a_sum_that_a_join_inflates_is_repaired(tmp_path: Path) -> None:
     assert (result.stop_reason, result.answer.value) == ("answered", 350)
     repair = user_texts(adapter.requests[3])[-1]
     assert "orders" in repair and "3" in repair
+
+
+def test_an_answer_that_leaves_out_unreadable_values_is_withheld(tmp_path: Path) -> None:
+    path = tmp_path / "loaded.sqlite"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        "CREATE TABLE orders (total INTEGER, _source TEXT, _row INTEGER);"
+        "INSERT INTO orders VALUES (100, 'f', 1), (NULL, 'f', 2), (250, 'f', 3);"
+        "CREATE TABLE _quarantine (table_name TEXT, column_name TEXT, _source TEXT, _row INTEGER,"
+        " raw_value TEXT);"
+        "INSERT INTO _quarantine VALUES ('orders', 'total', 'f', 2, '-1tr040');"
+    )
+    connection.commit()
+    connection.close()
+
+    class Loaded:
+        dialect = "SQLite"
+        inner = SqliteDataset(path)
+
+        def describe(self) -> list:
+            [table] = [t for t in self.inner.describe() if t.name == "orders"]
+            columns = [replace(c, unparsed=1) if c.name == "total" else c for c in table.columns]
+            return [replace(table, columns=columns)]
+
+        def query(self, sql: str):
+            return self.inner.query(sql)
+
+    result, adapter = run(Loaded(), [plan(), sql(), submit("number", 350)])  # type: ignore[arg-type]
+
+    assert (result.stop_reason, result.answer) == ("unreadable_values", None)
+    assert "orders.total" in (result.error or "")
+    assert len(adapter.requests) == 3

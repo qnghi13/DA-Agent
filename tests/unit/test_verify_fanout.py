@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from da_agent.agent.fanout import fanout_problems
+from da_agent.agent.data_checks import fanout_problems
 from da_agent.storage.sqlite_dataset import SqliteDataset
 
 

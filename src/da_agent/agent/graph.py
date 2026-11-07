@@ -33,7 +33,7 @@ from da_agent.agent.answer import (
     ToolStep,
     parse_answer,
 )
-from da_agent.agent.fanout import fanout_problems
+from da_agent.agent.data_checks import fanout_problems, unreadable_problems
 from da_agent.agent.loop_types import AgentLimits, Document
 from da_agent.agent.planning import (
     PLAN_SPEC,
@@ -266,11 +266,18 @@ def verify_node(state: AgentState, runtime: Runtime[AgentContext]) -> dict[str, 
     queries_ok = sum(1 for s in state.get("steps", []) if s["tool"] == "run_sql" and s["ok"])
     context = runtime.context
     problems = check_answer(answer, messages, queries_ok, context.ranges, context.dialect)
+    span = trace.get_current_span()
     if not problems and answer.kind != "unanswerable":
-        # Runs read-only probes in the sandbox, so it comes after the free checks.
+        # Probes run read-only queries in the sandbox, so they come after the free checks.
         evidence = evidence_queries(answer, messages)
         problems = fanout_problems(evidence, context.dataset, context.dialect)
-    trace.get_current_span().set_attribute("da_agent.verify.problems", len(problems))
+        if not problems:
+            # The model cannot repair values the build could not read, so this one only stops.
+            unreadable = unreadable_problems(evidence, context.dataset, context.dialect)
+            span.set_attribute("da_agent.verify.unreadable", bool(unreadable))
+            if unreadable:
+                return {"verified": False, **_stop("unreadable_values", "; ".join(unreadable))}
+    span.set_attribute("da_agent.verify.problems", len(problems))
     if not problems:
         return {"verified": True}
     repairs = state.get("repairs", 0)

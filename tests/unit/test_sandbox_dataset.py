@@ -19,7 +19,7 @@ REPORT = BuildReport(
                 ColumnBuild(
                     name="status", source="status", type="text", values=["done", "cancelled"]
                 ),
-                ColumnBuild(name="total", source="Tổng", type="money"),
+                ColumnBuild(name="total", source="Tổng", type="money", non_blank=100, parsed=97),
                 ColumnBuild(
                     name="day",
                     source="Ngày",
@@ -111,3 +111,11 @@ def test_describe_keeps_the_period_a_date_column_covers() -> None:
 
     assert day.value_range == ("2025-01-01", "2026-06-28")
     assert table.columns[0].value_range is None
+
+
+def test_describe_counts_values_that_could_not_be_read() -> None:
+    dataset = SandboxDataset(FakeRunner(SqlResult(status="ok")), "shop_1", REPORT)
+
+    [table] = dataset.describe()
+
+    assert [c.unparsed for c in table.columns] == [0, 0, 3, 0]

@@ -171,10 +171,12 @@ Mostly code, not LLM self-assessment ([ADR 0007](adr/0007-code-first-verificatio
   often each table's rows appear with how many there are (`count(rowid)` against
   `count(DISTINCT rowid)`). An aggregate fails only when every table it reads repeats, so a
   lookup price repeated per line passes. A probe that errors is skipped.
+- No row the queries read has a value the build could not parse. Clean rows keep `_source` and
+  `_row`, and `_quarantine` lists failed values by the same keys, so a probe counts them inside
+  the query's rows. A hit withholds the answer without a repair ([ADR 0014](adr/0014-probe-checks-in-verify.md)).
 
 Planned for the reliability phase:
 
-- Parse rates of the columns used are acceptable.
 - Important answers are recomputed a second way.
 
 ### Memory and RAG
@@ -202,6 +204,7 @@ Reports are standalone HTML, and every number links to the query that produced i
 | Tool or sandbox crash | Structured tool error returned to the model, within the iteration limit |
 | Budget exceeded | Stop cleanly with partial work and a clear status |
 | Verification keeps failing | Abstain after 2 repair attempts instead of returning an unverified answer |
+| Answer reads values the build could not parse | Withhold it, naming the column and the row count |
 | Malformed upload | Reject or quarantine with a report that the user can read |
 
 ## Open questions

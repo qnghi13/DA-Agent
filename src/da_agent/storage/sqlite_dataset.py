@@ -37,6 +37,9 @@ class Column:
     values: tuple[str, ...] = ()
     # The earliest and latest value of a date column, when the dataset knows them.
     value_range: tuple[str, str] | None = None
+    # Values that could not be read at load time. They are empty in the table and listed in
+    # _quarantine by source row.
+    unparsed: int = 0
 
 
 @dataclass(frozen=True)

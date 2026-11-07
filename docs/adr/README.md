@@ -18,3 +18,4 @@ decision, add a new ADR and mark the old one as superseded.
 | [0011](0011-sql-per-request-sandbox.md) | Agent SQL runs in a new sandbox per query, called as a library | Accepted |
 | [0012](0012-schema-names-values-and-double-entries.md) | Keep source column names, list known values, and remove proven double entries | Accepted |
 | [0013](0013-agent-graph.md) | The agent graph: one plan call, per-turn checkpoints, and code verification | Accepted |
+| [0014](0014-probe-checks-in-verify.md) | Verification probes the data for join fan-out and unreadable values | Accepted |

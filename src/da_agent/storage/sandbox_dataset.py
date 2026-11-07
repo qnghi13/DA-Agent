@@ -56,6 +56,7 @@ class SandboxDataset:
                         c.source,
                         tuple(c.values),
                         _range(c),
+                        max(c.non_blank - c.parsed, 0),
                     )
                     for c in table.columns
                 ],
