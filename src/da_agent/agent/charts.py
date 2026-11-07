@@ -127,12 +127,15 @@ def chart_spec(arguments: dict[str, Any], result: QueryResult) -> dict[str, Any]
             f"y names {names['y']!r}, which is not numeric; y must be a numeric column"
         )
 
-    def encode(role: str) -> dict[str, str]:
-        encoded = {"field": _field(names[role]), "type": types[role]}
+    def encode(role: str) -> dict[str, Any]:
+        encoded: dict[str, Any] = {"field": _field(names[role]), "type": types[role]}
         if types[role] == "temporal":
             unit = _time_unit([v[names[role]] for v in values])
             if unit:
                 encoded["timeUnit"] = unit
+        elif types[role] == "nominal" and role == "x" and mark != "arc":
+            # Keep the order of the query rows: Vega-Lite would sort labels alphabetically.
+            encoded["sort"] = None
         return encoded
 
     if mark == "arc":

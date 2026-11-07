@@ -208,3 +208,16 @@ def test_large_numbers_are_grouped_and_years_are_not() -> None:
 
     assert page.links == [("#q1-r1-c2", "3,630,000")]
     assert "2026" in page.text
+
+
+def test_a_year_in_the_explanation_is_text_unless_a_query_returned_it() -> None:
+    reason = "Revenue for June 2026 was 350."
+
+    page = report(result(AgentAnswer("number", 350, reason), [TOTAL]))
+
+    assert page.untraced == []
+    assert ("#q1-r1-c1", "350") in page.links
+    counted = QueryRecord(sql="SELECT 2026 AS n", columns=["n"], rows=[[2026]])
+    assert ("#q1-r1-c1", "2026") in report(
+        result(AgentAnswer("text", "x", reason), [counted])
+    ).links

@@ -31,7 +31,7 @@ def test_a_bar_chart_holds_the_query_rows_and_typed_encodings() -> None:
     assert built["title"] == "Revenue by channel"
     assert built["mark"]["type"] == "bar"
     assert built["data"]["values"][1] == {"month": "2026-02", "revenue": 250, "channel": "web"}
-    assert built["encoding"]["x"] == {"field": "channel", "type": "nominal"}
+    assert built["encoding"]["x"] == {"field": "channel", "type": "nominal", "sort": None}
     assert built["encoding"]["y"] == {"field": "revenue", "type": "quantitative"}
 
 
@@ -133,3 +133,10 @@ def test_months_and_days_get_a_time_unit_so_ticks_fall_on_them() -> None:
 
     assert by_month["encoding"]["x"]["timeUnit"] == "yearmonth"
     assert by_day["encoding"]["x"]["timeUnit"] == "yearmonthdate"
+
+
+def test_labels_keep_the_order_of_the_query_rows() -> None:
+    built = spec({"mark": "bar", "x": "channel", "y": "revenue"})
+
+    assert built["encoding"]["x"]["sort"] is None
+    assert "sort" not in spec({"mark": "line", "x": "month", "y": "revenue"})["encoding"]["x"]

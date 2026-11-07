@@ -130,8 +130,17 @@ class _Numbers:
         self.traced = 0
         self.untraced = 0
 
-    def link(self, shown: str, candidates: list[float], percent: bool, count: bool) -> str:
+    def link(
+        self,
+        shown: str,
+        candidates: list[float],
+        percent: bool,
+        count: bool,
+        plain_if_untraced: bool = False,
+    ) -> str:
         cell = next((c for value in candidates if (c := _source(value, self.cells, percent))), None)
+        if cell is None and plain_if_untraced:
+            return _e(shown)
         if count:
             self.traced += cell is not None
             self.untraced += cell is None
@@ -162,7 +171,11 @@ class _Numbers:
             percent = token.endswith("%")
             value = _read_number(digits)
             candidates = [] if value is None else [value]
-            parts.append(self.link(digits, candidates, percent, count=False))
+            # A year such as "June 2026" is wording, not a result, unless a query returned it.
+            year = re.fullmatch(r"(19|20)\d\d", digits) is not None and not percent
+            parts.append(
+                self.link(digits, candidates, percent, count=False, plain_if_untraced=year)
+            )
             parts.append("%" if percent else "")
         parts.append(_e(text[last:]))
         return "".join(parts)

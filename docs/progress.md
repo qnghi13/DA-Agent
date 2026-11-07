@@ -2,12 +2,12 @@
 
 Loaded into every session, so keep it under 60 lines. Replace stale content instead of appending.
 **Last updated:** 2026-11-08
-**Phase:** Days 16–17, Backend ([plan §6](plan.md#6-roadmap)). Days 14–15 closed (note 05).
+**Phase:** Days 18–19, React ([plan §6](plan.md#6-roadmap)). Days 16–17 closed (note 06).
 
 ## Next step
 
-1. Backend: queue (ADR 0017), worker (0018), datasets (0019), API (0020), SSE (0021), rate and
-   money limits with a Postgres ledger (0022) done. Next: `python -m` entries, an end-to-end run.
+1. Backend done (ADRs 0017–0022, README). End to end with Groq over HTTP on synthetic orders:
+   spec ok, June revenue right, report linked, chart drawn, $0.0014. Next: read plan §6 for React.
    Charts and reports done (ADRs 0015–0016); `--report` writes HTML (`report-sample`, $0.017).
    RAG experiment cut: plan with titles only +2 vs all rules +11 already answers it (note 05).
 2. `regression` (150, ~$0.40) only at the end, if affordable.
@@ -51,7 +51,7 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
 - Before Day 20: Compose plugin. Before pushing: `gh` or a repo. **Before going public:** check the organizer's data rules, whether `cccd` and phone are fake, the
   licenses of skills in `.agents/`, and the `brainstorming` scripts.
 
-## Spend so far: about $1.89 (agent runs $1.45, spec proposals $0.44).
+## Spend so far: about $1.89 (agent runs $1.45, spec proposals $0.44, backend demo $0.0014).
 ## Watch out
 
 - A run of 30 questions costs about $0.05–0.10. `gpt-oss-20b` varies run to run: compare totals.

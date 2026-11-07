@@ -14,3 +14,4 @@ Mỗi cột mốc có một ghi chú tiếng Việt, theo khung sau:
 | [03. Graph và checkpoint](03-graph-va-checkpoint.md) | LangGraph, chạy tiếp sau sự cố, verify |
 | [04. Kiểm tra câu trả lời và độ tin cậy](04-kiem-tra-va-do-tin-cay.md) | Verify bằng code, test lỗi và injection |
 | [05. Biểu đồ, báo cáo và truy nguồn con số](05-bieu-do-va-bao-cao.md) | Vega-Lite do code dựng, báo cáo HTML, cắt RAG |
+| [06. Backend: hàng đợi, worker, API và giới hạn](06-backend-va-hang-doi.md) | Queue trên Postgres, worker, API, SSE, rate và budget |
