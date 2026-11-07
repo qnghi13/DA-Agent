@@ -610,3 +610,33 @@ def test_the_spec_description_of_a_row_reaches_the_report(tmp_path: Path, out: P
     result = build(raw / RAW_DATABASE, spec, report, out)
 
     assert result.tables[0].description == "one order line"
+
+
+def test_date_columns_report_the_range_they_cover(tmp_path: Path, out: Path) -> None:
+    raw, report = raw_upload(
+        tmp_path,
+        {
+            "t.csv": "d,at,s\n2025-03-02,2025-03-02 10:00:00,x\n"
+            "2025-01-05,2026-06-28 21:15:00,y\n,,z\n"
+        },
+    )
+    spec = DatasetSpec(
+        tables=[
+            TableSpec(
+                source="t",
+                name="t",
+                columns=[
+                    ColumnSpec(source="d", name="d", type="date"),
+                    ColumnSpec(source="at", name="at", type="datetime"),
+                    ColumnSpec(source="s", name="s"),
+                ],
+            )
+        ]
+    )
+
+    result = build(raw / RAW_DATABASE, spec, report, out)
+
+    d, at, s = result.tables[0].columns
+    assert (d.min_value, d.max_value) == ("2025-01-05", "2025-03-02")
+    assert (at.min_value, at.max_value) == ("2025-03-02 10:00:00", "2026-06-28 21:15:00")
+    assert (s.min_value, s.max_value) == (None, None)

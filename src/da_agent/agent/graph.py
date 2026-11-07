@@ -51,7 +51,7 @@ from da_agent.agent.prompts import (
 )
 from da_agent.agent.rules import RuleIndex
 from da_agent.agent.tools import SUBMIT_ANSWER, Dataset, describe_tables, execute_tool, tool_specs
-from da_agent.agent.verify import check_answer
+from da_agent.agent.verify import DateRanges, check_answer, date_ranges
 from da_agent.llm.client import LLMClient
 from da_agent.llm.types import (
     BudgetExceededError,
@@ -100,6 +100,9 @@ class AgentContext:
     tracer: Tracer
     rules: RuleIndex
     tools: list[ToolSpec]
+    # The period each date column covers, for the period check in verify.
+    ranges: DateRanges
+    dialect: str
 
 
 Node = Callable[[AgentState, Runtime[AgentContext]], dict[str, Any]]
@@ -260,7 +263,9 @@ def verify_node(state: AgentState, runtime: Runtime[AgentContext]) -> dict[str, 
     answer = AgentAnswer(**(state.get("proposed") or {}))
     messages = [Message.model_validate(m) for m in state.get("messages", [])]
     queries_ok = sum(1 for s in state.get("steps", []) if s["tool"] == "run_sql" and s["ok"])
-    problems = check_answer(answer, messages, queries_ok)
+    problems = check_answer(
+        answer, messages, queries_ok, runtime.context.ranges, runtime.context.dialect
+    )
     if not problems:
         return {"verified": True}
     repairs = state.get("repairs", 0)
@@ -380,6 +385,7 @@ def run_graph(
     limits = limits or AgentLimits()
     tracer = tracer or trace.get_tracer("da_agent.agent")
     rules = RuleIndex(documents)
+    dialect = getattr(dataset, "dialect", "SQLite")
     context = AgentContext(
         run_id=run_id,
         dataset=dataset,
@@ -389,7 +395,11 @@ def run_graph(
         interactive=interactive,
         tracer=tracer,
         rules=rules,
-        tools=tool_specs(rules, getattr(dataset, "dialect", "SQLite")),
+        tools=tool_specs(rules, dialect),
+        ranges=date_ranges(
+            [(c.name, c.value_range) for table in dataset.describe() for c in table.columns]
+        ),
+        dialect=dialect.lower(),
     )
     app = build_graph(checkpointer)
     config = {"configurable": {"thread_id": thread_id or run_id}}

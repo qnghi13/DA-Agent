@@ -74,6 +74,8 @@ class ColumnBuild(BaseModel):
     values: list[str] = Field(
         default_factory=list, description="Every distinct value of a text column with few of them."
     )
+    min_value: str | None = Field(default=None, description="Earliest value of a date column.")
+    max_value: str | None = Field(default=None, description="Latest value of a date column.")
 
     @property
     def parse_rate(self) -> float:
@@ -384,6 +386,8 @@ def _build_table(
         checked = _check_column(connection, table.name, stage, column)
         if column.type == "text":
             checked.values = _known_values(connection, table.name, column.name)
+        if column.type in ("date", "datetime"):
+            checked.min_value, checked.max_value = _value_range(connection, table.name, column.name)
         report.columns.append(checked)
     connection.execute(f"DROP TABLE {q(stage)}")
     connection.execute(f"DROP TABLE {q(marked)}")
@@ -426,6 +430,21 @@ def _distinct_row_key(
         return []
     finally:
         connection.execute(f"DROP TABLE {distinct}")
+
+
+def _value_range(
+    connection: duckdb.DuckDBPyConnection, table: str, column: str
+) -> tuple[str | None, str | None]:
+    """The earliest and latest value, so the agent and verification know the period covered."""
+    row = connection.execute(
+        f"SELECT min({q(column)}), max({q(column)}) FROM {q(table)}"
+    ).fetchone()
+    if row is None:
+        return None, None
+    return (
+        str(row[0]) if row[0] is not None else None,
+        str(row[1]) if row[1] is not None else None,
+    )
 
 
 def _known_values(connection: duckdb.DuckDBPyConnection, table: str, column: str) -> list[str]:

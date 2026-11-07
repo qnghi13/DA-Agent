@@ -105,6 +105,8 @@ class Dataset(Protocol):
 
 def _describe_column(column: Column) -> str:
     text = f"{column.name}:{column.type}"
+    if column.value_range is not None:
+        text += f" {column.value_range[0]}..{column.value_range[1]}"
     if column.source and column.source != column.name:
         text += f" (source {column.source})"
     return text

@@ -8,7 +8,7 @@ the build report, so describing the dataset starts no container.
 from pathlib import Path
 from typing import Protocol
 
-from da_agent.ingestion.build import BuildReport
+from da_agent.ingestion.build import BuildReport, ColumnBuild
 from da_agent.runner.runner import SqlResult, SqlRun
 from da_agent.security.sql_guard import SqlRejectedError, validate_select
 from da_agent.storage.sqlite_dataset import Column, QueryError, QueryResult, TableInfo
@@ -24,6 +24,12 @@ SQL_TYPES = {
     "datetime": "TIMESTAMP",
     "boolean": "BOOLEAN",
 }
+
+
+def _range(column: ColumnBuild) -> tuple[str, str] | None:
+    if column.min_value is None or column.max_value is None:
+        return None
+    return column.min_value, column.max_value
 
 
 class QueryRunner(Protocol):
@@ -44,7 +50,13 @@ class SandboxDataset:
                 table.name,
                 table.rows,
                 [
-                    Column(c.name, SQL_TYPES.get(c.type, "VARCHAR"), c.source, tuple(c.values))
+                    Column(
+                        c.name,
+                        SQL_TYPES.get(c.type, "VARCHAR"),
+                        c.source,
+                        tuple(c.values),
+                        _range(c),
+                    )
                     for c in table.columns
                 ],
                 table.description,

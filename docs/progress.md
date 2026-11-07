@@ -2,13 +2,13 @@
 
 Loaded into every session, so keep it under 60 lines. Replace stale content instead of appending.
 **Last updated:** 2026-11-07
-**Phase:** Days 7–10, Agent workflow ([plan §6](plan.md#6-roadmap)). LangGraph graph done (ADR 0013), uncommitted.
+**Phase:** Days 11–13, Reliability ([plan §6](plan.md#6-roadmap)). Graph (ADR 0013) uncommitted.
 
 ## Next step
 
-1. `regression` (150 questions) baseline with `--agent graph`, about $0.40 (ask first): Days 7–10
-   exit criterion. Then decide whether `graph` becomes the default agent.
-2. Then reliability: period, join fan-out, and recomputation checks in `verify`.
+1. Reliability item 2: join fan-out check in `verify`, then parse rates, failure-path tests, and
+   an injection suite. Measure once at the end of the phase on one 30-question set.
+2. `regression` (150, ~$0.40) only at the end, if affordable.
 ## Baselines (`bootstrap`, biz_123, 30 questions; correct / wrong / abstained, score)
 
 - A `pos.sqlite` −5; B sandbox −11; B3 source names −9; **B4 dedupe 16/3/11 +13.**
@@ -18,6 +18,8 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
   +4), B5 18/4/8 +14 (from +13). `smoke` (19 shops) S1 13/6/11 +7, $0.06: Days 3–6 closed.
 - Graph (`--agent graph`, plan reads all rules): B7 18/7/5 +11, C4 16/7/7 +9, S3 18/7/5 +11 = +31,
   same total as the loop (+31), ~13% more tokens. Plan with rule titles only gave +2 on bootstrap.
+- Period check (date ranges in build and describe, SQL periods via sqlglot): replayed offline on 73
+  answered graph runs, 0 correct answers flagged. `datasets-dev` rebuilt with ranges (`-v6` older).
 ## Done
 
 - Dev environment, design docs, ADRs 0001–0011, README, LICENSE. Scorer (`eval/scorer/`, rulebook §7, §9): 3000/3000 on the real answers. Splits in
@@ -32,10 +34,8 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
   after the last attempt are dropped. Measured with `eval/ingestion/` (labels, synthetic, scorer).
   `datasets-dev/` (prepare-v4, biz_109 and biz_124 from v4b): 24/24 ok, parse 99.98%+, exclusion
   precision and recall 100% on 2,032 labelled rows.
-- Agent SQL in the sandbox (ADR 0011): DuckDB guard, locked read-only engine, `SqlRun` per query
-  (~0.7 s), `SandboxDataset`, `open_prepared_shop`, `run --datasets-dir/--shops`. `calendar.csv`
-  travels with each upload; `prepare --reuse-specs` rebuilds without the model. `datasets-dev/`
-  has the calendar; `datasets-dev-noexclude/` is the same without exclusion; `-v1`/`-v2` are older.
+- Agent SQL in the sandbox (ADR 0011): DuckDB guard, read-only engine, a container per query
+  (~0.7 s), `run --datasets-dir/--shops`. `prepare --reuse-specs` rebuilds without the model.
 - Loop: turn notice at 3 left, last turn offers only `submit_answer`; Groq `failed_generation` is
   a malformed call. ADR 0012: source column names kept, known values listed, exact repeats removed
   when a 1–2 column key proves them (4 dev shops; 3 keyless logs kept). Results keep tool errors.
@@ -54,6 +54,6 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
 ## Watch out
 
 - A run of 30 questions costs about $0.05–0.10. `gpt-oss-20b` varies run to run: compare totals.
+  Scorer: a wrong `type` is wrong; table columns match by name only if all names match.
 - Do not regenerate `splits.json`, and never read data from its holdout shops. The scorer gets a
   holdout option on Day 21. `eval/reports/` is gitignored, so publish only aggregates in `docs/eval/`.
-- Scorer interpretations: a wrong `type` is wrong; table columns match by name only if all names match.

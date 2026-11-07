@@ -35,6 +35,8 @@ class Column:
     source: str | None = None
     # Every distinct value, for a text column with few of them.
     values: tuple[str, ...] = ()
+    # The earliest and latest value of a date column, when the dataset knows them.
+    value_range: tuple[str, str] | None = None
 
 
 @dataclass(frozen=True)

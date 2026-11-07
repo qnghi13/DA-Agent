@@ -453,6 +453,7 @@ class DescribedDataset:
         columns = [
             Column("tri_gia", "BIGINT", source="TriGia"),
             Column("status", "VARCHAR", source="status", values=("completed", "cancelled")),
+            Column("day", "DATE", value_range=("2025-01-01", "2026-06-28")),
         ]
         return [TableInfo("orders", 3, columns, description="one order line")]
 
@@ -470,6 +471,7 @@ def test_describe_dataset_shows_source_names_and_known_values() -> None:
     assert "(source status)" not in table["columns"]
     assert table["values"] == {"status": ["completed", "cancelled"]}
     assert table["row"] == "one order line"
+    assert "day:DATE 2025-01-01..2026-06-28" in table["columns"]
 
 
 def test_duckdb_run_sql_points_to_case_and_accent_blind_matching() -> None:

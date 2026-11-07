@@ -55,7 +55,8 @@ Moved to [architecture.md](architecture.md). Security controls are in
   end.
   Shops already read closely during design stay in dev, so holdout stays unseen.
 - **Question sets within dev:** `smoke` (30), `regression` (150, stratified by answer type and
-  shop), and the full set only when budget allows.
+  shop), and the full set only when budget allows. With little budget, a change is measured on the
+  30-question set it affects, and `regression` runs once at the end if money allows.
 - **Metrics:** score; correct, wrong, and abstain rates; cost and latency per question; tool errors;
   repair count; failure cause.
 - **Beyond DataMate:** 1–2 non-retail datasets to check generality, plus injection and sandbox escape
@@ -102,7 +103,7 @@ only generated demo data.
 |---|---|---|
 | **1–2 Foundation** | Git, tooling, docs, ADRs, threat model, scorer and eval splits, `LLMClient`, tracing, cost ledger, minimal agent on biz_123 | Scorer has tests. `smoke` produces a score and cost. Traces open in Phoenix. Free model chosen |
 | **3–6 Data and tools** | Ingestion, `DatasetSpec`, DuckDB, SQL guard, Runner and sandbox | 30/30 shops load, with parse and quarantine reports. All sandbox escape tests are blocked. `smoke` baseline across several shops |
-| **7–10 Agent workflow** | Full graph, checkpoints, interrupts, memory, tools, `regression` baseline | Killing a worker mid-run resumes without repeating finished steps. Clarify and abstain behave correctly. Baseline exists |
+| **7–10 Agent workflow** | Full graph, checkpoints, interrupts, memory, tools, baseline on `bootstrap`, `smoke`, and 5 subtotal shops (90 questions; `regression` waits for budget, 2026-11-07) | Killing a worker mid-run resumes without repeating finished steps. Clarify and abstain behave correctly. Baseline exists |
 | **11–13 Reliability** | Verification, repair loop, retries, cost limits, injection suite, failure analysis | Before and after verification comparison on `regression`. Simulated 429s, timeouts, and tool crashes are handled. Injection causes no harm |
 | **14–15 Charts, reports, RAG** | Vega-Lite, HTML reports, retrieval experiment | Sample report traces every number. RAG compared with the full rulebook in the prompt |
 | **16–17 Backend** | FastAPI, workspace + API key, job queue, SSE, audit log, rate limit | Upload and ask through the API end to end. Workspace isolation tests pass |

@@ -20,7 +20,13 @@ REPORT = BuildReport(
                     name="status", source="status", type="text", values=["done", "cancelled"]
                 ),
                 ColumnBuild(name="total", source="Tổng", type="money"),
-                ColumnBuild(name="day", source="Ngày", type="date"),
+                ColumnBuild(
+                    name="day",
+                    source="Ngày",
+                    type="date",
+                    min_value="2025-01-01",
+                    max_value="2026-06-28",
+                ),
             ],
         ),
         TableBuild(name="broken", source="x", error="build failed"),
@@ -95,3 +101,13 @@ def test_describe_keeps_what_one_row_is() -> None:
     [table] = dataset.describe()
 
     assert table.description == "one order line"
+
+
+def test_describe_keeps_the_period_a_date_column_covers() -> None:
+    dataset = SandboxDataset(FakeRunner(SqlResult(status="ok")), "shop_1", REPORT)
+
+    [table] = dataset.describe()
+    day = table.columns[-1]
+
+    assert day.value_range == ("2025-01-01", "2026-06-28")
+    assert table.columns[0].value_range is None

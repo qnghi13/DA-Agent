@@ -5,6 +5,7 @@ A scripted model drives every test, and the dataset is a real read-only SQLite f
 
 import json
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -436,3 +437,44 @@ def test_the_plan_reads_on_demand_rules_in_full() -> None:
     prompt = plan_system_prompt([topics], interactive=False)
 
     assert "Revenue is the sum of line values." in prompt
+
+
+class DatedDataset:
+    """Orders with a date column whose range is known, as a prepared dataset reports it."""
+
+    dialect = "SQLite"
+
+    def __init__(self, path: Path) -> None:
+        connection = sqlite3.connect(path)
+        connection.executescript(
+            "CREATE TABLE orders (id INTEGER, total INTEGER, order_date TEXT);"
+            "INSERT INTO orders VALUES (1, 100, '2025-01-01'), (2, 250, '2026-06-28');"
+        )
+        connection.commit()
+        connection.close()
+        self.inner = SqliteDataset(path)
+
+    def describe(self) -> list:
+        [table] = self.inner.describe()
+        columns = [
+            replace(c, value_range=("2025-01-01", "2026-06-28")) if c.name == "order_date" else c
+            for c in table.columns
+        ]
+        return [replace(table, columns=columns)]
+
+    def query(self, sql: str):
+        return self.inner.query(sql)
+
+
+def test_an_answer_over_a_period_without_data_is_repaired_into_unanswerable(
+    tmp_path: Path,
+) -> None:
+    august = (
+        "SELECT count(*) AS n FROM orders WHERE order_date BETWEEN '2026-08-01' AND '2026-08-31'"
+    )
+    script = [plan(), sql(august), submit("number", 0), submit("unanswerable", reason="no data")]
+
+    result, adapter = run(DatedDataset(tmp_path / "dated.sqlite"), script)  # type: ignore[arg-type]
+
+    assert (result.stop_reason, result.answer.kind) == ("answered", "unanswerable")
+    assert any("2026-06-28" in t for t in user_texts(adapter.requests[-1]))
