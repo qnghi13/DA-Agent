@@ -8,6 +8,7 @@ run_events as the graph runs.
 
 import threading
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 from uuid import UUID
 
@@ -24,6 +25,7 @@ from da_agent.llm.client import LLMClient
 from da_agent.storage.db import connect, search_path_option
 from da_agent.storage.events import RunEvents
 from da_agent.storage.jobs import Job
+from da_agent.worker.limits import WorkspaceBudgets
 from da_agent.worker.worker import RetryableJobError
 
 # Returns the dataset and its documents, only if the dataset belongs to the workspace.
@@ -39,12 +41,15 @@ class RunHandler:
         checkpoint_url: str,
         schema: str | None = None,
         limits: AgentLimits | None = None,
+        budgets: WorkspaceBudgets | None = None,
     ) -> None:
         self.llm = llm
         self.datasets = datasets
         self.checkpoint_url = checkpoint_url
         self.schema = schema
         self.limits = limits or AgentLimits()
+        # When set, each run's money limit is what its workspace has left today (ADR 0022).
+        self.budgets = budgets
 
     def _checkpoint_connection(self) -> psycopg.Connection[DictRow]:
         conninfo = make_conninfo(self.checkpoint_url, options=search_path_option(self.schema))
@@ -55,6 +60,9 @@ class RunHandler:
 
     def __call__(self, job: Job, lost: threading.Event) -> dict[str, Any]:
         payload = job.payload
+        limits = self.limits
+        if self.budgets is not None:
+            limits = replace(limits, budget=self.budgets.for_job(job))
         dataset, documents = self.datasets(job.workspace_id, payload["dataset_id"])
         with (
             self._checkpoint_connection() as conn,
@@ -70,7 +78,7 @@ class RunHandler:
                 documents=documents,
                 llm=self.llm,
                 run_id=str(job.id),
-                limits=self.limits,
+                limits=limits,
                 checkpointer=saver,
                 charts=bool(payload.get("charts", True)),
                 on_event=lambda event: events.append(job.id, job.workspace_id, event),

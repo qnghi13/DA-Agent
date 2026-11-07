@@ -24,12 +24,13 @@ from da_agent.ingestion.pipeline import (
     rebuild_dataset,
 )
 from da_agent.ingestion.spec import DatasetSpec
-from da_agent.llm.client import LLMClient, RunBudget
+from da_agent.llm.client import LLMClient
 from da_agent.runner.runner import Runner
 from da_agent.storage.datasets import DatasetRecord, DatasetStore
 from da_agent.storage.db import connect
 from da_agent.storage.jobs import Job
 from da_agent.storage.sandbox_dataset import QueryRunner, SandboxDataset
+from da_agent.worker.limits import WorkspaceBudgets
 from da_agent.worker.worker import PermanentJobError
 
 DESCRIPTION_DOCUMENT = "Description from the uploader"
@@ -114,19 +115,21 @@ class IngestHandler(_DatasetJob):
         runner: Runner,
         llm: LLMClient,
         datasets_root: Path,
-        budget: RunBudget | None = None,
+        budgets: WorkspaceBudgets | None = None,
     ) -> None:
         super().__init__(url=url, schema=schema, runner=runner, datasets_root=datasets_root)
         self.llm = llm
-        self.budget = budget
+        # When set, the spec proposal may spend only what the workspace has left today.
+        self.budgets = budgets
 
     def __call__(self, job: Job, lost: threading.Event) -> dict[str, Any]:
         with connect(self.url, schema=self.schema) as conn:
             store = DatasetStore(conn)
             record = self._record(store, job)
+            budget = self.budgets.for_job(job) if self.budgets is not None else None
             prepared = prepare_dataset(
                 str(record.id), self.runner, self.llm, run_id=str(job.id),
-                description=record.description, budget=self.budget,
+                description=record.description, budget=budget,
             )  # fmt: skip
             report = self._finish(store, record, prepared)
             if report is not None:

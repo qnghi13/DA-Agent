@@ -7,6 +7,7 @@ found", so ids from another workspace reveal nothing. See docs/adr/0020.
 
 import datetime as dt
 import json
+import math
 import shutil
 import time
 import uuid
@@ -35,6 +36,8 @@ from da_agent.storage.db import connect
 from da_agent.storage.events import RunEvent, RunEvents
 from da_agent.storage.jobs import Job, JobQueue
 from da_agent.storage.keys import KEY_PATTERN, KeyIdentity, authenticate
+from da_agent.storage.ledger import daily_budget, spent_today
+from da_agent.storage.limits import RateLimiter
 from da_agent.storage.uploads import UploadRejectedError, storage_name
 
 CHUNK_BYTES = 1024 * 1024
@@ -53,6 +56,12 @@ class ApiSettings:
     events_poll_seconds: float = 0.5
     events_keepalive_seconds: float = 15.0
     events_max_seconds: float = 300.0
+    # Limits (ADR 0022): requests per key, new jobs per workspace, failed keys per client address,
+    # and the model budget a workspace may spend per day unless it has its own.
+    requests_per_minute: int = 300
+    jobs_per_minute: int = 30
+    failed_auth_per_minute: int = 20
+    daily_budget_usd: float = 5.0
 
 
 class ApproveRequest(BaseModel):
@@ -132,11 +141,25 @@ def database(request: Request) -> Iterator[psycopg.Connection]:
 Db = Annotated[psycopg.Connection, Depends(database)]
 
 
+def _too_many(wait: float, detail: str) -> HTTPException:
+    return HTTPException(
+        status_code=429, detail=detail, headers={"Retry-After": str(math.ceil(wait))}
+    )
+
+
 def identity(request: Request, conn: Db) -> KeyIdentity:
+    settings = _settings(request)
+    limiter = RateLimiter(conn)
+    address = request.client.host if request.client else "unknown"
+    failures = f"authfail:{address}"
+    wait = limiter.exceeded(failures, limit=settings.failed_auth_per_minute, window_seconds=60)
+    if wait is not None:
+        raise _too_many(wait, "too many failed keys from this address")
     scheme, _, key = request.headers.get("authorization", "").partition(" ")
     key = key.strip()
     found = authenticate(conn, key) if scheme.lower() == "bearer" else None
     if found is None:
+        limiter.hit(failures, limit=settings.failed_auth_per_minute, window_seconds=60)
         # Only a well-formed prefix is logged: a pasted secret of another kind is not.
         match = KEY_PATTERN.fullmatch(key)
         detail = {"path": request.url.path, "prefix": match.group(1) if match else None}
@@ -145,7 +168,26 @@ def identity(request: Request, conn: Db) -> KeyIdentity:
             status_code=401, detail="a valid API key is required",
             headers={"WWW-Authenticate": "Bearer"},
         )  # fmt: skip
+    wait = limiter.hit(f"key:{found.key_id}", limit=settings.requests_per_minute, window_seconds=60)
+    if wait is not None:
+        raise _too_many(wait, "too many requests for this key")
     return found
+
+
+def _may_start_job(conn: psycopg.Connection, caller: KeyIdentity, settings: ApiSettings) -> None:
+    """New jobs have their own rate per workspace, and stop when the day's model budget is spent."""
+    wait = RateLimiter(conn).hit(
+        f"jobs:{caller.workspace_id}", limit=settings.jobs_per_minute, window_seconds=60
+    )
+    if wait is not None:
+        raise _too_many(wait, "too many new jobs for this workspace")
+    limit = daily_budget(conn, caller.workspace_id, settings.daily_budget_usd)
+    if spent_today(conn, caller.workspace_id) >= limit:
+        midnight = dt.datetime.combine(
+            dt.datetime.now(dt.UTC).date() + dt.timedelta(days=1), dt.time(), dt.UTC
+        )
+        wait = (midnight - dt.datetime.now(dt.UTC)).total_seconds()
+        raise _too_many(wait, f"the workspace has spent its daily model budget (${limit:.2f})")
 
 
 Caller = Annotated[KeyIdentity, Depends(identity)]
@@ -177,6 +219,7 @@ def upload_dataset(
     description: Annotated[str, Form(max_length=20000)] = "",
 ) -> dict[str, Any]:
     """Upload data files and their documents. Ingestion runs as a job; poll the dataset."""
+    _may_start_job(conn, caller, settings)
     if len(files) > settings.max_files:
         raise HTTPException(status_code=413, detail=f"at most {settings.max_files} files")
     names: list[str] = []
@@ -241,13 +284,14 @@ def approve_dataset(
 
 
 @router.post("/runs", status_code=202)
-def create_run(body: RunRequest, conn: Db, caller: Caller) -> dict[str, Any]:
+def create_run(body: RunRequest, conn: Db, caller: Caller, settings: Settings) -> dict[str, Any]:
     """Ask a question about a ready dataset. The run is a job; poll it or stream its events."""
     record = DatasetStore(conn).get(_uuid(body.dataset_id), caller.workspace_id)
     if record is None:
         raise _not_found()
     if record.status != "ready":
         raise HTTPException(status_code=409, detail=f"the dataset is {record.status}, not ready")
+    _may_start_job(conn, caller, settings)
     as_of = (body.as_of or dt.datetime.now(dt.UTC).date()).isoformat()
     payload = {
         "dataset_id": str(record.id),

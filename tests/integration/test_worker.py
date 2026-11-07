@@ -15,12 +15,15 @@ import pytest
 
 from da_agent.agent.answer import result_from_json
 from da_agent.agent.loop_types import Document
-from da_agent.llm.client import CostLedger, LLMClient, Route
+from da_agent.llm.client import CostLedger, LLMClient, ModelPrice, Route
 from da_agent.llm.types import TransientLLMError
 from da_agent.storage.db import connect
 from da_agent.storage.events import RunEvents
 from da_agent.storage.jobs import Job, JobQueue
+from da_agent.storage.ledger import PostgresCostLedger, spent_today
 from da_agent.storage.sqlite_dataset import SqliteDataset
+from da_agent.storage.workspaces import set_daily_budget
+from da_agent.worker.limits import WorkspaceBudgets
 from da_agent.worker.runs import RunHandler
 from da_agent.worker.worker import PermanentJobError, RetryableJobError, Worker, WorkerConfig
 from tests.unit.test_agent_graph import ScriptedAdapter, plan, sql, submit
@@ -244,3 +247,42 @@ def test_a_run_job_records_its_progress_events(
     assert [e.type for e in events] == ["plan", "turn", "tool", "turn", "tool", "verify", "done"]
     assert events[2].data["sql"] == "SELECT SUM(total) AS t FROM orders"
     assert [e.id for e in events] == sorted(e.id for e in events)
+
+
+def test_a_run_stops_at_the_money_its_workspace_has_left(
+    schema: str, conn: psycopg.Connection, workspace: UUID, dataset: SqliteDataset
+) -> None:
+    assert URL is not None
+    job_id = enqueue_run(conn, workspace)
+    adapter = ScriptedAdapter([plan()] + [sql()] * 5 + [submit("number", 350)])
+    price = ModelPrice(input_per_million=1000.0, output_per_million=1000.0)  # 0.015 per call
+    with connect(URL, schema=schema) as ledger_conn:
+        llm = LLMClient(
+            [Route(adapter, "m", price)], PostgresCostLedger(ledger_conn), sleep=lambda _: None
+        )
+        handler = run_handler(adapter, dataset, schema)
+        handler.llm = llm
+        handler.budgets = WorkspaceBudgets(url=URL, schema=schema, daily_usd=0.04, run_usd=1.0)
+
+        Worker(config(schema, "w1"), {"run": handler}).run_once()
+
+    done = job(conn, job_id, workspace)
+    assert done.result is not None and done.result["stop_reason"] == "budget_exceeded"
+    assert spent_today(conn, workspace) < 0.04 + 0.016
+
+
+def test_a_workspace_without_budget_left_gets_a_clear_failure(
+    schema: str, conn: psycopg.Connection, workspace: UUID, dataset: SqliteDataset
+) -> None:
+    assert URL is not None
+    job_id = enqueue_run(conn, workspace)
+    set_daily_budget(conn, workspace, 0.0)
+    adapter = ScriptedAdapter([plan(), sql(), submit("number", 350)])
+    handler = run_handler(adapter, dataset, schema)
+    handler.budgets = WorkspaceBudgets(url=URL, schema=schema, daily_usd=1.0, run_usd=1.0)
+
+    Worker(config(schema, "w1"), {"run": handler}).run_once()
+
+    failed = job(conn, job_id, workspace)
+    assert failed.status == "failed" and "daily model budget" in (failed.last_error or "")
+    assert adapter.requests == []

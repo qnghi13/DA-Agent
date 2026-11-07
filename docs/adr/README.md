@@ -26,3 +26,4 @@ decision, add a new ADR and mark the old one as superseded.
 | [0019](0019-dataset-lifecycle.md) | Dataset lifecycle: ingest proposes, the user approves, runs open only ready datasets | Accepted |
 | [0020](0020-http-api.md) | The HTTP API: bearer keys, uploads by safe name, and "not found" across workspaces | Accepted |
 | [0021](0021-progress-events.md) | Run progress as events in Postgres, streamed with SSE | Accepted |
+| [0022](0022-rate-and-money-limits.md) | Rate limits and daily money limits in Postgres | Accepted |
