@@ -103,6 +103,7 @@ class SubtotalCheck(BaseModel):
 class TableBuild(BaseModel):
     name: str
     source: str
+    description: str = Field(default="", description="What one row is, from the spec.")
     raw_rows: int = 0
     rows: int = 0
     columns: list[ColumnBuild] = Field(default_factory=list)
@@ -338,7 +339,9 @@ def _build_table(
         f"CREATE TABLE {q(table.name)} AS SELECT {', '.join(selected)}, _source, __row AS _row "
         f"FROM {q(stage)} ORDER BY _source, __row"
     )
-    report = TableBuild(name=table.name, source=table.source, hidden=hidden)
+    report = TableBuild(
+        name=table.name, source=table.source, description=table.description, hidden=hidden
+    )
     report.raw_rows = _scalar(connection, f"SELECT count(*) FROM {q(marked)}")
     common = _common_filled_count(connection, marked, raw_columns)
     full = f"{filled_count_sql(raw_columns)} >= {common}" if raw_columns else "false"

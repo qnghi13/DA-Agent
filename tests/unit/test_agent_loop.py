@@ -454,7 +454,7 @@ class DescribedDataset:
             Column("tri_gia", "BIGINT", source="TriGia"),
             Column("status", "VARCHAR", source="status", values=("completed", "cancelled")),
         ]
-        return [TableInfo("orders", 3, columns)]
+        return [TableInfo("orders", 3, columns, description="one order line")]
 
     def query(self, sql: str):
         raise AssertionError("not used")
@@ -469,6 +469,7 @@ def test_describe_dataset_shows_source_names_and_known_values() -> None:
     assert "status:VARCHAR" in table["columns"]
     assert "(source status)" not in table["columns"]
     assert table["values"] == {"status": ["completed", "cancelled"]}
+    assert table["row"] == "one order line"
 
 
 def test_duckdb_run_sql_points_to_case_and_accent_blind_matching() -> None:

@@ -1,24 +1,24 @@
 # Progress
 
 Loaded into every session, so keep it under 60 lines. Replace stale content instead of appending.
-**Last updated:** 2026-11-06
-**Phase:** Days 3–6, Data and tools ([plan §6](plan.md#6-roadmap)). Baseline B4 +13; ADR 0012 work uncommitted.
+**Last updated:** 2026-11-07
+**Phase:** Days 3–6, Data and tools ([plan §6](plan.md#6-roadmap)). B5 +14, C2 +10; row descriptions uncommitted.
 
 ## Next step
 
-1. Abstentions (11/30 on B4): 6 iteration limits, 4 malformed calls (`functions.submit_answer`),
-   ~16 binder errors from mistyped names (`PhươngThucTT`). Wrong: 3 (debt, expiry vs today, a
-   misread channel). Look at these as general patterns only.
-2. Error patterns on the 5 subtotal shops (9–11 wrong of 30), then the Foundation learning note.
-
+1. Remaining patterns (B5 4 wrong, C2 8 wrong): cancellation rate per order (3), stated price vs
+   unit (1), keyless logs judged unanswerable (1); abstentions are mostly `gpt-oss-20b` limits.
+2. Days 7–11 (LangGraph, Haiku 5.5) once the user adds budget. General patterns only.
 ## Baselines (`bootstrap`, biz_123, 30 questions; correct / wrong / abstained, score)
 
-- A `pos.sqlite` 3/8/19 −5. A2 + turn notices 2/11/17 −9. B sandbox 3/14/13 −11. B2 + known
-  values 6/16/8 −10. B3 + source names 6/15/9 −9. **B4 + dedupe and text-match hint 16/3/11 +13.**
+- A `pos.sqlite` 3/8/19 −5; A2 turn notices −9; B sandbox −11; B2 known values −10; B3 source
+  names 6/15/9 −9; **B4 dedupe and text-match hint 16/3/11 +13.**
   Runs in `eval/reports/baseline-*`; dev answers read only for error patterns (user, 2026-11-07).
 - `regression`, 5 subtotal shops: C with exclusion 13/9/8 +4, D without 16/11/3 +5: no measurable
   effect. In 4 shops subtotal rows have no date, so date filters already drop them; only biz_107
   fills dates down onto them.
+- Row descriptions in `describe_dataset` and status guidance in the prompt: C2 18/8/4 +10 (from
+  +4), B5 18/4/8 +14 (from +13). Learning note 02 written.
 ## Done
 
 - Dev environment, design docs, ADRs 0001–0011, README, LICENSE. Scorer (`eval/scorer/`, rulebook §7, §9): 3000/3000 on the real answers. Splits in
@@ -50,7 +50,7 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
 - Days 7–11: $5–10 for Haiku 5.5. Before Day 20: Compose plugin. Before pushing: `gh` or a repo. **Before going public:** check the organizer's data rules, whether `cccd` and phone are fake, the
   licenses of skills in `.agents/`, and the `brainstorming` scripts.
 
-## Spend so far: about $1.16 (agent runs $0.72, spec proposals $0.44).
+## Spend so far: about $1.28 (agent runs $0.84, spec proposals $0.44).
 ## Watch out
 
 - A run of 30 questions costs about $0.05–0.10. `gpt-oss-20b` varies run to run: compare totals.

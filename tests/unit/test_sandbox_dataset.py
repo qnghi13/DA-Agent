@@ -12,6 +12,7 @@ REPORT = BuildReport(
         TableBuild(
             name="orders",
             source="don",
+            description="one order line",
             rows=120,
             columns=[
                 ColumnBuild(name="order_id", source="Mã", type="text"),
@@ -86,3 +87,11 @@ def test_describe_keeps_source_names_and_known_values() -> None:
 
     assert (order_id.source, order_id.values) == ("Mã", ())
     assert (status.source, status.values) == ("status", ("done", "cancelled"))
+
+
+def test_describe_keeps_what_one_row_is() -> None:
+    dataset = SandboxDataset(FakeRunner(SqlResult(status="ok")), "shop_1", REPORT)
+
+    [table] = dataset.describe()
+
+    assert table.description == "one order line"

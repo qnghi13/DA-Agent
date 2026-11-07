@@ -601,3 +601,12 @@ def test_deduplicated_tables_report_no_repeats(tmp_path: Path, out: Path) -> Non
 
     assert result.tables[0].duplicate_rows == 0
     assert rows(out, "SELECT count(*) FROM t") == [(2,)]
+
+
+def test_the_spec_description_of_a_row_reaches_the_report(tmp_path: Path, out: Path) -> None:
+    raw, report = raw_upload(tmp_path, {"t.csv": "o,item\no1,a\n"})
+    spec = DatasetSpec(tables=[TableSpec(source="t", name="t", description="one order line")])
+
+    result = build(raw / RAW_DATABASE, spec, report, out)
+
+    assert result.tables[0].description == "one order line"

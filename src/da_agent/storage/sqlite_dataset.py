@@ -42,6 +42,8 @@ class TableInfo:
     name: str
     row_count: int
     columns: list[Column]
+    # What one row is, such as "one order line", when the dataset knows it.
+    description: str = ""
 
 
 @dataclass(frozen=True)

@@ -10,3 +10,4 @@ Mỗi cột mốc có một ghi chú tiếng Việt, theo khung sau:
 | Ghi chú | Cột mốc |
 |---|---|
 | [01. Nền móng kiến trúc](01-nen-mong-kien-truc.md) | Thiết kế trước khi viết code |
+| [02. Dữ liệu, sandbox và đo lường](02-du-lieu-sandbox-va-do-luong.md) | Ingestion, SQL trong sandbox, baseline đầu tiên |

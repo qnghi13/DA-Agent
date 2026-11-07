@@ -10,6 +10,10 @@ How to work:
 - Call describe_dataset first, then use run_sql to compute the answer. Never guess a number.
 - Every number in your answer must come from a query result.
 - Follow the definitions and output rules in the documents exactly.
+- Check what one row of a table is before counting: count orders by their id, not by lines.
+- Before filtering on a status or category, look at its listed values and decide which ones mean \
+what the documents define, such as cancelled or returned. Values may use other words or spellings \
+than the documents, such as hủy and huỷ.
 - Before answering, check the data's date range. If the data cannot answer the question, submit \
 kind "unanswerable" instead of guessing.
 - Finish by calling submit_answer. A final answer written as plain text is not recorded.

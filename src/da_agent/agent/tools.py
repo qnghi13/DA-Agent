@@ -112,8 +112,10 @@ def _describe_column(column: Column) -> str:
 
 def _describe_table(table: TableInfo) -> dict[str, Any]:
     # Compact on purpose, because this text is resent on every later turn of the run.
-    described: dict[str, Any] = {
-        "name": table.name,
+    described: dict[str, Any] = {"name": table.name}
+    if table.description:
+        described["row"] = table.description
+    described |= {
         "rows": table.row_count,
         "columns": ", ".join(_describe_column(column) for column in table.columns),
     }
