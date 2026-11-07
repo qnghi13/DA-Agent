@@ -2,12 +2,12 @@
 
 Loaded into every session, so keep it under 60 lines. Replace stale content instead of appending.
 **Last updated:** 2026-11-07
-**Phase:** Days 11–13, Reliability ([plan §6](plan.md#6-roadmap)). Verify checks: ADR 0014.
+**Phase:** Days 14–15, Charts, reports, RAG ([plan §6](plan.md#6-roadmap)). Charts: ADR 0015.
 
 ## Next step
 
-1. Reliability phase done (note 04). Next phase per [plan §6](plan.md#6-roadmap); read it first.
-   Failure paths and an injection suite (`tests/security/test_injection.py`) are tested.
+1. `make_chart` done (ADR 0015, `run_graph(charts=True)`, off in eval). Next: standalone HTML
+   report where every number links to its query, then the RAG experiment (first to cut if late).
 2. `regression` (150, ~$0.40) only at the end, if affordable.
 ## Baselines (`bootstrap`, biz_123, 30 questions; correct / wrong / abstained, score)
 

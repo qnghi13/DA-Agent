@@ -6,6 +6,7 @@ from typing import Any, Protocol
 from opentelemetry import trace
 
 from da_agent.agent.answer import ANSWER_KINDS, ToolStep
+from da_agent.agent.charts import MAKE_CHART, MAKE_CHART_SPEC, MAX_CHARTS, ChartError, chart_spec
 from da_agent.agent.rules import RuleIndex
 from da_agent.llm.types import ToolCall, ToolSpec
 from da_agent.storage.sqlite_dataset import Column, QueryError, QueryResult, TableInfo
@@ -82,9 +83,12 @@ DIALECT_HINTS = {
 }
 
 
-def tool_specs(rules: RuleIndex | None, dialect: str = "SQLite") -> list[ToolSpec]:
-    """search_rules is offered only when there are sections to search. run_sql names the SQL
-    dialect of the dataset, so the model writes functions that exist."""
+def tool_specs(
+    rules: RuleIndex | None, dialect: str = "SQLite", charts: bool = False
+) -> list[ToolSpec]:
+    """search_rules is offered only when there are sections to search, and make_chart only when
+    the run asks for charts. run_sql names the SQL dialect of the dataset, so the model writes
+    functions that exist."""
     hint = DIALECT_HINTS.get(dialect, "")
     specs = [
         spec.model_copy(update={"description": spec.description.replace("SQLite", dialect) + hint})
@@ -93,7 +97,9 @@ def tool_specs(rules: RuleIndex | None, dialect: str = "SQLite") -> list[ToolSpe
         for spec in TOOL_SPECS
     ]
     if rules is not None and rules.sections:
-        return [*specs, SEARCH_RULES_SPEC]
+        specs.append(SEARCH_RULES_SPEC)
+    if charts:
+        specs.append(MAKE_CHART_SPEC)
     return specs
 
 
@@ -141,24 +147,33 @@ def _error(tool: str, message: str, sql: str | None = None) -> tuple[str, ToolSt
 
 
 def execute_tool(
-    call: ToolCall, dataset: Dataset, rules: RuleIndex | None = None
+    call: ToolCall,
+    dataset: Dataset,
+    rules: RuleIndex | None = None,
+    *,
+    charts_left: int | None = None,
 ) -> tuple[str, ToolStep]:
     """Run a read-only tool. Returns the text for the model and a record of the step.
+
+    charts_left is None when the run does not offer make_chart, and otherwise how many more
+    charts the run may draw.
 
     A crash in a tool, such as a lost sandbox, becomes an error result the model can act on
     within its turn limit. The model sees only the error type: the message may hold host paths.
     The trace keeps the full exception.
     """
     try:
-        return _execute(call, dataset, rules)
+        return _execute(call, dataset, rules, charts_left)
     except Exception as error:  # Any crash becomes a tool error, by design.
         trace.get_current_span().record_exception(error)
         message = f"the tool failed unexpectedly ({type(error).__name__}); try again once"
-        sql = call.arguments.get("sql") if call.name == "run_sql" else None
+        sql = call.arguments.get("sql") if call.name in ("run_sql", MAKE_CHART) else None
         return _error(call.name, message, sql=sql if isinstance(sql, str) else None)
 
 
-def _execute(call: ToolCall, dataset: Dataset, rules: RuleIndex | None) -> tuple[str, ToolStep]:
+def _execute(
+    call: ToolCall, dataset: Dataset, rules: RuleIndex | None, charts_left: int | None
+) -> tuple[str, ToolStep]:
     if call.arguments_error:
         return _error(call.name, f"could not read the tool arguments: {call.arguments_error}")
     if call.name == "describe_dataset":
@@ -168,7 +183,9 @@ def _execute(call: ToolCall, dataset: Dataset, rules: RuleIndex | None) -> tuple
         return _run_sql_on(dataset, call.arguments)
     if call.name == SEARCH_RULES and rules is not None and rules.sections:
         return _search_rules(rules, call.arguments)
-    known = [spec.name for spec in tool_specs(rules)]
+    if call.name == MAKE_CHART and charts_left is not None:
+        return _make_chart(dataset, call.arguments, charts_left)
+    known = [spec.name for spec in tool_specs(rules, charts=charts_left is not None)]
     return _error(call.name, f"unknown tool {call.name!r}, available tools: {known}")
 
 
@@ -197,3 +214,24 @@ def _search_rules(rules: RuleIndex, arguments: dict[str, Any]) -> tuple[str, Too
     text = "\n\n".join(section.text for section in found)[:MAX_RULE_CHARS]
     payload = {"sections": [section.title for section in found], "text": text}
     return json.dumps(payload, ensure_ascii=False), ToolStep(tool=SEARCH_RULES, ok=True)
+
+
+def _make_chart(
+    dataset: Dataset, arguments: dict[str, Any], charts_left: int
+) -> tuple[str, ToolStep]:
+    sql = arguments.get("sql")
+    if not isinstance(sql, str):
+        return _error(MAKE_CHART, "sql is required and must be a string")
+    if charts_left <= 0:
+        return _error(MAKE_CHART, f"a run draws at most {MAX_CHARTS} charts", sql=sql)
+    try:
+        result = dataset.query(sql)
+        spec = chart_spec(arguments, result)
+    except (QueryError, ChartError) as error:
+        return _error(MAKE_CHART, str(error), sql=sql)
+    rows = len(spec["data"]["values"])
+    # The model gets no rows back, so it cannot cite numbers that run_sql did not return.
+    payload = {"status": "drawn", "mark": spec["mark"]["type"], "rows": rows}
+    return json.dumps(payload), ToolStep(
+        tool=MAKE_CHART, ok=True, sql=sql, row_count=rows, chart=spec
+    )

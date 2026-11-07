@@ -30,6 +30,8 @@ class ToolStep:
     sql: str | None = None
     row_count: int | None = None
     error: str | None = None
+    # The Vega-Lite spec a successful make_chart built from its query.
+    chart: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,11 @@ class AgentResult:
     error: str | None = None
     # Set when an interactive run paused to ask the user, with stop_reason "needs_clarification".
     question_for_user: str | None = None
+
+    @property
+    def charts(self) -> list[dict[str, Any]]:
+        """The Vega-Lite specs drawn during the run, in order."""
+        return [step.chart for step in self.steps if step.chart is not None]
 
 
 def _is_number(value: Any) -> bool:

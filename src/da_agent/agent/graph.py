@@ -33,6 +33,7 @@ from da_agent.agent.answer import (
     ToolStep,
     parse_answer,
 )
+from da_agent.agent.charts import MAX_CHARTS
 from da_agent.agent.data_checks import fanout_problems, unreadable_problems
 from da_agent.agent.loop_types import AgentLimits, Document
 from da_agent.agent.planning import (
@@ -104,6 +105,8 @@ class AgentContext:
     # The period each date column covers, for the period check in verify.
     ranges: DateRanges
     dialect: str
+    # Whether make_chart is offered.
+    charts: bool = False
 
 
 Node = Callable[[AgentState, Runtime[AgentContext]], dict[str, Any]]
@@ -243,7 +246,12 @@ def tools_node(state: AgentState, runtime: Runtime[AgentContext]) -> dict[str, A
                     content = json.dumps({"error": str(error)}, ensure_ascii=False)
                     step = ToolStep(tool=call.name, ok=False, error=str(error))
             else:
-                content, step = execute_tool(call, context.dataset, context.rules)
+                content, step = execute_tool(
+                    call,
+                    context.dataset,
+                    context.rules,
+                    charts_left=_charts_left(context, state, steps),
+                )
             if step.sql:
                 span.set_attribute("da_agent.sql", step.sql)
             span.set_attribute("da_agent.tool_ok", step.ok)
@@ -257,6 +265,15 @@ def tools_node(state: AgentState, runtime: Runtime[AgentContext]) -> dict[str, A
     if proposed is None and state.get("iterations", 0) >= context.limits.max_iterations:
         update.update(_stop("iteration_limit"))
     return update
+
+
+def _charts_left(
+    context: AgentContext, state: AgentState, this_turn: list[dict[str, Any]]
+) -> int | None:
+    if not context.charts:
+        return None
+    drawn = sum(1 for step in [*state.get("steps", []), *this_turn] if step.get("chart"))
+    return MAX_CHARTS - drawn
 
 
 def verify_node(state: AgentState, runtime: Runtime[AgentContext]) -> dict[str, Any]:
@@ -386,13 +403,15 @@ def run_graph(
     reply: str | None = None,
     tracer: Tracer | None = None,
     thread_id: str | None = None,
+    charts: bool = False,
 ) -> AgentResult:
     """Answer one question, or continue the run saved under run_id.
 
     With a checkpointer, a run that stopped part-way (a killed worker, a pause to ask the user)
     continues from its last finished step, and a finished run returns its saved result. reply
     answers the question an interactive run paused on. thread_id names the saved run, and
-    defaults to run_id, which also keys the cost ledger.
+    defaults to run_id, which also keys the cost ledger. charts offers make_chart, whose specs
+    come back in AgentResult.charts.
     """
     limits = limits or AgentLimits()
     tracer = tracer or trace.get_tracer("da_agent.agent")
@@ -407,11 +426,12 @@ def run_graph(
         interactive=interactive,
         tracer=tracer,
         rules=rules,
-        tools=tool_specs(rules, dialect),
+        tools=tool_specs(rules, dialect, charts),
         ranges=date_ranges(
             [(c.name, c.value_range) for table in dataset.describe() for c in table.columns]
         ),
         dialect=dialect.lower(),
+        charts=charts,
     )
     app = build_graph(checkpointer)
     config = {"configurable": {"thread_id": thread_id or run_id}}

@@ -195,7 +195,9 @@ Planned for the reliability phase:
 
 `AgentAnswer` holds a kind, a value, and an optional reason. `AgentResult` adds the steps taken, and
 its successful queries are the evidence behind the answer. The `eval/datamate` adapter converts it to the competition format, and
-the core does not know that format. Charts are validated Vega-Lite specs with no code execution.
+the core does not know that format. Charts are Vega-Lite specs that code builds from a query: the model names a mark and result
+columns, never writes the spec, and gets back no rows ([ADR 0015](adr/0015-charts-built-by-code.md)).
+`make_chart` is offered only when a run asks for charts, and `AgentResult.charts` returns the specs.
 Reports are standalone HTML, and every number links to the query that produced it.
 
 ## Failure handling
