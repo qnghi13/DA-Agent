@@ -1,7 +1,13 @@
 """Prompts for the minimal agent. Dataset documents are appended, and hold any output rules."""
 
+import html
+import re
+
 from da_agent.agent.loop_types import Document
 from da_agent.agent.rules import split_sections
+
+# A document tag inside document text, which could close the frame and pose as instructions.
+FRAME_TAG = re.compile(r"<(/?\s*document)", re.IGNORECASE)
 
 SYSTEM_PROMPT = """\
 You are a careful data analyst. Answer the question using only the dataset and its documents.
@@ -63,7 +69,12 @@ def render_document(document: Document) -> str:
         preface, sections = split_sections(document.text)
         titles = "\n".join(f"- {section.title}" for section in sections)
         text = f"{preface}\n\nSections, fetch with search_rules:\n{titles}".strip()
-    return f'<document name="{document.name}">\n{text}\n</document>'
+    return f'<document name="{html.escape(document.name)}">\n{_unframed(text)}\n</document>'
+
+
+def _unframed(text: str) -> str:
+    """Document text cannot open or close a document tag, so it stays inside its frame."""
+    return FRAME_TAG.sub(r"&lt;\1", text)
 
 
 DESCRIBE_FIRST = "Call describe_dataset first, then use run_sql to compute the answer."

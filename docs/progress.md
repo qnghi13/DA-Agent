@@ -6,8 +6,8 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
 
 ## Next step
 
-1. Reliability item 5: injection suite. Then measure once on one 30-question set (~$0.08, ask
-   first). Failure paths (429, timeout fallback, tool crash, Docker down, budgets) are tested.
+1. Measure the reliability phase once on one 30-question set (~$0.08, ask first). Failure paths
+   and an injection suite (`tests/security/test_injection.py`) are tested; Vietnamese note 04.
 2. `regression` (150, ~$0.40) only at the end, if affordable.
 ## Baselines (`bootstrap`, biz_123, 30 questions; correct / wrong / abstained, score)
 
