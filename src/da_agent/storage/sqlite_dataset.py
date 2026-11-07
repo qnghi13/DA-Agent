@@ -31,6 +31,10 @@ class ReferenceTable:
 class Column:
     name: str
     type: str
+    # The column's name in the uploaded file, which documents may use.
+    source: str | None = None
+    # Every distinct value, for a text column with few of them.
+    values: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

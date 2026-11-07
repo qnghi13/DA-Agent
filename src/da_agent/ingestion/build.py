@@ -8,6 +8,7 @@ reach the SQL, so a spec cannot inject SQL. Values that fail to parse become NUL
 copied to `_excluded`, so nothing is dropped silently.
 """
 
+import itertools
 from pathlib import Path
 
 import duckdb
@@ -17,6 +18,7 @@ from da_agent.ingestion.raw import slug
 from da_agent.ingestion.report import IngestReport, TableReport
 from da_agent.ingestion.spec import (
     META_COLUMNS,
+    SOURCE_NAME,
     ColumnSpec,
     DatasetSpec,
     RowCondition,
@@ -37,6 +39,12 @@ CLEAN_DATABASE = "dataset.duckdb"
 QUARANTINE = "_quarantine"
 EXCLUDED = "_excluded"
 FAILED_SAMPLES = 5
+# Text columns with this few distinct values list them, so the agent filters on real values
+# instead of guessing them from the question's language. Longer values look like free text.
+MAX_KNOWN_VALUES, MAX_KNOWN_VALUE_CHARS = 12, 60
+# A key of at most this many columns that identifies every distinct row proves that exact repeats
+# are double entries. Tables with more columns than KEY_SEARCH_COLUMNS search only the first ones.
+MAX_KEY_SIZE, KEY_SEARCH_COLUMNS = 2, 40
 DEFAULT_TRUE = ("true", "1", "yes", "y", "x", "có", "co", "đúng", "dung", "rồi")
 DEFAULT_FALSE = ("false", "0", "no", "n", "không", "khong", "sai", "chưa")
 ISO_FORMATS = ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d")
@@ -63,6 +71,9 @@ class ColumnBuild(BaseModel):
     non_blank: int = 0
     parsed: int = 0
     failed_samples: list[str] = Field(default_factory=list)
+    values: list[str] = Field(
+        default_factory=list, description="Every distinct value of a text column with few of them."
+    )
 
     @property
     def parse_rate(self) -> float:
@@ -98,6 +109,11 @@ class TableBuild(BaseModel):
     hidden: list[str] = Field(default_factory=list)
     excluded: list[ExcludedRule] = Field(default_factory=list)
     subtotal_checks: list[SubtotalCheck] = Field(default_factory=list)
+    duplicate_rows: int = Field(default=0, description="Rows that repeat an earlier row exactly.")
+    duplicate_key: list[str] = Field(
+        default_factory=list,
+        description="Fewer columns than the table that identify every distinct row, if any.",
+    )
     error: str | None = None
 
 
@@ -276,7 +292,11 @@ def _build_table(
         if source in hidden:
             continue
         if source not in specs:
-            name = _unique(slug(source), taken)
+            lowered = {t.lower() for t in taken}
+            if SOURCE_NAME.fullmatch(source) and source.lower() not in lowered:
+                name = source
+            else:
+                name = _unique(slug(source), taken)
             taken.add(name)
             specs[source] = ColumnSpec(source=source, name=name)
         columns.append(specs[source])
@@ -353,11 +373,69 @@ def _build_table(
             )
         )
     report.rows = _scalar(connection, f"SELECT count(*) FROM {q(stage)}")
+    names = [c.name for c in columns]
+    report.duplicate_rows = _duplicate_rows(connection, table.name, names)
+    if report.duplicate_rows:
+        report.duplicate_key = _distinct_row_key(connection, table.name, names)
     for column in columns:
-        report.columns.append(_check_column(connection, table.name, stage, column))
+        checked = _check_column(connection, table.name, stage, column)
+        if column.type == "text":
+            checked.values = _known_values(connection, table.name, column.name)
+        report.columns.append(checked)
     connection.execute(f"DROP TABLE {q(stage)}")
     connection.execute(f"DROP TABLE {q(marked)}")
     return report
+
+
+def _duplicate_rows(connection: duckdb.DuckDBPyConnection, table: str, columns: list[str]) -> int:
+    if not columns:
+        return 0
+    listed = ", ".join(q(c) for c in columns)
+    return _scalar(
+        connection,
+        f"SELECT count(*) - (SELECT count(*) FROM (SELECT DISTINCT {listed} FROM {q(table)})) "
+        f"FROM {q(table)}",
+    )
+
+
+def _distinct_row_key(
+    connection: duckdb.DuckDBPyConnection, table: str, columns: list[str]
+) -> list[str]:
+    """The smallest set of columns, fewer than all, with no blanks that tells every distinct row
+    apart, such as an order id and a line number. Empty when there is none."""
+    listed = ", ".join(q(c) for c in columns)
+    distinct = "__distinct_rows"
+    connection.execute(f"CREATE TEMP TABLE {distinct} AS SELECT DISTINCT {listed} FROM {q(table)}")
+    try:
+        total = _scalar(connection, f"SELECT count(*) FROM {distinct}")
+        searched = columns[:KEY_SEARCH_COLUMNS]
+        for size in range(1, min(MAX_KEY_SIZE, len(columns) - 1) + 1):
+            for key in itertools.combinations(searched, size):
+                filled = " AND ".join(f"{q(c)} IS NOT NULL" for c in key)
+                parts = ", ".join(q(c) for c in key)
+                count = _scalar(
+                    connection,
+                    f"SELECT count(*) FROM (SELECT DISTINCT {parts} FROM {distinct} "
+                    f"WHERE {filled})",
+                )
+                if count == total:
+                    return list(key)
+        return []
+    finally:
+        connection.execute(f"DROP TABLE {distinct}")
+
+
+def _known_values(connection: duckdb.DuckDBPyConnection, table: str, column: str) -> list[str]:
+    """The distinct values of a text column, most frequent first, when there are few and short."""
+    rows = connection.execute(
+        f"SELECT {q(column)}, count(*) AS n FROM {q(table)} "
+        f"WHERE {q(column)} IS NOT NULL AND trim({q(column)}) <> '' "
+        f"GROUP BY 1 ORDER BY n DESC, 1 LIMIT {MAX_KNOWN_VALUES + 1}"
+    ).fetchall()
+    values = [str(value) for value, _ in rows]
+    if len(values) > MAX_KNOWN_VALUES or any(len(v) > MAX_KNOWN_VALUE_CHARS for v in values):
+        return []
+    return values
 
 
 def _identifier_columns(

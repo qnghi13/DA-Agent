@@ -524,3 +524,80 @@ def test_notes_written_in_an_identifier_column_are_not_identifiers(
         1,
         0,
     )
+
+
+def test_text_columns_with_few_values_list_them_by_frequency(tmp_path: Path, out: Path) -> None:
+    """Values are listed as stored, so a query that copies one matches it."""
+    statuses = ["completed"] * 5 + ["cancelled"] * 2 + ["returned"] + [""]
+    raw, report = raw_upload(tmp_path, {"t.csv": "s\n" + "\n".join(statuses)})
+
+    result = build(raw / RAW_DATABASE, one_table(ColumnSpec(source="s", name="s")), report, out)
+
+    assert result.tables[0].columns[0].values == ["completed", "cancelled", "returned"]
+
+
+def test_text_columns_with_many_values_list_none(tmp_path: Path, out: Path) -> None:
+    raw, report = raw_upload(tmp_path, {"t.csv": "s\n" + "\n".join(f"v{i}" for i in range(40))})
+
+    result = build(raw / RAW_DATABASE, one_table(ColumnSpec(source="s", name="s")), report, out)
+
+    assert result.tables[0].columns[0].values == []
+
+
+def test_long_text_values_are_not_listed(tmp_path: Path, out: Path) -> None:
+    raw, report = raw_upload(tmp_path, {"t.csv": "s\n" + "\n".join(["x" * 300, "y" * 300])})
+
+    result = build(raw / RAW_DATABASE, one_table(ColumnSpec(source="s", name="s")), report, out)
+
+    assert result.tables[0].columns[0].values == []
+
+
+def test_typed_columns_list_no_values(tmp_path: Path, out: Path) -> None:
+    raw, report = raw_upload(tmp_path, {"t.csv": "v\n1\n2\n"})
+
+    result = build(
+        raw / RAW_DATABASE, one_table(ColumnSpec(source="v", name="v", type="integer")), report, out
+    )
+
+    assert result.tables[0].columns[0].values == []
+
+
+def test_unlisted_columns_keep_identifier_names(tmp_path: Path, out: Path) -> None:
+    raw, report = raw_upload(tmp_path, {"t.csv": "TriGia,Tổng tiền\n1,2\n"})
+
+    result = build(raw / RAW_DATABASE, DatasetSpec(tables=[]), report, out)
+
+    assert [c.name for c in result.tables[0].columns] == ["TriGia", "tong_tien"]
+    assert rows(out, "SELECT trigia, tong_tien FROM t") == [("1", "2")]
+
+
+def test_repeated_rows_are_counted_with_the_key_that_proves_them(tmp_path: Path, out: Path) -> None:
+    """Order and line number identify every distinct row, so a repeat is a double entry."""
+    lines = "o,n,item\no1,1,a\no1,1,a\no1,2,b\no2,1,a\n"
+    raw, report = raw_upload(tmp_path, {"t.csv": lines})
+
+    result = build(raw / RAW_DATABASE, DatasetSpec(tables=[]), report, out)
+
+    [table] = result.tables
+    assert (table.duplicate_rows, table.duplicate_key) == (1, ["o", "n"])
+
+
+def test_repeated_rows_without_a_key_are_counted_but_not_proven(tmp_path: Path, out: Path) -> None:
+    """A sales log with no ids can hold two identical sales, so no column set proves a repeat."""
+    lines = "day,item,qty\n1,x,2\n1,x,2\n1,x,3\n1,y,2\n2,x,2\n"
+    raw, report = raw_upload(tmp_path, {"t.csv": lines})
+
+    result = build(raw / RAW_DATABASE, DatasetSpec(tables=[]), report, out)
+
+    [table] = result.tables
+    assert (table.duplicate_rows, table.duplicate_key) == (1, [])
+
+
+def test_deduplicated_tables_report_no_repeats(tmp_path: Path, out: Path) -> None:
+    raw, report = raw_upload(tmp_path, {"t.csv": "o,n,item\no1,1,a\no1,1,a\no1,2,b\n"})
+    spec = DatasetSpec(tables=[TableSpec(source="t", name="t", dedupe="exact")])
+
+    result = build(raw / RAW_DATABASE, spec, report, out)
+
+    assert result.tables[0].duplicate_rows == 0
+    assert rows(out, "SELECT count(*) FROM t") == [(2,)]

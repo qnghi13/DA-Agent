@@ -92,6 +92,9 @@ secrets ([ADR 0009](adr/0009-parse-uploads-in-sandbox.md)).
    `_quarantine` table and excluded rows to an `_excluded` table, so nothing is silently dropped.
    Parse rates under 98%, and exclude rules that look like they remove records, go back to the LLM,
    up to 3 attempts. These values held on all 24 dev shops ([ADR 0010](adr/0010-exclude-non-record-rows.md)).
+   Code removes exact repeats when a key of one or two columns proves them double entries, keeps
+   source column names that are already identifiers, and lists the values of text columns with
+   few of them for the agent ([ADR 0012](adr/0012-schema-names-values-and-double-entries.md)).
 7. **The user approves the spec** in the UI. Evals auto-approve.
 8. **Load into DuckDB:** the agent queries only cleaned views. Original columns stay available for
    cross-checking.

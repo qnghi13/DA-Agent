@@ -498,3 +498,20 @@ def test_select_questions_can_keep_only_some_shops(data_dir: Path, splits: Path)
         "q1",
         "q2",
     ]
+
+
+def test_results_keep_tool_errors_for_later_diagnosis(data_dir: Path, tmp_path: Path) -> None:
+    output = tmp_path / "out"
+    bad_sql = LLMResponse(
+        tool_calls=[ToolCall(id="c1", name="run_sql", arguments={"sql": "SELECT nope FROM x"})],
+        usage=Usage(input_tokens=10, output_tokens=5),
+    )
+    llm, ledger, _ = make_llm([bad_sql, answer(1)])
+    questions = read_jsonl(data_dir / "questions.jsonl")[:1]
+
+    run_questions(questions, data_dir, llm, ledger, RunConfig(output))
+
+    [row] = read_jsonl(output / "results.jsonl")
+    assert row["failed_tools"] == 1
+    assert len(row["errors"]) == 1
+    assert "nope" in row["errors"][0] or "x" in row["errors"][0]

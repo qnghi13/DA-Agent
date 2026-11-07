@@ -15,6 +15,9 @@ REPORT = BuildReport(
             rows=120,
             columns=[
                 ColumnBuild(name="order_id", source="Mã", type="text"),
+                ColumnBuild(
+                    name="status", source="status", type="text", values=["done", "cancelled"]
+                ),
                 ColumnBuild(name="total", source="Tổng", type="money"),
                 ColumnBuild(name="day", source="Ngày", type="date"),
             ],
@@ -42,6 +45,7 @@ def test_describe_lists_built_tables_with_their_column_types() -> None:
     assert (table.name, table.row_count) == ("orders", 120)
     assert [(c.name, c.type) for c in table.columns] == [
         ("order_id", "VARCHAR"),
+        ("status", "VARCHAR"),
         ("total", "BIGINT"),
         ("day", "DATE"),
     ]
@@ -72,3 +76,13 @@ def test_sandbox_errors_become_query_errors() -> None:
 
     with pytest.raises(QueryError, match="over the 15 s limit"):
         SandboxDataset(runner, "shop_1", REPORT).query("SELECT 1")
+
+
+def test_describe_keeps_source_names_and_known_values() -> None:
+    dataset = SandboxDataset(FakeRunner(SqlResult(status="ok")), "shop_1", REPORT)
+
+    [table] = dataset.describe()
+    order_id, status = table.columns[:2]
+
+    assert (order_id.source, order_id.values) == ("Mã", ())
+    assert (status.source, status.values) == ("status", ("done", "cancelled"))

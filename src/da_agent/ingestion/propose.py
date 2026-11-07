@@ -37,7 +37,8 @@ Format:
 
 Rules:
 - "source" is the raw table name from the "table" field, never a file or sheet label.
-- List every raw table. Give tables and important columns short English snake_case names.
+- List every raw table. Give tables short English snake_case names. A column whose raw name is \
+already a plain identifier, such as TriGia, keeps it; name other important columns in snake_case.
 - List a column when it needs a type other than text, or a clearer name. Unlisted columns stay \
 text with a name made from the raw name.
 - Choose types from the patterns and samples. money: amounts of currency, parsed from forms such \

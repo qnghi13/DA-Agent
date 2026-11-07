@@ -1,23 +1,27 @@
 # Progress
 
 Loaded into every session, so keep it under 60 lines. Replace stale content instead of appending.
-
 **Last updated:** 2026-11-06
-**Phase:** Days 3–6, Data and tools ([plan §6](plan.md#6-roadmap)). Agent SQL through the sandbox done, uncommitted.
+**Phase:** Days 3–6, Data and tools ([plan §6](plan.md#6-roadmap)). Baseline B4 +13; ADR 0012 work uncommitted.
 
 ## Next step
 
-1. First real baselines (ask first, about $0.9 in all, `--max-total-tokens` per run):
-   `bootstrap` (biz_123 only) on `pos.sqlite` in process vs `--datasets-dir datasets-dev`, to
-   check that ingestion keeps accuracy; then `regression --shops` of the 5 shops with subtotals
-   on `datasets-dev` vs `datasets-dev-noexclude`. The scorer counts filtered-out questions as
-   abstained, so compare correct and wrong. Earlier runs were 2–3 questions, not baselines.
-2. Foundation learning note. Known gap: heading rows holding a group total and date.
+1. Abstentions (11/30 on B4): 6 iteration limits, 4 malformed calls (`functions.submit_answer`),
+   ~16 binder errors from mistyped names (`PhươngThucTT`). Wrong: 3 (debt, expiry vs today, a
+   misread channel). Look at these as general patterns only.
+2. Error patterns on the 5 subtotal shops (9–11 wrong of 30), then the Foundation learning note.
 
+## Baselines (`bootstrap`, biz_123, 30 questions; correct / wrong / abstained, score)
+
+- A `pos.sqlite` 3/8/19 −5. A2 + turn notices 2/11/17 −9. B sandbox 3/14/13 −11. B2 + known
+  values 6/16/8 −10. B3 + source names 6/15/9 −9. **B4 + dedupe and text-match hint 16/3/11 +13.**
+  Runs in `eval/reports/baseline-*`; dev answers read only for error patterns (user, 2026-11-07).
+- `regression`, 5 subtotal shops: C with exclusion 13/9/8 +4, D without 16/11/3 +5: no measurable
+  effect. In 4 shops subtotal rows have no date, so date filters already drop them; only biz_107
+  fills dates down onto them.
 ## Done
 
-- Dev environment, design docs, ADRs 0001–0011, README, LICENSE, project structure.
-- Scorer (`eval/scorer/`, rulebook §7, §9): 3000/3000 on the real answers. Splits in
+- Dev environment, design docs, ADRs 0001–0011, README, LICENSE. Scorer (`eval/scorer/`, rulebook §7, §9): 3000/3000 on the real answers. Splits in
   `eval/splits/splits.json`: 24 dev, 6 holdout shops; sets `bootstrap`, `smoke`, `regression`.
 - Minimal agent: `LLMClient`, SQL guard, bounded tool loop, tracing, resumable `eval/datamate`
   runner. Model: Groq `gpt-oss-20b`; `search_rules` (ADR 0008).
@@ -32,31 +36,24 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
 - Agent SQL in the sandbox (ADR 0011): DuckDB guard, locked read-only engine, `SqlRun` per query
   (~0.7 s), `SandboxDataset`, `open_prepared_shop`, `run --datasets-dir/--shops`. `calendar.csv`
   travels with each upload; `prepare --reuse-specs` rebuilds without the model. `datasets-dev/`
-  has the calendar; `datasets-dev-noexclude/` is the same without exclusion; `-v1` is the old one.
-
-## Decisions needed
-
-- None open. Days 3–6 decisions are in ADR 0011 (a sandbox per query, Runner as a library).
+  has the calendar; `datasets-dev-noexclude/` is the same without exclusion; `-v1`/`-v2` are older.
+- Loop: turn notice at 3 left, last turn offers only `submit_answer`; Groq `failed_generation` is
+  a malformed call. ADR 0012: source column names kept, known values listed, exact repeats removed
+  when a 1–2 column key proves them (4 dev shops; 3 keyless logs kept). Results keep tool errors.
 
 ## Not verified
 
-- Gemini has made no real call; Ollama on the 4 GB GPU was too slow. `deploy/compose.dev.yml` never ran (no Compose plugin). Phoenix runs as container `da-agent-phoenix`.
+- Gemini: no real call. Ollama too slow. `compose.dev.yml` never ran. Phoenix: `da-agent-phoenix`.
 
 ## Waiting on the user
 
-- **Days 7–11:** agree to add $5–10 for Haiku 5.5. **Before Day 20:** install the Compose plugin.
-- **Before pushing to GitHub:** install `gh` or create the repo.
-- **Before going public:** check the organizer's data rules, whether `cccd` and phone are fake, the
+- Days 7–11: $5–10 for Haiku 5.5. Before Day 20: Compose plugin. Before pushing: `gh` or a repo. **Before going public:** check the organizer's data rules, whether `cccd` and phone are fake, the
   licenses of skills in `.agents/`, and the `brainstorming` scripts.
 
-## Spend so far: about $0.50 (agent runs $0.06, spec proposals $0.44).
-
+## Spend so far: about $1.16 (agent runs $0.72, spec proposals $0.44).
 ## Watch out
 
-- A question uses 48–75k tokens, about $0.005; a runaway one 130k.
-- `gpt-oss-20b` specs vary run to run (one shop went 100% to 0%). Compare totals, never one shop.
+- A run of 30 questions costs about $0.05–0.10. `gpt-oss-20b` varies run to run: compare totals.
 - Do not regenerate `splits.json`, and never read data from its holdout shops. The scorer gets a
   holdout option on Day 21. `eval/reports/` is gitignored, so publish only aggregates in `docs/eval/`.
-- Answers have no row labels: ingestion needs our own labels, the score checks end to end. Keep the
-  declarative spec (user, ADR 0006); a sandboxed code step is an open question.
 - Scorer interpretations: a wrong `type` is wrong; table columns match by name only if all names match.

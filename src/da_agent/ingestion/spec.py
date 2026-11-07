@@ -6,6 +6,7 @@ hidden whatever the spec says.
 """
 
 import functools
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -13,7 +14,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from da_agent.ingestion.report import IngestReport
 
 Identifier = str
-IDENTIFIER_PATTERN = r"^[a-z][a-z0-9_]{0,62}$"
+IDENTIFIER_PATTERN = r"^[A-Za-z][A-Za-z0-9_]{0,62}$"
+# Raw column names that SQL can use unquoted. Clean tables keep them, because documents written for
+# an upload use its own names.
+SOURCE_NAME = re.compile(IDENTIFIER_PATTERN)
 META_COLUMNS = ("_source", "_row")
 
 ColumnType = Literal[
@@ -32,7 +36,10 @@ class _Model(BaseModel):
 
 class ColumnSpec(_Model):
     source: str = Field(description="Raw column name, exactly as in the profile.")
-    name: Identifier = Field(pattern=IDENTIFIER_PATTERN, description="Clean snake_case name.")
+    name: Identifier = Field(
+        pattern=IDENTIFIER_PATTERN,
+        description="Clean name. A source name that is already an identifier is kept instead.",
+    )
     type: ColumnType = "text"
     date_formats: list[DateFormat] = Field(default_factory=list, max_length=5)
     true_values: list[str] = Field(default_factory=list, max_length=20)
@@ -207,6 +214,38 @@ def parse_spec_lenient(data: object) -> tuple[DatasetSpec, list[str]]:
     return DatasetSpec(tables=tables, relationships=relationships, notes=notes), problems
 
 
+def keep_source_names(spec: DatasetSpec) -> DatasetSpec:
+    """Name each column by its raw name when that is already an identifier, unless another column
+    has that name ignoring case, which SQL treats as the same. Relationships follow the rename."""
+    tables, renamed = [], {}
+    for table in spec.tables:
+        keep = {c.source for c in table.columns if SOURCE_NAME.fullmatch(c.source)}
+        taken = {m.lower() for m in META_COLUMNS} | {
+            c.name.lower() for c in table.columns if c.source not in keep
+        }
+        columns = []
+        for column in table.columns:
+            name = column.name
+            if column.source in keep and column.source.lower() not in taken:
+                name = column.source
+            elif name.lower() in taken and column.source in keep:
+                name = _unique_name(name, taken)
+            taken.add(name.lower())
+            renamed[table.name, column.name] = name
+            columns.append(column.model_copy(update={"name": name}))
+        tables.append(table.model_copy(update={"columns": columns}))
+    relationships = [
+        link.model_copy(
+            update={
+                "from_column": renamed.get((link.from_table, link.from_column), link.from_column),
+                "to_column": renamed.get((link.to_table, link.to_column), link.to_column),
+            }
+        )
+        for link in spec.relationships
+    ]
+    return spec.model_copy(update={"tables": tables, "relationships": relationships})
+
+
 def _unique_name(base: str, taken: set[str]) -> str:
     name, suffix = base, 2
     while name in taken:
@@ -289,4 +328,4 @@ def sanitize_spec(spec: DatasetSpec, report: IngestReport) -> tuple[DatasetSpec,
         else:
             relationships.append(link)
     sanitized = spec.model_copy(update={"tables": tables, "relationships": relationships})
-    return sanitized, problems
+    return keep_source_names(sanitized), problems

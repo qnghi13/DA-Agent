@@ -6,7 +6,7 @@ from typing import Any, Protocol
 from da_agent.agent.answer import ANSWER_KINDS, ToolStep
 from da_agent.agent.rules import RuleIndex
 from da_agent.llm.types import ToolCall, ToolSpec
-from da_agent.storage.sqlite_dataset import QueryError, QueryResult, TableInfo
+from da_agent.storage.sqlite_dataset import Column, QueryError, QueryResult, TableInfo
 
 SUBMIT_ANSWER = "submit_answer"
 SEARCH_RULES = "search_rules"
@@ -72,11 +72,20 @@ SEARCH_RULES_SPEC = ToolSpec(
 )
 
 
+DIALECT_HINTS = {
+    "DuckDB": (
+        " To find text such as a product name, match case and accents loosely, for example "
+        "strip_accents(lower(name)) LIKE '%vien sui%', or ILIKE."
+    ),
+}
+
+
 def tool_specs(rules: RuleIndex | None, dialect: str = "SQLite") -> list[ToolSpec]:
     """search_rules is offered only when there are sections to search. run_sql names the SQL
     dialect of the dataset, so the model writes functions that exist."""
+    hint = DIALECT_HINTS.get(dialect, "")
     specs = [
-        spec.model_copy(update={"description": spec.description.replace("SQLite", dialect)})
+        spec.model_copy(update={"description": spec.description.replace("SQLite", dialect) + hint})
         if spec.name == "run_sql"
         else spec
         for spec in TOOL_SPECS
@@ -94,10 +103,24 @@ class Dataset(Protocol):
     def query(self, sql: str) -> QueryResult: ...
 
 
+def _describe_column(column: Column) -> str:
+    text = f"{column.name}:{column.type}"
+    if column.source and column.source != column.name:
+        text += f" (source {column.source})"
+    return text
+
+
 def _describe_table(table: TableInfo) -> dict[str, Any]:
     # Compact on purpose, because this text is resent on every later turn of the run.
-    columns = ", ".join(f"{column.name}:{column.type}" for column in table.columns)
-    return {"name": table.name, "rows": table.row_count, "columns": columns}
+    described: dict[str, Any] = {
+        "name": table.name,
+        "rows": table.row_count,
+        "columns": ", ".join(_describe_column(column) for column in table.columns),
+    }
+    values = {column.name: list(column.values) for column in table.columns if column.values}
+    if values:
+        described["values"] = values
+    return described
 
 
 def _error(tool: str, message: str, sql: str | None = None) -> tuple[str, ToolStep]:

@@ -119,6 +119,10 @@ def prepare_uploads(
             row["hidden_columns"] = sum(len(t.hidden) for t in build.report.tables)
             row["excluded_rows"] = sum(e.rows for t in build.report.tables for e in t.excluded)
             row["dropped_rules"] = prepared.dropped_rules
+            row["deduplicated"] = prepared.deduplicated
+            row["unproven_repeats"] = {
+                t.name: t.duplicate_rows for t in build.report.tables if t.duplicate_rows
+            }
         summary.append(row)
         print(json.dumps(row, ensure_ascii=False), flush=True)
     return summary

@@ -43,7 +43,10 @@ class SandboxDataset:
             TableInfo(
                 table.name,
                 table.rows,
-                [Column(c.name, SQL_TYPES.get(c.type, "VARCHAR")) for c in table.columns],
+                [
+                    Column(c.name, SQL_TYPES.get(c.type, "VARCHAR"), c.source, tuple(c.values))
+                    for c in table.columns
+                ],
             )
             for table in report.tables
             if table.error is None

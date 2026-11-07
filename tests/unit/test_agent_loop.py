@@ -11,6 +11,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from da_agent.agent.loop import AgentLimits, Document, run_agent
+from da_agent.agent.tools import execute_tool
 from da_agent.llm.client import CostLedger, LLMClient, Route, RunBudget
 from da_agent.llm.types import (
     InvalidToolCallError,
@@ -20,7 +21,7 @@ from da_agent.llm.types import (
     ToolCall,
     Usage,
 )
-from da_agent.storage.sqlite_dataset import SqliteDataset
+from da_agent.storage.sqlite_dataset import Column, SqliteDataset, TableInfo
 
 
 class ScriptedAdapter:
@@ -252,6 +253,38 @@ def test_iteration_limit_stops_the_loop(dataset: SqliteDataset) -> None:
     assert len(adapter.requests) == 3
 
 
+def test_the_model_is_told_when_few_turns_remain(dataset: SqliteDataset) -> None:
+    script = [call("run_sql", {"sql": "SELECT 1"})] * 10
+
+    _, adapter = run(dataset, script, max_iterations=5)
+
+    def notices(request: LLMRequest) -> list[str]:
+        return [m.content or "" for m in request.messages if m.role == "user"][1:]
+
+    assert notices(adapter.requests[1]) == []
+    assert any("3 turns left" in notice for notice in notices(adapter.requests[2]))
+
+
+def test_the_last_turn_offers_only_submit_answer(dataset: SqliteDataset) -> None:
+    script = [call("run_sql", {"sql": "SELECT 1"})] * 2 + [submit("number", 350)]
+
+    result, adapter = run(dataset, script, max_iterations=3)
+
+    assert [tool.name for tool in adapter.requests[-1].tools] == ["submit_answer"]
+    assert len(adapter.requests[0].tools) > 1
+    assert result.stop_reason == "answered"
+    assert result.answer.value == 350
+
+
+def test_the_model_can_still_abstain_on_the_last_turn(dataset: SqliteDataset) -> None:
+    script = [call("run_sql", {"sql": "SELECT 1"})] * 2 + [text("I could not finish.")]
+
+    result, _ = run(dataset, script, max_iterations=3)
+
+    assert result.answer is None
+    assert result.stop_reason == "iteration_limit"
+
+
 def test_budget_stop_ends_the_run_cleanly(dataset: SqliteDataset) -> None:
     script = [call("run_sql", {"sql": "SELECT 1"})] * 5
 
@@ -411,3 +444,40 @@ def test_run_sql_names_the_dataset_sql_dialect() -> None:
 
     assert "DuckDB" in duckdb_sql.description
     assert "SQLite" in default_sql.description
+
+
+class DescribedDataset:
+    dialect = "DuckDB"
+
+    def describe(self) -> list[TableInfo]:
+        columns = [
+            Column("tri_gia", "BIGINT", source="TriGia"),
+            Column("status", "VARCHAR", source="status", values=("completed", "cancelled")),
+        ]
+        return [TableInfo("orders", 3, columns)]
+
+    def query(self, sql: str):
+        raise AssertionError("not used")
+
+
+def test_describe_dataset_shows_source_names_and_known_values() -> None:
+    content, step = execute_tool(ToolCall(id="c1", name="describe_dataset"), DescribedDataset())
+
+    [table] = json.loads(content)["tables"]
+    assert step.ok
+    assert "tri_gia:BIGINT (source TriGia)" in table["columns"]
+    assert "status:VARCHAR" in table["columns"]
+    assert "(source status)" not in table["columns"]
+    assert table["values"] == {"status": ["completed", "cancelled"]}
+
+
+def test_duckdb_run_sql_points_to_case_and_accent_blind_matching() -> None:
+    """DuckDB LIKE is case-sensitive and questions often drop Vietnamese accents."""
+    from da_agent.agent.tools import tool_specs
+
+    [duckdb_sql] = [s for s in tool_specs(None, dialect="DuckDB") if s.name == "run_sql"]
+    [sqlite_sql] = [s for s in tool_specs(None) if s.name == "run_sql"]
+
+    assert "ILIKE" in duckdb_sql.description
+    assert "strip_accents" in duckdb_sql.description
+    assert "strip_accents" not in sqlite_sql.description

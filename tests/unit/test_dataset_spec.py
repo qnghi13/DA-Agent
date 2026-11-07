@@ -45,7 +45,7 @@ def test_a_valid_spec_has_no_problems() -> None:
     assert check_spec(spec, report()) == []
 
 
-@pytest.mark.parametrize("name", ["Orders", "1x", "a b", 'x"; DROP TABLE y; --', "", "a" * 64])
+@pytest.mark.parametrize("name", ["1x", "_x", "a b", "Tổng", 'x"; DROP TABLE y; --', "", "a" * 64])
 def test_clean_names_must_be_plain_identifiers(name: str) -> None:
     with pytest.raises(ValidationError):
         ColumnSpec(source="x", name=name)
@@ -269,3 +269,75 @@ def test_clean_column_names_in_row_rules_map_to_their_raw_columns() -> None:
     assert clean.tables[0].fill_down == ["Mã đơn"]
     assert clean.tables[0].exclude_rows[0].when[0].column == "Mã đơn"
     assert problems == []
+
+
+def test_columns_keep_source_names_that_are_already_identifiers() -> None:
+    """Documents written for an upload use its own column names, so they stay when SQL can use
+    them unquoted. Other names keep the spec's clean name."""
+    from da_agent.ingestion.spec import keep_source_names
+
+    spec = DatasetSpec(
+        tables=[
+            TableSpec(
+                source="don",
+                name="orders",
+                columns=[
+                    ColumnSpec(source="MaHoaDon", name="ma_hoa_don"),
+                    ColumnSpec(source="Tổng tiền", name="total"),
+                    ColumnSpec(source="ngay_lap", name="order_date", type="date"),
+                    ColumnSpec(source="Order Id", name="order_id"),
+                ],
+            ),
+            TableSpec(source="kh", name="kh", columns=[ColumnSpec(source="MaHoaDon", name="x")]),
+        ],
+        relationships=[
+            Relationship(
+                from_table="kh", from_column="x", to_table="orders", to_column="ma_hoa_don"
+            )
+        ],
+    )
+
+    kept = keep_source_names(spec)
+
+    assert [c.name for c in kept.tables[0].columns] == ["MaHoaDon", "total", "ngay_lap", "order_id"]
+    assert kept.relationships == [
+        Relationship(from_table="kh", from_column="MaHoaDon", to_table="orders",
+                     to_column="MaHoaDon")
+    ]  # fmt: skip
+
+
+def test_kept_source_names_never_collide_ignoring_case() -> None:
+    """SQL matches unquoted names ignoring case, so TriGia and trigia would be one column."""
+    from da_agent.ingestion.spec import keep_source_names
+
+    spec = DatasetSpec(
+        tables=[
+            TableSpec(
+                source="don",
+                name="orders",
+                columns=[
+                    ColumnSpec(source="Tổng", name="trigia"),
+                    ColumnSpec(source="TriGia", name="tri_gia"),
+                    ColumnSpec(source="_row", name="row_copy"),
+                ],
+            )
+        ]
+    )
+
+    kept = keep_source_names(spec)
+
+    assert [c.name for c in kept.tables[0].columns] == ["trigia", "tri_gia", "row_copy"]
+
+
+def test_sanitize_keeps_source_names() -> None:
+    from da_agent.ingestion.spec import sanitize_spec
+
+    raw = report()
+    raw.tables[1].columns.insert(0, ColumnReport(name="MaKH", profile=ColumnProfile()))
+    spec = DatasetSpec(
+        tables=[TableSpec(source="kh", name="kh", columns=[ColumnSpec(source="MaKH", name="id")])]
+    )
+
+    clean, _ = sanitize_spec(spec, raw)
+
+    assert clean.tables[0].columns[0].name == "MaKH"

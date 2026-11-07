@@ -10,7 +10,7 @@ from typing import Literal
 
 from da_agent.ingestion.build import BuildReport, ExcludedRule
 from da_agent.ingestion.propose import ProposalResult, propose_spec
-from da_agent.ingestion.spec import DatasetSpec
+from da_agent.ingestion.spec import DatasetSpec, TableSpec, keep_source_names
 from da_agent.llm.client import LLMClient, RunBudget
 from da_agent.runner.runner import BuildResult, BuildRun, IngestResult, IngestRun, Runner
 
@@ -31,6 +31,8 @@ class PreparedDataset:
     # The spec that was built, which can differ from the proposal when rules were dropped.
     spec: DatasetSpec | None = None
     dropped_rules: list[str] = field(default_factory=list)
+    # Tables whose exact repeats were removed because a key proved them double entries.
+    deduplicated: list[str] = field(default_factory=list)
 
 
 def _record_problems(
@@ -81,6 +83,31 @@ def _without_record_rules(spec: DatasetSpec, report: BuildReport) -> tuple[Datas
     if not dropped:
         return spec, []
     return spec.model_copy(update={"tables": tables}), dropped
+
+
+def _with_dedupe(spec: DatasetSpec, report: BuildReport) -> tuple[DatasetSpec, list[str]]:
+    """Turn on exact dedupe for tables whose repeated rows a key proves to be double entries, such
+    as two identical rows with the same order id and line number. Code decides this, not the
+    model: identical rows cannot be separate records when a key tells all distinct rows apart."""
+    proven = {
+        table.name: table.source
+        for table in report.tables
+        if table.duplicate_rows and table.duplicate_key
+    }
+    tables, changed = [], []
+    for table in spec.tables:
+        if table.name in proven and table.dedupe == "none":
+            table = table.model_copy(update={"dedupe": "exact"})
+            changed.append(table.name)
+        tables.append(table)
+    listed = {table.name for table in spec.tables}
+    for name, source in proven.items():
+        if name not in listed:
+            tables.append(TableSpec(source=source, name=name, dedupe="exact"))
+            changed.append(name)
+    if not changed:
+        return spec, []
+    return spec.model_copy(update={"tables": tables}), changed
 
 
 def parse_problems(
@@ -151,9 +178,11 @@ def prepare_dataset(
     chosen = next((b for s, b in reversed(builds) if s == spec), None)
     status: PrepareStatus = "ok" if not proposal.problems and not proposal.error else "problems"
     dropped: list[str] = []
+    deduplicated: list[str] = []
     if chosen is not None and chosen.status == "ok" and chosen.report is not None:
         safer, dropped = _without_record_rules(spec, chosen.report)
-        if dropped:
+        safer, deduplicated = _with_dedupe(safer, chosen.report)
+        if dropped or deduplicated:
             rebuilt = runner.build(BuildRun(ingest_id=ingest_id, spec=safer))
             builds.append((safer, rebuilt))
             if rebuilt.status == "ok":
@@ -176,6 +205,7 @@ def prepare_dataset(
         build=chosen,
         spec=spec,
         dropped_rules=dropped,
+        deduplicated=deduplicated,
     )
 
 
@@ -188,12 +218,28 @@ def rebuild_dataset(
 ) -> PreparedDataset:
     """Ingest an upload and build it with an approved spec, without the model. Used when files
     change under a spec the user already approved."""
+    spec = keep_source_names(spec)
     ingested = runner.ingest(IngestRun(upload_id=upload_id))
     if ingested.status != "ok" or ingested.report is None or ingested.output_dir is None:
         return PreparedDataset(status="ingest_failed", ingest=ingested)
-    built = runner.build(BuildRun(ingest_id=ingested.output_dir.name, spec=spec))
+    ingest_id = ingested.output_dir.name
+    built = runner.build(BuildRun(ingest_id=ingest_id, spec=spec))
     if built.status != "ok" or built.report is None:
         return PreparedDataset(status="build_failed", ingest=ingested, build=built, spec=spec)
-    problems = parse_problems(built.report, min_parse_rate)
+    report = built.report
+    deduped, deduplicated = _with_dedupe(spec, report)
+    if deduplicated:
+        rebuilt = runner.build(BuildRun(ingest_id=ingest_id, spec=deduped))
+        if rebuilt.status == "ok" and rebuilt.report is not None:
+            if built.output_dir is not None:
+                shutil.rmtree(built.output_dir, ignore_errors=True)
+            spec, built, report = deduped, rebuilt, rebuilt.report
+        else:
+            if rebuilt.output_dir is not None:
+                shutil.rmtree(rebuilt.output_dir, ignore_errors=True)
+            deduplicated = []
+    problems = parse_problems(report, min_parse_rate)
     status: PrepareStatus = "problems" if problems else "ok"
-    return PreparedDataset(status=status, ingest=ingested, build=built, spec=spec)
+    return PreparedDataset(
+        status=status, ingest=ingested, build=built, spec=spec, deduplicated=deduplicated
+    )

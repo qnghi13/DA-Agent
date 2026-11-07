@@ -249,3 +249,76 @@ def test_a_rebuild_reports_problems_but_keeps_the_build(tmp_path: Path) -> None:
 
     assert prepared.status == "problems"
     assert prepared.build is not None and prepared.build.output_dir == tmp_path / "build1"
+
+
+def test_a_rebuild_keeps_source_names_that_are_identifiers(tmp_path: Path) -> None:
+    from da_agent.ingestion.pipeline import rebuild_dataset
+    from da_agent.ingestion.spec import DatasetSpec
+
+    spec = DatasetSpec.model_validate_json(
+        '{"tables": [{"source": "don", "name": "orders", "columns": '
+        '[{"source": "TriGia", "name": "tri_gia", "type": "money"}]}]}'
+    )
+    runner = FakeRunner(tmp_path, [build_report(parsed=100)])
+
+    prepared = rebuild_dataset("up", runner, spec)  # type: ignore[arg-type]
+
+    assert [c.name for c in runner.specs[0].tables[0].columns] == ["TriGia"]
+    assert prepared.spec == runner.specs[0]
+
+
+def repeated_report(key: list[str]) -> BuildReport:
+    report = build_report(parsed=100)
+    report.tables[0].duplicate_rows = 3
+    report.tables[0].duplicate_key = key
+    return report
+
+
+def test_proven_double_entries_are_removed_by_a_rebuild(tmp_path: Path) -> None:
+    runner = FakeRunner(tmp_path, [repeated_report(["total"]), build_report(parsed=100)])
+    client, _ = llm([GOOD])
+
+    prepared = prepare_dataset("up", runner, client, run_id="r")  # type: ignore[arg-type]
+
+    assert runner.specs[-1].tables[0].dedupe == "exact"
+    assert prepared.spec == runner.specs[-1]
+    assert prepared.deduplicated == ["orders"]
+    assert prepared.build is not None and prepared.build.output_dir == tmp_path / "build2"
+    assert not (tmp_path / "build1").exists()
+
+
+def test_repeats_without_a_key_stay(tmp_path: Path) -> None:
+    runner = FakeRunner(tmp_path, [repeated_report([])])
+    client, _ = llm([GOOD])
+
+    prepared = prepare_dataset("up", runner, client, run_id="r")  # type: ignore[arg-type]
+
+    assert len(runner.specs) == 1
+    assert prepared.deduplicated == []
+
+
+def test_a_rebuild_also_removes_proven_double_entries(tmp_path: Path) -> None:
+    from da_agent.ingestion.pipeline import rebuild_dataset
+    from da_agent.ingestion.spec import DatasetSpec
+
+    runner = FakeRunner(tmp_path, [repeated_report(["total"]), build_report(parsed=100)])
+
+    prepared = rebuild_dataset("up", runner, DatasetSpec.model_validate_json(GOOD))  # type: ignore[arg-type]
+
+    assert prepared.status == "ok"
+    assert runner.specs[-1].tables[0].dedupe == "exact"
+    assert prepared.deduplicated == ["orders"]
+    assert not (tmp_path / "build1").exists()
+
+
+def test_tables_missing_from_the_spec_are_deduplicated_too(tmp_path: Path) -> None:
+    from da_agent.ingestion.pipeline import rebuild_dataset
+    from da_agent.ingestion.spec import DatasetSpec
+
+    runner = FakeRunner(tmp_path, [repeated_report(["total"]), build_report(parsed=100)])
+
+    prepared = rebuild_dataset("up", runner, DatasetSpec(tables=[]))  # type: ignore[arg-type]
+
+    [table] = runner.specs[-1].tables
+    assert (table.source, table.name, table.dedupe) == ("don", "orders", "exact")
+    assert prepared.deduplicated == ["orders"]
