@@ -6,8 +6,6 @@ in its own schema, which is dropped afterwards.
 
 import os
 import threading
-import uuid
-from collections.abc import Iterator
 from uuid import UUID
 
 import psycopg
@@ -22,31 +20,6 @@ pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(not URL, reason="DA_AGENT_TEST_POSTGRES_URL is not set"),
 ]
-
-
-@pytest.fixture
-def schema() -> Iterator[str]:
-    assert URL is not None
-    name = f"test_{uuid.uuid4().hex[:12]}"
-    with psycopg.connect(URL, autocommit=True) as admin:
-        admin.execute(f"CREATE SCHEMA {name}")
-        try:
-            yield name
-        finally:
-            admin.execute(f"DROP SCHEMA {name} CASCADE")
-
-
-@pytest.fixture
-def conn(schema: str) -> Iterator[psycopg.Connection]:
-    assert URL is not None
-    with connect(URL, schema=schema) as connection:
-        migrate(connection)
-        yield connection
-
-
-@pytest.fixture
-def workspace(conn: psycopg.Connection) -> UUID:
-    return create_workspace(conn, "shop")
 
 
 def expire_leases(conn: psycopg.Connection) -> None:

@@ -4,7 +4,8 @@ A handler gets the job and an event that is set if the worker loses the job (its
 another worker took it). The outcome is written only while this worker still owns the job.
 
 - A handler that returns a dict completes the job with it.
-- RetryableJobError queues the job again after the next delay in retry_delays.
+- RetryableJobError queues the job again after the next delay in retry_delays, and
+  PermanentJobError fails it with its message.
 - Any other exception fails the job. Only the exception type is stored, because the job row is
   shown to the workspace and a message can hold host paths; the trace keeps the full exception.
 - A BaseException that is not an Exception, such as the process being stopped, is not caught: the
@@ -30,6 +31,11 @@ MAX_ERROR_CHARS = 500
 
 class RetryableJobError(Exception):
     """A failure that may pass on a later attempt. The message is shown to the workspace."""
+
+
+class PermanentJobError(Exception):
+    """A failure that no retry can fix, such as a missing dataset. The message is shown to the
+    workspace."""
 
 
 @dataclass(frozen=True)
@@ -88,6 +94,10 @@ class Worker:
                 return
             try:
                 result = handler(job, lost)
+            except PermanentJobError as error:
+                message = str(error)[:MAX_ERROR_CHARS]
+                queue.fail(job.id, self.worker_id, message, retry_in_seconds=None)
+                return
             except RetryableJobError as error:
                 delays = self.config.retry_delays
                 delay = delays[min(job.attempts, len(delays)) - 1] if delays else 0.0

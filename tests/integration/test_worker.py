@@ -6,8 +6,6 @@ Needs a Postgres server. Set DA_AGENT_TEST_POSTGRES_URL, or the tests are skippe
 import os
 import sqlite3
 import time
-import uuid
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -19,12 +17,11 @@ from da_agent.agent.answer import result_from_json
 from da_agent.agent.loop_types import Document
 from da_agent.llm.client import CostLedger, LLMClient, Route
 from da_agent.llm.types import TransientLLMError
-from da_agent.storage.db import connect, migrate
+from da_agent.storage.db import connect
 from da_agent.storage.jobs import Job, JobQueue
 from da_agent.storage.sqlite_dataset import SqliteDataset
-from da_agent.storage.workspaces import create_workspace
 from da_agent.worker.runs import RunHandler
-from da_agent.worker.worker import RetryableJobError, Worker, WorkerConfig
+from da_agent.worker.worker import PermanentJobError, RetryableJobError, Worker, WorkerConfig
 from tests.unit.test_agent_graph import ScriptedAdapter, plan, sql, submit
 
 URL = os.environ.get("DA_AGENT_TEST_POSTGRES_URL")
@@ -36,31 +33,6 @@ pytestmark = [
 
 class Killed(BaseException):
     """Stands in for the worker process dying: nothing in the worker catches it."""
-
-
-@pytest.fixture
-def schema() -> Iterator[str]:
-    assert URL is not None
-    name = f"test_{uuid.uuid4().hex[:12]}"
-    with psycopg.connect(URL, autocommit=True) as admin:
-        admin.execute(f"CREATE SCHEMA {name}")
-        try:
-            yield name
-        finally:
-            admin.execute(f"DROP SCHEMA {name} CASCADE")
-
-
-@pytest.fixture
-def conn(schema: str) -> Iterator[psycopg.Connection]:
-    assert URL is not None
-    with connect(URL, schema=schema) as connection:
-        migrate(connection)
-        yield connection
-
-
-@pytest.fixture
-def workspace(conn: psycopg.Connection) -> UUID:
-    return create_workspace(conn, "shop")
 
 
 @pytest.fixture
@@ -243,3 +215,17 @@ def test_a_worker_that_lost_its_job_does_not_write_a_result(
 
     current = job(conn, job_id, workspace)
     assert (current.status, current.result) == ("running", None)
+
+
+def test_a_permanent_error_fails_the_job_with_its_message(
+    schema: str, conn: psycopg.Connection, workspace: UUID
+) -> None:
+    job_id = JobQueue(conn).enqueue(workspace, "run", {})
+
+    def gone(job: Job, lost: Any) -> dict[str, Any]:
+        raise PermanentJobError("the dataset is not ready")
+
+    Worker(config(schema, "w1"), {"run": gone}).run_once()
+
+    failed = job(conn, job_id, workspace)
+    assert (failed.status, failed.last_error) == ("failed", "the dataset is not ready")
