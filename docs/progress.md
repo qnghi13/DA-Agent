@@ -6,20 +6,20 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
 
 ## Next step
 
-1. Measure the reliability phase once on one 30-question set (~$0.08, ask first). Failure paths
-   and an injection suite (`tests/security/test_injection.py`) are tested; Vietnamese note 04.
+1. Reliability phase done (note 04). Next phase per [plan §6](plan.md#6-roadmap); read it first.
+   Failure paths and an injection suite (`tests/security/test_injection.py`) are tested.
 2. `regression` (150, ~$0.40) only at the end, if affordable.
 ## Baselines (`bootstrap`, biz_123, 30 questions; correct / wrong / abstained, score)
 
-- A `pos.sqlite` −5; B sandbox −11; B3 names −9; **B4 dedupe 16/3/11 +13.** Runs in
-  `eval/reports/baseline-*`; dev answers read only for error patterns (user, 2026-11-07).
+- A −5; B sandbox −11; **B4 dedupe +13**. `eval/reports/baseline-*`; dev answers for patterns only.
 - Row descriptions in `describe_dataset` and status guidance in the prompt: C2 18/8/4 +10 (from
   +4), B5 18/4/8 +14 (from +13). `smoke` (19 shops) S1 13/6/11 +7, $0.06: Days 3–6 closed.
 - Graph (`--agent graph`, plan reads all rules): B7 18/7/5 +11, C4 16/7/7 +9, S3 18/7/5 +11 = +31,
   same total as the loop (+31), ~13% more tokens. Plan with rule titles only gave +2 on bootstrap.
 - Verify checks replayed on saved graph runs flag 0 correct answers: period, fan-out, unreadable
   values (ADR 0014), typed inputs (12 literal-only answers, 7 correct, inputs all from data).
-  `-2tr250` parses now: `datasets-dev` has no unreadable values (`-v7` older).
+  `-2tr250` parses now: `datasets-dev` has no unreadable values (`-v7` older). B8 with all checks:
+  17/7/6 +10 vs B7 +11, $0.11; no new check fired, only number tracing (3 times): noise.
 ## Done
 
 - Dev environment, design docs, ADRs 0001–0014, README, LICENSE. Scorer (`eval/scorer/`, rulebook §7, §9): 3000/3000 on the real answers. Splits in
@@ -50,7 +50,7 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
 - Before Day 20: Compose plugin. Before pushing: `gh` or a repo. **Before going public:** check the organizer's data rules, whether `cccd` and phone are fake, the
   licenses of skills in `.agents/`, and the `brainstorming` scripts.
 
-## Spend so far: about $1.76 (agent runs $1.32, spec proposals $0.44).
+## Spend so far: about $1.87 (agent runs $1.43, spec proposals $0.44).
 ## Watch out
 
 - A run of 30 questions costs about $0.05–0.10. `gpt-oss-20b` varies run to run: compare totals.
