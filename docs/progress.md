@@ -6,8 +6,12 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
 
 ## Next step
 
-1. Backend done (ADRs 0017–0022, README). End to end with Groq over HTTP on synthetic orders:
-   spec ok, June revenue right, report linked, chart drawn, $0.0014. Next: read plan §6 for React.
+1. React: `web/` (Vite 8, React 19, TS 7, exact pins; `/v1` proxied to :8000, so no CORS). Done:
+   key form, dataset list, upload, review (summary, column editor, JSON editor, approve). Checked
+   by build and OpenAPI only, not yet in a browser against a live stack. Next: chat over SSE read
+   with `fetch` (EventSource cannot send the bearer key). Open, brainstorm: trace view (runs expose no
+   `trace_id`), answering `question` events (no resume endpoint), run history (no list endpoint).
+   Backend done (ADRs 0017–0022): end to end with Groq over HTTP, $0.0014.
    Charts and reports done (ADRs 0015–0016); `--report` writes HTML (`report-sample`, $0.017).
    RAG experiment cut: plan with titles only +2 vs all rules +11 already answers it (note 05).
 2. `regression` (150, ~$0.40) only at the end, if affordable.

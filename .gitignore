@@ -18,6 +18,7 @@ htmlcov/
 # Node
 node_modules/
 dist/
+*.tsbuildinfo
 
 # Raw eval output can contain answers and cell values
 /eval/reports/*

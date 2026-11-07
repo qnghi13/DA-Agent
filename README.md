@@ -70,6 +70,18 @@ curl -H "Authorization: Bearer $KEY" localhost:8000/v1/runs/$RUN/report > report
 Every setting is listed in [`src/da_agent/config.py`](src/da_agent/config.py). The interactive API
 reference is at `/docs`.
 
+## Running the web UI
+
+The UI needs Node 22. In development Vite proxies `/v1` to the API, so both share one origin.
+Set `DA_AGENT_API_URL` if the API is not on `http://127.0.0.1:8000`.
+
+```bash
+cd web
+npm ci
+npm run dev          # http://localhost:5173, then paste the workspace key
+npm run build        # type-check and bundle into web/dist
+```
+
 ## License
 
 [Apache-2.0](LICENSE)
