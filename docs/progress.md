@@ -2,7 +2,7 @@
 
 Loaded into every session, so keep it under 60 lines. Replace stale content instead of appending.
 **Last updated:** 2026-11-07
-**Phase:** Days 11–13, Reliability ([plan §6](plan.md#6-roadmap)). Graph (ADR 0013) uncommitted.
+**Phase:** Days 11–13, Reliability ([plan §6](plan.md#6-roadmap)). Verify checks: ADR 0014.
 
 ## Next step
 
@@ -11,18 +11,18 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
 2. `regression` (150, ~$0.40) only at the end, if affordable.
 ## Baselines (`bootstrap`, biz_123, 30 questions; correct / wrong / abstained, score)
 
-- A `pos.sqlite` −5; B sandbox −11; B3 source names −9; **B4 dedupe 16/3/11 +13.**
-  Runs in `eval/reports/baseline-*`; dev answers read only for error patterns (user, 2026-11-07).
-- 5 subtotal shops: with exclusion +4, without +5: no effect, since subtotal rows lack dates.
+- A `pos.sqlite` −5; B sandbox −11; B3 names −9; **B4 dedupe 16/3/11 +13.** Runs in
+  `eval/reports/baseline-*`; dev answers read only for error patterns (user, 2026-11-07).
 - Row descriptions in `describe_dataset` and status guidance in the prompt: C2 18/8/4 +10 (from
   +4), B5 18/4/8 +14 (from +13). `smoke` (19 shops) S1 13/6/11 +7, $0.06: Days 3–6 closed.
 - Graph (`--agent graph`, plan reads all rules): B7 18/7/5 +11, C4 16/7/7 +9, S3 18/7/5 +11 = +31,
   same total as the loop (+31), ~13% more tokens. Plan with rule titles only gave +2 on bootstrap.
-- Verify checks replayed offline on saved graph runs, 0 correct answers flagged: period (73 runs,
-  `-v6` older); fan-out and unreadable values (`agent/data_checks.py`, ADR 0014; 70 runs, 28 probes).
+- Verify checks replayed on saved graph runs flag 0 correct answers: period, fan-out, unreadable
+  values (ADR 0014), typed inputs (12 literal-only answers, 7 correct, inputs all from data).
+  `-2tr250` parses now: `datasets-dev` has no unreadable values (`-v7` older).
 ## Done
 
-- Dev environment, design docs, ADRs 0001–0011, README, LICENSE. Scorer (`eval/scorer/`, rulebook §7, §9): 3000/3000 on the real answers. Splits in
+- Dev environment, design docs, ADRs 0001–0014, README, LICENSE. Scorer (`eval/scorer/`, rulebook §7, §9): 3000/3000 on the real answers. Splits in
   `eval/splits/splits.json`: 24 dev, 6 holdout shops; sets `bootstrap`, `smoke`, `regression`.
 - Minimal agent: `LLMClient`, SQL guard, bounded tool loop, tracing, resumable `eval/datamate`
   runner. Model: Groq `gpt-oss-20b`; `search_rules` (ADR 0008).

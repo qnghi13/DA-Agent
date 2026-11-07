@@ -163,6 +163,9 @@ Mostly code, not LLM self-assessment ([ADR 0007](adr/0007-code-first-verificatio
 
 - An answer needs a successful query, and every number in it must match a query result within
   rounding.
+- Arithmetic on typed numbers, such as `SELECT 11.0 / 913 * 100`, is allowed only when those
+  numbers came back from queries that read the data. Scale constants (0, 1, 100) and ROUND's
+  digits are exempt.
 - The queries behind the answer filter dates to a period the data covers. Periods are read from
   the SQL with sqlglot, and the build records each date column's range, which `describe_dataset`
   also shows. A period entirely outside the data means no rows, not 0.

@@ -242,7 +242,8 @@ def test_an_answer_needs_a_successful_query(dataset: SqliteDataset) -> None:
 
 
 def test_rounded_and_percent_values_trace_to_their_query(dataset: SqliteDataset) -> None:
-    script = [plan(), sql("SELECT 100.0 * 100 / 350 AS share"), submit("percent", 28.57)]
+    share = "SELECT 100.0 * 100 / SUM(total) AS share FROM orders"
+    script = [plan(), sql(share), submit("percent", 28.57)]
 
     result, _ = run(dataset, script, max_repairs=0)
 
@@ -250,7 +251,8 @@ def test_rounded_and_percent_values_trace_to_their_query(dataset: SqliteDataset)
 
 
 def test_a_ratio_given_as_percent_points_traces_to_its_query(dataset: SqliteDataset) -> None:
-    script = [plan(), sql("SELECT 100.0 / 350 AS ratio"), submit("percent", 28.57)]
+    ratio = "SELECT 100.0 / SUM(total) AS ratio FROM orders"
+    script = [plan(), sql(ratio), submit("percent", 28.57)]
 
     result, _ = run(dataset, script, max_repairs=0)
 

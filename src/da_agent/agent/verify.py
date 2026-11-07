@@ -5,6 +5,8 @@ request, and an answer that still fails is withheld, because a wrong number cost
 
 - Evidence: at least one query succeeded.
 - Tracing: every number in the answer is, within rounding, a number some query returned.
+- Inputs: a query that reads no table, such as 11.0 / 913 * 100, may only use numbers that
+  queries on the data returned.
 - Period: the queries behind the answer filter dates to a period the data covers. A sum over a
   month with no rows is 0, which looks like an answer but is not one. Periods are read from the
   SQL with sqlglot, so the check needs no knowledge of the question's language.
@@ -33,6 +35,8 @@ DATE_WRAPPERS = (exp.Cast, exp.TryCast, exp.Date, exp.TsOrDsToDate, exp.TsOrDsTo
 # periods, such as two CASE branches that compare two months.
 CONDITION_SCOPES = (exp.If, exp.Where, exp.Having, exp.Join, exp.Filter)
 DateRanges = dict[str, list[tuple[str, str]]]
+# Constants that scale a result rather than feed it, such as * 100 for percent points.
+SCALES = (0.0, 1.0, 100.0)
 
 
 @dataclass(frozen=True)
@@ -288,6 +292,50 @@ def _period_problems(
     return []
 
 
+def _reads_data(sql: str, dialect: str) -> bool:
+    """Whether a query reads a table. One that does not only does arithmetic on typed numbers."""
+    try:
+        tree = sqlglot.parse_one(sql, read=dialect)
+    except sqlglot.errors.ParseError:
+        return True  # The engine ran it, so it is not ours to judge here.
+    return tree.find(exp.Table) is not None
+
+
+def _typed_inputs(sql: str, dialect: str) -> list[float]:
+    """Numbers typed into a query, except scale constants and ROUND's digits."""
+    tree = sqlglot.parse_one(sql, read=dialect)
+    found = []
+    for literal in tree.find_all(exp.Literal):
+        if not literal.is_number:
+            continue
+        parent = literal.parent
+        if isinstance(parent, exp.Round) and parent.args.get("decimals") is literal:
+            continue
+        value = float(literal.this)
+        if value not in SCALES:
+            found.append(value)
+    return found
+
+
+def _invented_inputs(answer: AgentAnswer, messages: list[Message], dialect: str) -> list[float]:
+    """Numbers that the queries behind the answer typed in and no query on the data returned.
+
+    Arithmetic on numbers taken from earlier results is fine, such as 11.0 / 913 * 100 after a
+    query counted 11 and 913. A query that reads no table proves nothing about invented inputs.
+    """
+    results = _query_results(messages)
+    data = [n for sql, numbers, _ in results if _reads_data(sql, dialect) for n in numbers]
+    percent = answer.kind == "percent"
+    invented: list[float] = []
+    for value in answer_numbers(answer):
+        behind = [sql for sql, numbers, _ in results if _traced(value, numbers, percent)]
+        if not behind or any(_reads_data(sql, dialect) for sql in behind):
+            continue
+        typed = [n for sql in behind for n in _typed_inputs(sql, dialect)]
+        invented += [n for n in typed if not _traced(n, data, False) and n not in invented]
+    return invented
+
+
 def _show(value: float) -> str:
     return str(int(value)) if value.is_integer() else repr(value)
 
@@ -314,6 +362,14 @@ def check_answer(
         return [
             f"the numbers {shown} do not appear in any query result; compute each number in SQL "
             "and answer with the value the query returns"
+        ]
+    invented = _invented_inputs(answer, messages, dialect)
+    if invented:
+        shown = ", ".join(_show(value) for value in invented[:5])
+        return [
+            f"the query behind the answer computes from {shown}, which no query on the data "
+            "returned; take every input from a query result, or compute the answer from the "
+            "tables in one query"
         ]
     if answer.kind != "unanswerable" and ranges:
         return _period_problems(answer, messages, ranges, dialect)

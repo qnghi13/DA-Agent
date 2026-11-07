@@ -524,8 +524,8 @@ def test_the_graph_agent_plans_queries_and_answers(data_dir: Path, tmp_path: Pat
 
     script = [
         tool("submit_plan", {"steps": ["count"]}),
-        tool("run_sql", {"sql": "SELECT 7 AS n"}),
-        answer(7),
+        tool("run_sql", {"sql": "SELECT count(*) AS n FROM khach_hang"}),
+        answer(1),
     ]
     llm, ledger, adapter = make_llm(script)
     questions = read_jsonl(data_dir / "questions.jsonl")[:1]
@@ -535,7 +535,7 @@ def test_the_graph_agent_plans_queries_and_answers(data_dir: Path, tmp_path: Pat
     )
 
     assert metrics["stop_reasons"] == {"answered": 1}
-    assert read_jsonl(tmp_path / "out" / "submission.jsonl")[0]["answer"] == 7
+    assert read_jsonl(tmp_path / "out" / "submission.jsonl")[0]["answer"] == 1
     assert [tool.name for tool in adapter.requests[0].tools] == ["submit_plan"]
 
 
