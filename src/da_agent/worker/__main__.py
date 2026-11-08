@@ -17,7 +17,8 @@ import psycopg
 from da_agent.config import ConfigError, Settings
 from da_agent.llm.client import LLMClient
 from da_agent.llm.factory import build_routes
-from da_agent.runner.runner import Runner, RunnerConfig
+from da_agent.runner.client import RunnerClient
+from da_agent.runner.runner import Runner, RunnerConfig, SandboxRunner
 from da_agent.storage.db import connect, migrate
 from da_agent.storage.ledger import PostgresCostLedger
 from da_agent.telemetry.tracing import configure_tracing
@@ -36,14 +37,23 @@ def build_worker(
         raise ValueError("DA_AGENT_ROUTES is required for the worker, such as groq:MODEL")
     for root in (settings.uploads_root, settings.staging_root, settings.datasets_root):
         root.mkdir(parents=True, exist_ok=True)
-    runner = Runner(
-        RunnerConfig(
-            image=settings.sandbox_image,
-            datasets_root=settings.datasets_root,
-            uploads_root=settings.uploads_root,
-            staging_root=settings.staging_root,
+    runner: SandboxRunner
+    if settings.runner_url and settings.runner_token:
+        # Deployed: only the Runner service holds the Docker socket (ADR 0024).
+        runner = RunnerClient(
+            settings.runner_url, settings.runner_token, staging_root=settings.staging_root
         )
-    )
+    else:
+        # Local development: sandboxes start from this process.
+        runner = Runner(
+            RunnerConfig(
+                image=settings.sandbox_image,
+                datasets_root=settings.datasets_root,
+                uploads_root=settings.uploads_root,
+                staging_root=settings.staging_root,
+                user=settings.sandbox_user,
+            )
+        )
     conn = ledger_conn or connect(settings.database_url, schema=settings.schema)
     llm = LLMClient(build_routes(settings.routes, env), PostgresCostLedger(conn))
     database: dict[str, Any] = {"url": settings.database_url, "schema": settings.schema}

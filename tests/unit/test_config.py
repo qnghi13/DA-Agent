@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from da_agent.config import ConfigError, Settings
+from da_agent.config import ConfigError, RunnerSettings, Settings
 
 REQUIRED = {"DA_AGENT_DATABASE_URL": "postgresql://u:p@db/x", "DA_AGENT_DATA_DIR": "/srv/data"}
 
@@ -56,3 +56,76 @@ def test_bad_settings_name_the_variable(env: dict[str, str], message: str) -> No
 
 def test_the_database_password_is_not_shown() -> None:
     assert "p@" not in repr(Settings.from_env(REQUIRED))
+
+
+TOKEN = "r" * 32
+
+
+def test_the_worker_reaches_a_runner_service_with_a_token() -> None:
+    env = REQUIRED | {"DA_AGENT_RUNNER_URL": "http://runner:8100/", "DA_AGENT_RUNNER_TOKEN": TOKEN}
+
+    settings = Settings.from_env(env)
+
+    assert settings.runner_url == "http://runner:8100"
+    assert settings.runner_token == TOKEN
+    assert TOKEN not in repr(settings)
+    assert Settings.from_env(REQUIRED).runner_url is None
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        ({"DA_AGENT_RUNNER_URL": "http://runner:8100"}, "DA_AGENT_RUNNER_TOKEN"),
+        (
+            {"DA_AGENT_RUNNER_URL": "http://runner:8100", "DA_AGENT_RUNNER_TOKEN": "short"},
+            "at least 32",
+        ),
+        ({"DA_AGENT_SANDBOX_USER": "root"}, "DA_AGENT_SANDBOX_USER"),
+        ({"DA_AGENT_SANDBOX_USER": "0:0"}, "DA_AGENT_SANDBOX_USER"),
+    ],
+)
+def test_bad_runner_settings_name_the_variable(extra: dict[str, str], message: str) -> None:
+    with pytest.raises(ConfigError, match=message):
+        Settings.from_env(REQUIRED | extra)
+
+
+def test_the_sandbox_user_defaults_to_nobody() -> None:
+    assert Settings.from_env(REQUIRED).sandbox_user == "65534:65534"
+    env = REQUIRED | {"DA_AGENT_SANDBOX_USER": "10001:10001"}
+    assert Settings.from_env(env).sandbox_user == "10001:10001"
+
+
+def test_the_runner_service_needs_no_database_or_provider_keys() -> None:
+    env = {
+        "DA_AGENT_DATA_DIR": "/data",
+        "DA_AGENT_RUNNER_TOKEN": TOKEN,
+        "DA_AGENT_DATA_VOLUME": "da-agent_data",
+        "DA_AGENT_SANDBOX_USER": "10001:10001",
+    }
+
+    settings = RunnerSettings.from_env(env)
+    config = settings.runner_config()
+
+    assert settings.token == TOKEN and TOKEN not in repr(settings)
+    assert config.data_volume == "da-agent_data" and config.data_root == Path("/data")
+    assert config.datasets_root == Path("/data/datasets")
+    assert config.staging_root == Path("/data/staging")
+    assert config.uploads_root == Path("/data/uploads")
+    assert config.user == "10001:10001"
+
+
+@pytest.mark.parametrize(
+    ("env", "message"),
+    [
+        ({"DA_AGENT_RUNNER_TOKEN": TOKEN}, "DA_AGENT_DATA_DIR"),
+        ({"DA_AGENT_DATA_DIR": "/data"}, "DA_AGENT_RUNNER_TOKEN"),
+        (
+            {"DA_AGENT_DATA_DIR": "/d", "DA_AGENT_RUNNER_TOKEN": TOKEN}
+            | {"DA_AGENT_DATA_VOLUME": "a,b"},
+            "DA_AGENT_DATA_VOLUME",
+        ),
+    ],
+)
+def test_bad_runner_service_settings_name_the_variable(env: dict[str, str], message: str) -> None:
+    with pytest.raises(ConfigError, match=message):
+        RunnerSettings.from_env(env)

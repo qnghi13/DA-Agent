@@ -372,3 +372,54 @@ def test_a_job_whose_sandbox_cannot_start_fails_cleanly(ingest_config: RunnerCon
     assert "could not start" in result.stderr
     assert result.output_dir is None
     assert list(ingest_config.staging_root.iterdir()) == []
+
+
+@pytest.fixture
+def volume_config(tmp_path: Path) -> RunnerConfig:
+    for part in ("uploads/up_1", "staging", "datasets/shop_1"):
+        (tmp_path / part).mkdir(parents=True)
+    return RunnerConfig(
+        image="da-agent-sandbox:test",
+        datasets_root=tmp_path / "datasets",
+        uploads_root=tmp_path / "uploads",
+        staging_root=tmp_path / "staging",
+        data_volume="da-agent_data",
+        data_root=tmp_path,
+    )
+
+
+def test_with_a_data_volume_datasets_mount_a_subpath_not_a_host_path(
+    volume_config: RunnerConfig,
+) -> None:
+    command = Runner(volume_config).build_command(SqlRun(dataset_id="shop_1", sql="SELECT 1"), "n1")
+
+    mounts = [arg for arg in command if arg.startswith("--mount=")]
+    assert mounts == [
+        "--mount=type=volume,source=da-agent_data,target=/data,readonly,"
+        "volume-subpath=datasets/shop_1"
+    ]
+
+
+def test_with_a_data_volume_jobs_mount_subpaths_of_it(volume_config: RunnerConfig) -> None:
+    out = volume_config.staging_root / "job"
+    out.mkdir()
+    command = Runner(volume_config).build_command(IngestRun(upload_id="up_1"), "n1", out)
+
+    mounts = [arg for arg in command if arg.startswith("--mount=")]
+    assert mounts == [
+        "--mount=type=volume,source=da-agent_data,target=/input,readonly,"
+        "volume-subpath=uploads/up_1",
+        "--mount=type=volume,source=da-agent_data,target=/out,volume-subpath=staging/job",
+    ]
+
+
+def test_a_data_volume_needs_the_root_it_is_mounted_at(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="data_root"):
+        RunnerConfig(image="i", datasets_root=tmp_path, data_volume="v")
+
+
+def test_the_volume_name_cannot_carry_mount_options(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="volume name"):
+        RunnerConfig(
+            image="i", datasets_root=tmp_path, data_volume="v,target=/x", data_root=tmp_path
+        )

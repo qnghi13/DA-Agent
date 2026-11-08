@@ -25,7 +25,7 @@ from da_agent.ingestion.pipeline import (
 )
 from da_agent.ingestion.spec import DatasetSpec
 from da_agent.llm.client import LLMClient
-from da_agent.runner.runner import Runner
+from da_agent.runner.runner import SandboxRunner
 from da_agent.storage.datasets import DatasetRecord, DatasetStore
 from da_agent.storage.db import connect
 from da_agent.storage.jobs import Job
@@ -76,7 +76,7 @@ def _dataset_id(job: Job) -> UUID:
 
 class _DatasetJob:
     def __init__(
-        self, *, url: str, schema: str | None = None, runner: Runner, datasets_root: Path
+        self, *, url: str, schema: str | None = None, runner: SandboxRunner, datasets_root: Path
     ) -> None:
         self.url = url
         self.schema = schema
@@ -112,7 +112,7 @@ class IngestHandler(_DatasetJob):
         *,
         url: str,
         schema: str | None = None,
-        runner: Runner,
+        runner: SandboxRunner,
         llm: LLMClient,
         datasets_root: Path,
         budgets: WorkspaceBudgets | None = None,

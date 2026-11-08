@@ -6,6 +6,7 @@ cannot widen what a sandbox may do. Code travels on stdin and never becomes part
 
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -15,7 +16,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, Any, Literal
+from typing import IO, Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -115,6 +116,14 @@ class RunResult(BaseModel):
     duration_seconds: float
 
 
+class SandboxRunner(Protocol):
+    """What callers need from a Runner: the in-process one, or RunnerClient (ADR 0024)."""
+
+    def query(self, request: SqlRun) -> SqlResult: ...
+    def ingest(self, request: IngestRun) -> IngestResult: ...
+    def build(self, request: BuildRun) -> BuildResult: ...
+
+
 @dataclass(frozen=True)
 class RunnerConfig:
     """Operator settings. None of these can be set by a request."""
@@ -133,6 +142,18 @@ class RunnerConfig:
     ingest_memory_mb: int = 2048
     max_ingest_output_bytes: int = 5_000_000_000
     max_report_bytes: int = 20_000_000
+    # Set when the Runner itself runs in a container (ADR 0024): sandboxes mount subpaths of this
+    # named volume, which the Runner sees mounted at data_root, instead of host bind mounts.
+    data_volume: str | None = None
+    data_root: Path | None = None
+
+    def __post_init__(self) -> None:
+        if self.data_volume is None:
+            return
+        if self.data_root is None:
+            raise ValueError("a data volume needs data_root, where the Runner sees it mounted")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", self.data_volume):
+            raise ValueError(f"invalid volume name {self.data_volume!r}")
 
 
 @dataclass(frozen=True)
@@ -213,14 +234,11 @@ class Runner:
                 raise ValueError("a job run needs an output directory")
             source = self._job_input(request)
             memory = c.ingest_memory_mb
-            mounts = [
-                f"--mount=type=bind,source={source},target=/input,readonly",
-                f"--mount=type=bind,source={output_dir},target=/out",
-            ]
+            mounts = [self._mount(source, "/input", True), self._mount(output_dir, "/out", False)]
         else:
             dataset = self._child(c.datasets_root, request.dataset_id, "dataset")
             memory = c.memory_mb
-            mounts = [f"--mount=type=bind,source={dataset},target=/data,readonly"]
+            mounts = [self._mount(dataset, "/data", True)]
         return [
             c.docker,
             "run",
@@ -325,6 +343,18 @@ class Runner:
             stderr=captured.stderr[:limit].decode("utf-8", errors="replace"),
             truncated=captured.truncated or max(len(captured.stdout), len(captured.stderr)) > limit,
             duration_seconds=_now() - started,
+        )
+
+    def _mount(self, source: Path, target: str, readonly: bool) -> str:
+        flag = ",readonly" if readonly else ""
+        c = self.config
+        if c.data_volume is None or c.data_root is None:
+            return f"--mount=type=bind,source={source},target={target}{flag}"
+        # Raises if source is outside the volume; sources are already resolved and checked.
+        subpath = Path(source).resolve().relative_to(c.data_root.resolve())
+        return (
+            f"--mount=type=volume,source={c.data_volume},target={target}{flag},"
+            f"volume-subpath={subpath.as_posix()}"
         )
 
     @staticmethod

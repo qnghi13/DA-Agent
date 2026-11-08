@@ -12,7 +12,13 @@ from da_agent.ingestion.build import BuildReport, ExcludedRule
 from da_agent.ingestion.propose import ProposalResult, propose_spec
 from da_agent.ingestion.spec import DatasetSpec, TableSpec, keep_source_names
 from da_agent.llm.client import LLMClient, RunBudget
-from da_agent.runner.runner import BuildResult, BuildRun, IngestResult, IngestRun, Runner
+from da_agent.runner.runner import (
+    BuildResult,
+    BuildRun,
+    IngestResult,
+    IngestRun,
+    SandboxRunner,
+)
 
 MIN_PARSE_RATE = 0.98
 # Subtotal and note rows in the dev shops are at most 2% of a table. A rule that removes far more
@@ -143,7 +149,7 @@ def parse_problems(
 
 def prepare_dataset(
     upload_id: str,
-    runner: Runner,
+    runner: SandboxRunner,
     llm: LLMClient,
     *,
     run_id: str,
@@ -211,7 +217,7 @@ def prepare_dataset(
 
 def rebuild_dataset(
     upload_id: str,
-    runner: Runner,
+    runner: SandboxRunner,
     spec: DatasetSpec,
     *,
     min_parse_rate: float = MIN_PARSE_RATE,

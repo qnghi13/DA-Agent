@@ -63,3 +63,30 @@ def test_the_worker_needs_model_routes(
 ) -> None:
     with pytest.raises(ValueError, match="DA_AGENT_ROUTES"):
         build_worker(settings(tmp_path, schema), {})
+
+
+ROUTES = {"DA_AGENT_ROUTES": "groq:openai/gpt-oss-20b", "GROQ_API_KEY": "test-key"}
+
+
+def test_with_a_runner_url_the_worker_never_starts_sandboxes_itself(
+    tmp_path: Path, schema: str, conn: psycopg.Connection
+) -> None:
+    env = ROUTES | {"DA_AGENT_RUNNER_URL": "http://runner:8100", "DA_AGENT_RUNNER_TOKEN": "k" * 32}
+
+    worker = build_worker(settings(tmp_path, schema, **env), env)
+
+    handlers = worker.handlers.values()
+    runners = {type(h.runner).__name__ for h in handlers if hasattr(h, "runner")}
+    datasets = worker.handlers["run"].datasets  # type: ignore[attr-defined]
+    assert runners == {"RunnerClient"}
+    assert type(datasets.runner).__name__ == "RunnerClient"
+
+
+def test_without_a_runner_url_sandboxes_run_as_the_configured_user(
+    tmp_path: Path, schema: str, conn: psycopg.Connection
+) -> None:
+    env = ROUTES | {"DA_AGENT_SANDBOX_USER": "10001:10001"}
+
+    worker = build_worker(settings(tmp_path, schema, **env), env)
+
+    assert worker.handlers["build"].runner.config.user == "10001:10001"  # type: ignore[attr-defined]
