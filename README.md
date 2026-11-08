@@ -4,8 +4,31 @@ An open-source agent that analyses uploaded CSV, Excel, and SQLite files. You up
 free-form description and ask questions. It answers with results you can trace back to the queries
 that produced them.
 
-> **Status: early development.** The agent, ingestion, sandbox, and HTTP API work and are tested.
-> The web UI and Docker Compose packaging are not built yet.
+> **Status: early development.** The agent, ingestion, sandbox, HTTP API, web UI, and Docker
+> Compose packaging work and are tested. Expect rough edges.
+
+## Quick start
+
+Requires Docker Engine 26 or later with the Compose plugin, and a [Groq](https://console.groq.com)
+API key (free tier).
+
+```bash
+cp .env.example .env          # then fill in the three required values
+docker compose up -d --build  # the first build takes a few minutes
+docker compose exec api python -m da_agent.admin create-workspace "My shop"   # prints a key once
+```
+
+Open http://127.0.0.1:8080, paste the key, and upload the three files in `examples/demo-shop/`.
+Approve the proposed spec, then ask "What was the revenue in June 2026?" (8,714,000 VND).
+Traces are in Phoenix at http://127.0.0.1:6006.
+
+Before you upload your own data, know what leaves the machine: column profiles, sample values,
+and query results go to the model provider. Sandboxes are containers (runc) without network
+access, which is not a hard boundary against kernel exploits. See the
+[threat model](docs/threat-model.md).
+
+`deploy/smoke.sh` checks a running stack without calling a model. `docker compose down` stops it;
+add `-v` to delete all data.
 
 ## Planned features
 
@@ -38,10 +61,11 @@ uv run ruff check .
 Tests that need Postgres are skipped unless `DA_AGENT_TEST_POSTGRES_URL` is set; each test runs in
 its own schema.
 
-## Running the backend
+## Running the backend without Compose
 
-The worker starts sandbox containers, so it needs Docker and the sandbox image. Postgres holds
-jobs, checkpoints, and costs.
+For development. Without `DA_AGENT_RUNNER_URL` the worker starts sandbox containers itself, so it
+needs Docker and the sandbox image; Compose runs a separate Runner service instead
+([ADR 0024](docs/adr/0024-runner-service.md)). Postgres holds jobs, checkpoints, and costs.
 
 ```bash
 docker build -f sandbox/Dockerfile -t da-agent-sandbox:dev .

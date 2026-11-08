@@ -1,0 +1,152 @@
+# DA-Agent, self-hosted. Copy .env.example to .env, fill it in, then: docker compose up -d --build
+# The UI is at http://127.0.0.1:8080. Create a workspace key with:
+#   docker compose exec api python -m da_agent.admin create-workspace "My shop"
+# Design: docs/adr/0024-runner-service.md. Only the runner mounts the Docker socket.
+name: da-agent
+
+x-app: &app
+  image: da-agent:compose
+  build:
+    context: .
+    dockerfile: deploy/app.Dockerfile
+    target: app
+  restart: unless-stopped
+  volumes:
+    - data:/data
+
+x-database-url: &database-url postgresql://da_agent:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/da_agent
+
+services:
+  postgres:
+    image: postgres:17-alpine@sha256:3540c0362c809df084ffac0ae69fe794515f9de92692f02178bcdce0ef0302ac
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: da_agent
+      POSTGRES_DB: da_agent
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "da_agent", "-d", "da_agent"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Builds the sandbox image the runner starts, then exits.
+  sandbox:
+    image: da-agent-sandbox:compose
+    build:
+      context: .
+      dockerfile: sandbox/Dockerfile
+    entrypoint: ["python", "-c", "pass"]
+    network_mode: none
+    restart: "no"
+
+  runner:
+    image: da-agent-runner:compose
+    build:
+      context: .
+      dockerfile: deploy/app.Dockerfile
+      target: runner
+    command: ["python", "-m", "da_agent.runner", "--host", "0.0.0.0", "--port", "8100"]
+    restart: unless-stopped
+    # No database URL and no provider keys: the runner only starts sandboxes.
+    environment:
+      DA_AGENT_DATA_DIR: /data
+      DA_AGENT_DATA_VOLUME: da-agent-data
+      DA_AGENT_SANDBOX_IMAGE: da-agent-sandbox:compose
+      DA_AGENT_SANDBOX_USER: "10001:10001"
+      DA_AGENT_RUNNER_TOKEN: ${DA_AGENT_RUNNER_TOKEN:?set DA_AGENT_RUNNER_TOKEN in .env}
+    volumes:
+      - data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [backend]
+    depends_on:
+      sandbox:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8100/healthz')"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    <<: *app
+    command: ["python", "-m", "da_agent.api", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      DA_AGENT_DATABASE_URL: *database-url
+      DA_AGENT_DAILY_BUDGET_USD: ${DA_AGENT_DAILY_BUDGET_USD:-5.0}
+      DA_AGENT_TRACE_UI_URL: ${DA_AGENT_TRACE_UI_URL:-}
+      # The API is reachable only through the web proxy, which sets X-Forwarded-For itself.
+      FORWARDED_ALLOW_IPS: "*"
+    networks: [backend, edge]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/openapi.json')"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  worker:
+    <<: *app
+    command: ["python", "-m", "da_agent.worker"]
+    environment:
+      DA_AGENT_DATABASE_URL: *database-url
+      DA_AGENT_ROUTES: ${DA_AGENT_ROUTES:-groq:openai/gpt-oss-20b}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      DA_AGENT_DAILY_BUDGET_USD: ${DA_AGENT_DAILY_BUDGET_USD:-5.0}
+      DA_AGENT_RUN_BUDGET_USD: ${DA_AGENT_RUN_BUDGET_USD:-0.25}
+      DA_AGENT_RUNNER_URL: http://runner:8100
+      DA_AGENT_RUNNER_TOKEN: ${DA_AGENT_RUNNER_TOKEN:?set DA_AGENT_RUNNER_TOKEN in .env}
+      DA_AGENT_SANDBOX_USER: "10001:10001"
+      DA_AGENT_OTLP_ENDPOINT: http://phoenix:6006/v1/traces
+    # edge gives the worker internet access for model providers.
+    networks: [backend, edge]
+    depends_on:
+      api:
+        condition: service_healthy
+      runner:
+        condition: service_healthy
+
+  web:
+    image: da-agent-web:compose
+    build: web
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${DA_AGENT_WEB_PORT:-8080}:8080"
+    networks: [edge]
+    depends_on:
+      api:
+        condition: service_healthy
+
+  phoenix:
+    image: arizephoenix/phoenix:version-21.0.0@sha256:1f9a144a5357b4973e93a15718f050247cb7a4ee7b7c6c06ecb91b5eed3fbaad
+    restart: unless-stopped
+    ports:
+      # Localhost only: traces hold prompts and cell values from every workspace.
+      - "127.0.0.1:${DA_AGENT_PHOENIX_PORT:-6006}:6006"
+    environment:
+      PHOENIX_WORKING_DIR: /mnt/data
+      PHOENIX_ENABLE_AUTH: "false"
+      PHOENIX_TELEMETRY_ENABLED: "false"
+    volumes:
+      - phoenix-data:/mnt/data
+    networks: [backend, edge]
+
+networks:
+  # No route out: postgres and the runner live only here.
+  backend:
+    internal: true
+  edge: {}
+
+volumes:
+  data:
+    # A fixed name, because the runner passes it to the sandboxes it starts.
+    name: da-agent-data
+  postgres-data:
+  phoenix-data:

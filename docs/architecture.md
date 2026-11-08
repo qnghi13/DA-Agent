@@ -66,6 +66,28 @@ checkpointer, DuckDB, sqlglot, Vega-Lite, React + Vite + TypeScript.
 Dependencies point inward: `api`, `worker`, and `runner` may use `agent`, `ingestion`, `llm`,
 `storage`, and `security`. Nothing under `src/` imports from `eval/`.
 
+## Deployment
+
+`docker compose up` ([compose.yml](../compose.yml), [ADR 0024](adr/0024-runner-service.md)):
+
+```
+browser ─127.0.0.1:8080─> web (nginx: UI files, /v1 proxy)
+                            │ edge network
+                            v
+                           api ── worker ──> model providers (internet, edge network only)
+                            │       │ HTTP + token
+            backend network │       v
+            (no route out)  │     runner ──docker.sock──> sandbox containers (--network none)
+                            v
+                         postgres            phoenix (127.0.0.1:6006)
+```
+
+- `api`, `worker`, and `runner` share the named volume `da-agent-data` at `/data`. Sandboxes mount
+  subpaths of the same volume, so the runner never passes host paths to Docker.
+- API, worker, and sandboxes run as user 10001; the runner runs as root, as the socket's holder.
+- `python -m da_agent.worker` without `DA_AGENT_RUNNER_URL` starts sandboxes itself. That is for
+  local development only.
+
 ## Request flow
 
 1. The client uploads files. The API stores them and enqueues an ingestion job.

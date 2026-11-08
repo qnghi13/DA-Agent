@@ -2,25 +2,18 @@
 
 Loaded into every session, so keep it under 60 lines. Replace stale content instead of appending.
 **Last updated:** 2026-11-08
-**Phase:** Days 18–19, React ([plan §6](plan.md#6-roadmap)). Days 16–17 closed (note 06).
+**Phase:** Day 20, packaging ([plan §6](plan.md#6-roadmap)). Days 18–19 closed (note 07).
 
 ## Next step
 
-1. React: `web/` (Vite 8, React 19, TS 7, exact pins; `/v1` proxied to :8000, so no CORS).
-   Upload and review tested by the user in a browser. Q&A added: SSE read with `fetch` and
-   `Last-Event-ID` (`sse.ts`), evidence trail (plan, tools with SQL and rows, verify), answer,
-   lazy Vega chart (vega 6.4, interpreter, palette validated), sandboxed report iframe, run
-   history in localStorage. `npm test` 16 pass. User tried it; visual polish deferred to Day 21.
-   Report moved to Vega 6 (ADR 0016 updated, security test on pinned versions, chart schema v6);
-   rendered in Node only, open a report with a chart in a browser once.
-   Trace links and run list (ADR 0023): `jobs.trace_ids` per attempt (migration 0006), links
-   only with `DA_AGENT_TRACE_UI_URL` (operators; Phoenix has no workspace isolation),
-   `GET /v1/runs?dataset_id=` paged; UI reads history from it, shows run id and "Open trace".
-   New integration tests not yet run here (need `DA_AGENT_TEST_POSTGRES_URL`). Deferred:
-   answering `question` events (no resume endpoint). Then Day 20 (needs the Compose plugin).
-   Backend done (ADRs 0017–0022): end to end with Groq over HTTP, $0.0014.
-   Charts and reports done (ADRs 0015–0016); `--report` writes HTML (`report-sample`, $0.017).
-   RAG experiment cut: plan with titles only +2 vs all rules +11 already answers it (note 05).
+1. Day 20: Compose, images, CI, and demo data done (ADR 0024, note 08). The Runner is its own
+   service, the only holder of the socket; data on volume `da-agent-data` with `volume-subpath`.
+   `compose.yml`, `deploy/app.Dockerfile`, `web/Dockerfile` + nginx, `.env.example`,
+   `deploy/smoke.sh`, `.github/workflows/ci.yml` (python with Postgres, web, compose smoke),
+   `examples/demo-shop/` (June revenue 8,714,000). Ran here: stack up, demo end to end through
+   nginx with Groq ($0.001), boundaries checked in containers, smoke OK, CI job on a clean copy.
+   CI itself never ran (no GitHub repo yet). Open: the plan's "dashboard" (Phoenix covers
+   traces; cut it?), image publishing (CD) once a repo exists. Then Day 21.
 2. `regression` (150, ~$0.40) only at the end, if affordable.
 ## Baselines (`bootstrap`, biz_123, 30 questions; correct / wrong / abstained, score)
 
@@ -34,35 +27,25 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
   B8 with all checks: 17/7/6 +10 vs B7 +11, $0.11; no new check fired: noise.
 ## Done
 
-- Dev environment, design docs, ADRs 0001–0022, README, LICENSE. Scorer (`eval/scorer/`, rulebook §7, §9): 3000/3000 on the real answers. Splits in
-  `eval/splits/splits.json`: 24 dev, 6 holdout shops; sets `bootstrap`, `smoke`, `regression`.
-- Minimal agent: `LLMClient`, SQL guard, bounded tool loop, tracing, resumable `eval/datamate`
-  runner. Model: Groq `gpt-oss-20b`; `search_rules` (ADR 0008).
-- Runner and sandbox image: all escape tests pass on real containers. Raw ingestion in the sandbox
-  (ADR 0009). `DatasetSpec` pipeline: LLM proposes, sandbox builds `dataset.duckdb` with
-  `_quarantine` and parse-rate feedback. Outputs in `eval/reports/` (gitignored).
-- `exclude_rows` (ADR 0010): rules, `_excluded`, rare shapes with sums, and checks for kept
-  subtotals and for rules that remove records (full rows, identifiers, share). Rules still failing
-  after the last attempt are dropped. Measured with `eval/ingestion/` (labels, synthetic, scorer).
-  `datasets-dev/` (prepare-v4, biz_109 and biz_124 from v4b): 24/24 ok, parse 99.98%+, exclusion
-  precision and recall 100% on 2,032 labelled rows.
-- Agent SQL in the sandbox (ADR 0011): DuckDB guard, read-only engine, a container per query
-  (~0.7 s), `run --datasets-dir/--shops`. `prepare --reuse-specs` rebuilds without the model.
-- Loop: turn notice at 3 left, last turn offers only `submit_answer`; Groq `failed_generation` is
-  a malformed call. ADR 0012: source column names kept, known values listed, exact repeats removed
-  when a 1–2 column key proves them (4 dev shops; 3 keyless logs kept). Results keep tool errors.
+- Days 1–19: ADRs 0001–0023, notes 01–07; Day 20: ADR 0024, note 08. Scorer 3000/3000 on the real answers; splits in
+  `eval/splits/splits.json` (24 dev, 6 holdout; `bootstrap`, `smoke`, `regression`).
+- Agent: `LLMClient`, SQL guard, LangGraph with checkpoints and verify, Groq `gpt-oss-20b`.
+  Sandbox: all escape tests pass; ingestion and agent SQL run in it (ADRs 0009–0012).
+  `datasets-dev/`: 24/24 ok, parse 99.98%+, exclusion precision and recall 100%.
+- Backend (ADRs 0017–0022) end to end over HTTP ($0.0014); reports ($0.017); RAG cut (note 05).
 
 ## Not verified
 
-- Pyright: 24 old errors (sqlglot types in verify, data_checks, graph). Gemini, `openrouter`: no real call. `compose.dev.yml` never ran. Postgres:
-  `da-agent-postgres` on 127.0.0.1:5433; set `DA_AGENT_TEST_POSTGRES_URL` in the same command.
+- Pyright: 24 old errors (sqlglot types in verify, data_checks, graph). Gemini, `openrouter`: no real call.
+  Postgres tests: `uv run --env-file .env pytest` (`DA_AGENT_TEST_POSTGRES_URL` is in `.env`).
+- One hook test (deleting the home parent) assumes the repo is under /home, as on GitHub runners.
 
 ## Waiting on the user
 
-- Before Day 20: Compose plugin. Before pushing: `gh` or a repo. **Before going public:** check the organizer's data rules, whether `cccd` and phone are fake, the
+- Before pushing: `gh` or a repo. **Before going public:** check the organizer's data rules, whether `cccd` and phone are fake, the
   licenses of skills in `.agents/`, and the `brainstorming` scripts.
 
-## Spend so far: about $1.89 (agent runs $1.45, spec proposals $0.44, backend demo $0.0014).
+## Spend so far: about $1.89 (agent runs $1.45, spec proposals $0.44, demos $0.0025).
 ## Watch out
 
 - A run of 30 questions costs about $0.05–0.10. `gpt-oss-20b` varies run to run: compare totals.

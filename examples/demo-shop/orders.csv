@@ -1,0 +1,602 @@
+Mã đơn,Ngày,Mã SP,Số lượng,Đơn giá,Kênh bán,Trạng thái
+DH0004,01/04/2026,P02,1,35.000,Tại quán,completed
+DH0006,01/04/2026,P06,2,18.000,GrabFood,completed
+DH0038,01/04/2026,P05,1,39.000,Tại quán,refunded
+DH0053,01/04/2026,P05,2,39.000,Tại quán,completed
+DH0090,01/04/2026,P04,2,32.000,ShopeeFood,completed
+DH0300,01/04/2026,P01,2,29.000,Tại quán,completed
+DH0414,01/04/2026,P02,1,35.000,ShopeeFood,completed
+DH0580,01/04/2026,P06,1,18.000,Tại quán,completed
+DH0311,02/04/2026,P04,3,32.000,ShopeeFood,completed
+DH0328,02/04/2026,P02,2,35.000,ShopeeFood,completed
+DH0331,02/04/2026,P06,2,18.000,ShopeeFood,completed
+DH0334,02/04/2026,P03,1,25.000,Tại quán,completed
+DH0466,02/04/2026,P03,1,25.000,Tại quán,completed
+DH0485,02/04/2026,P04,1,32.000,GrabFood,cancelled
+DH0532,02/04/2026,P01,3,29.000,ShopeeFood,cancelled
+DH0194,03/04/2026,P02,3,35.000,GrabFood,completed
+DH0204,03/04/2026,P04,2,32.000,GrabFood,completed
+DH0528,03/04/2026,P02,1,35.000,Tại quán,completed
+DH0549,03/04/2026,P05,1,39.000,ShopeeFood,completed
+DH0594,03/04/2026,P02,1,35.000,Tại quán,completed
+DH0036,04/04/2026,P02,2,35.000,ShopeeFood,completed
+DH0205,04/04/2026,P05,1,39.000,ShopeeFood,cancelled
+DH0250,04/04/2026,P05,1,39.000,ShopeeFood,completed
+DH0325,04/04/2026,P01,2,29.000,GrabFood,completed
+DH0347,04/04/2026,P05,3,39.000,GrabFood,cancelled
+DH0394,04/04/2026,P05,1,39.000,Tại quán,completed
+DH0510,04/04/2026,P04,2,32.000,GrabFood,completed
+DH0030,05/04/2026,P05,1,39.000,GrabFood,completed
+DH0293,05/04/2026,P02,3,35.000,GrabFood,completed
+DH0377,05/04/2026,P05,2,39.000,ShopeeFood,refunded
+DH0475,05/04/2026,P03,2,25.000,GrabFood,completed
+DH0536,05/04/2026,P06,3,18.000,GrabFood,completed
+DH0554,05/04/2026,P03,2,25.000,Tại quán,cancelled
+DH0040,06/04/2026,P03,1,25.000,Tại quán,completed
+DH0096,06/04/2026,P03,2,25.000,Tại quán,refunded
+DH0571,06/04/2026,P02,1,35.000,GrabFood,completed
+DH0241,07/04/2026,P06,1,18.000,Tại quán,completed
+DH0258,07/04/2026,P03,3,25.000,Tại quán,completed
+DH0440,07/04/2026,P02,1,35.000,GrabFood,completed
+DH0462,07/04/2026,P04,3,32.000,GrabFood,completed
+DH0552,07/04/2026,P04,3,32.000,GrabFood,completed
+DH0068,08/04/2026,P06,2,18.000,Tại quán,completed
+DH0207,08/04/2026,P02,1,35.000,Tại quán,completed
+DH0223,08/04/2026,P03,1,25.000,GrabFood,completed
+DH0239,08/04/2026,P05,1,39.000,Tại quán,completed
+DH0548,08/04/2026,P06,1,18.000,GrabFood,cancelled
+DH0104,09/04/2026,P03,2,25.000,Tại quán,completed
+DH0166,09/04/2026,P02,2,35.000,GrabFood,completed
+DH0287,09/04/2026,P05,2,39.000,Tại quán,completed
+DH0318,09/04/2026,P05,3,39.000,Tại quán,completed
+DH0352,09/04/2026,P01,1,29.000,Tại quán,cancelled
+DH0425,09/04/2026,P03,1,25.000,Tại quán,completed
+DH0467,09/04/2026,P02,2,35.000,Tại quán,completed
+DH0506,09/04/2026,P01,1,29.000,GrabFood,refunded
+DH0509,09/04/2026,P01,1,29.000,Tại quán,completed
+DH0531,09/04/2026,P03,2,25.000,ShopeeFood,refunded
+DH0031,10/04/2026,P05,3,39.000,GrabFood,completed
+DH0082,10/04/2026,P04,3,32.000,GrabFood,completed
+DH0147,10/04/2026,P05,3,39.000,GrabFood,completed
+DH0260,10/04/2026,P04,3,32.000,Tại quán,completed
+DH0295,10/04/2026,P03,2,25.000,GrabFood,completed
+DH0320,10/04/2026,P01,1,29.000,ShopeeFood,completed
+DH0419,10/04/2026,P01,2,29.000,Tại quán,completed
+DH0520,10/04/2026,P05,1,39.000,Tại quán,completed
+DH0003,11/04/2026,P03,1,25.000,ShopeeFood,completed
+DH0054,11/04/2026,P04,3,32.000,GrabFood,completed
+DH0128,11/04/2026,P05,1,39.000,ShopeeFood,completed
+DH0209,11/04/2026,P01,3,29.000,ShopeeFood,completed
+DH0230,11/04/2026,P02,2,35.000,Tại quán,cancelled
+DH0233,11/04/2026,P06,1,18.000,GrabFood,completed
+DH0254,11/04/2026,P01,1,29.000,ShopeeFood,cancelled
+DH0305,11/04/2026,P06,2,18.000,Tại quán,completed
+DH0343,11/04/2026,P02,1,35.000,ShopeeFood,completed
+DH0348,11/04/2026,P05,2,39.000,Tại quán,completed
+DH0479,11/04/2026,P06,2,18.000,ShopeeFood,completed
+DH0569,11/04/2026,P06,1,18.000,GrabFood,completed
+DH0598,11/04/2026,P01,3,29.000,ShopeeFood,completed
+DH0070,12/04/2026,P03,1,25.000,Tại quán,completed
+DH0216,12/04/2026,P05,1,39.000,Tại quán,cancelled
+DH0255,12/04/2026,P02,1,35.000,GrabFood,completed
+DH0271,12/04/2026,P03,3,25.000,Tại quán,completed
+DH0276,12/04/2026,P02,3,35.000,GrabFood,completed
+DH0322,12/04/2026,P03,2,25.000,Tại quán,completed
+DH0416,12/04/2026,P03,1,25.000,Tại quán,cancelled
+DH0018,13/04/2026,P04,2,32.000,Tại quán,refunded
+DH0098,13/04/2026,P02,3,35.000,Tại quán,completed
+DH0191,13/04/2026,P06,2,18.000,ShopeeFood,cancelled
+DH0224,13/04/2026,P05,1,39.000,GrabFood,completed
+DH0356,13/04/2026,P06,2,18.000,GrabFood,completed
+DH0546,13/04/2026,P03,3,25.000,GrabFood,completed
+DH0556,13/04/2026,P04,1,32.000,ShopeeFood,completed
+DH0575,13/04/2026,P02,3,35.000,Tại quán,cancelled
+DH0019,14/04/2026,P05,1,39.000,GrabFood,completed
+DH0025,14/04/2026,P02,1,35.000,Tại quán,completed
+DH0132,14/04/2026,P04,2,32.000,Tại quán,completed
+DH0144,14/04/2026,P01,1,29.000,Tại quán,completed
+DH0248,14/04/2026,P04,3,32.000,Tại quán,completed
+DH0336,14/04/2026,P04,2,32.000,ShopeeFood,completed
+DH0405,14/04/2026,P02,3,35.000,ShopeeFood,completed
+DH0495,14/04/2026,P01,1,29.000,Tại quán,completed
+DH0125,15/04/2026,P01,2,29.000,GrabFood,completed
+DH0227,15/04/2026,P06,2,18.000,ShopeeFood,completed
+DH0459,15/04/2026,P05,1,39.000,ShopeeFood,refunded
+DH0492,15/04/2026,P06,1,18.000,Tại quán,completed
+DH0547,15/04/2026,P04,2,32.000,GrabFood,completed
+DH0022,16/04/2026,P01,3,29.000,Tại quán,completed
+DH0061,16/04/2026,P05,1,39.000,GrabFood,completed
+DH0087,16/04/2026,P03,1,25.000,ShopeeFood,refunded
+DH0106,16/04/2026,P04,2,32.000,GrabFood,completed
+DH0296,16/04/2026,P02,3,35.000,ShopeeFood,completed
+DH0410,16/04/2026,P04,3,32.000,Tại quán,refunded
+DH0288,17/04/2026,P05,1,39.000,GrabFood,completed
+DH0424,17/04/2026,P05,3,39.000,Tại quán,completed
+DH0494,17/04/2026,P01,3,29.000,ShopeeFood,completed
+DH0537,17/04/2026,P05,3,39.000,Tại quán,completed
+DH0576,17/04/2026,P04,1,32.000,GrabFood,completed
+DH0578,17/04/2026,P01,1,29.000,Tại quán,completed
+DH0028,18/04/2026,P06,1,18.000,ShopeeFood,completed
+DH0086,18/04/2026,P02,2,35.000,GrabFood,completed
+DH0115,18/04/2026,P01,2,29.000,Tại quán,completed
+DH0138,18/04/2026,P05,1,39.000,GrabFood,completed
+DH0279,18/04/2026,P02,1,35.000,Tại quán,completed
+DH0365,18/04/2026,P04,2,32.000,Tại quán,completed
+DH0420,18/04/2026,P03,2,25.000,ShopeeFood,completed
+DH0448,18/04/2026,P01,2,29.000,ShopeeFood,completed
+DH0573,18/04/2026,P05,1,39.000,GrabFood,completed
+DH0587,18/04/2026,P06,3,18.000,ShopeeFood,completed
+DH0097,19/04/2026,P01,1,29.000,GrabFood,cancelled
+DH0366,19/04/2026,P04,2,32.000,Tại quán,completed
+DH0369,19/04/2026,P04,1,32.000,GrabFood,completed
+DH0488,19/04/2026,P05,2,39.000,GrabFood,completed
+DH0503,19/04/2026,P05,1,39.000,ShopeeFood,completed
+DH0005,20/04/2026,P02,1,35.000,ShopeeFood,completed
+DH0067,20/04/2026,P01,1,29.000,Tại quán,completed
+DH0114,20/04/2026,P06,3,18.000,ShopeeFood,completed
+DH0127,20/04/2026,P02,1,35.000,Tại quán,cancelled
+DH0183,20/04/2026,P02,1,35.000,ShopeeFood,completed
+DH0303,20/04/2026,P02,1,35.000,Tại quán,completed
+DH0304,20/04/2026,P06,1,18.000,Tại quán,completed
+DH0406,20/04/2026,P05,1,39.000,GrabFood,cancelled
+DH0447,20/04/2026,P06,2,18.000,Tại quán,completed
+DH0143,21/04/2026,P05,2,39.000,Tại quán,completed
+DH0249,21/04/2026,P01,2,29.000,Tại quán,completed
+DH0382,21/04/2026,P01,3,29.000,GrabFood,refunded
+DH0407,21/04/2026,P01,1,29.000,GrabFood,refunded
+DH0499,21/04/2026,P02,2,35.000,ShopeeFood,completed
+DH0500,21/04/2026,P03,3,25.000,Tại quán,completed
+DH0535,21/04/2026,P01,1,29.000,GrabFood,completed
+DH0553,21/04/2026,P05,1,39.000,Tại quán,completed
+DH0012,22/04/2026,P06,1,18.000,Tại quán,completed
+DH0148,22/04/2026,P04,2,32.000,Tại quán,completed
+DH0256,22/04/2026,P04,1,32.000,ShopeeFood,completed
+DH0333,22/04/2026,P06,1,18.000,GrabFood,completed
+DH0362,22/04/2026,P03,1,25.000,GrabFood,cancelled
+DH0363,22/04/2026,P05,2,39.000,Tại quán,completed
+DH0431,22/04/2026,P06,2,18.000,GrabFood,completed
+DH0541,22/04/2026,P02,1,35.000,ShopeeFood,completed
+DH0050,23/04/2026,P03,1,25.000,ShopeeFood,completed
+DH0089,23/04/2026,P02,1,35.000,Tại quán,completed
+DH0126,23/04/2026,P03,1,25.000,GrabFood,completed
+DH0215,23/04/2026,P01,2,29.000,ShopeeFood,refunded
+DH0236,23/04/2026,P04,1,32.000,ShopeeFood,cancelled
+DH0278,23/04/2026,P03,2,25.000,ShopeeFood,completed
+DH0342,23/04/2026,P05,1,39.000,GrabFood,completed
+DH0387,23/04/2026,P01,2,29.000,ShopeeFood,cancelled
+DH0470,23/04/2026,P06,1,18.000,GrabFood,completed
+DH0511,23/04/2026,P02,2,35.000,Tại quán,completed
+DH0017,24/04/2026,P02,1,35.000,ShopeeFood,completed
+DH0190,24/04/2026,P05,1,39.000,Tại quán,refunded
+DH0203,24/04/2026,P01,1,29.000,GrabFood,completed
+DH0219,24/04/2026,P02,1,35.000,ShopeeFood,completed
+DH0376,24/04/2026,P03,3,25.000,GrabFood,completed
+DH0497,24/04/2026,P01,1,29.000,GrabFood,completed
+DH0078,25/04/2026,P06,2,18.000,ShopeeFood,completed
+DH0133,25/04/2026,P03,1,25.000,Tại quán,completed
+DH0210,25/04/2026,P05,2,39.000,GrabFood,completed
+DH0422,25/04/2026,P04,2,32.000,Tại quán,cancelled
+DH0474,25/04/2026,P04,2,32.000,Tại quán,cancelled
+DH0570,25/04/2026,P05,3,39.000,GrabFood,cancelled
+DH0055,26/04/2026,P04,2,32.000,Tại quán,completed
+DH0130,26/04/2026,P04,2,32.000,ShopeeFood,cancelled
+DH0178,26/04/2026,P05,2,39.000,ShopeeFood,completed
+DH0199,26/04/2026,P05,3,39.000,GrabFood,refunded
+DH0220,26/04/2026,P03,1,25.000,GrabFood,completed
+DH0383,26/04/2026,P05,2,39.000,GrabFood,completed
+DH0472,26/04/2026,P02,2,35.000,ShopeeFood,completed
+DH0024,27/04/2026,P01,1,29.000,Tại quán,completed
+DH0064,27/04/2026,P02,1,35.000,ShopeeFood,cancelled
+DH0259,27/04/2026,P04,1,32.000,GrabFood,completed
+DH0281,27/04/2026,P01,1,29.000,Tại quán,completed
+DH0309,27/04/2026,P05,3,39.000,ShopeeFood,completed
+DH0401,27/04/2026,P03,2,25.000,ShopeeFood,completed
+DH0567,27/04/2026,P01,1,29.000,Tại quán,completed
+DH0131,28/04/2026,P06,3,18.000,GrabFood,completed
+DH0187,28/04/2026,P03,1,25.000,Tại quán,cancelled
+DH0043,29/04/2026,P02,2,35.000,Tại quán,completed
+DH0171,29/04/2026,P02,2,35.000,GrabFood,completed
+DH0174,29/04/2026,P06,2,18.000,GrabFood,completed
+DH0397,29/04/2026,P03,3,25.000,Tại quán,completed
+DH0585,29/04/2026,P04,1,32.000,Tại quán,refunded
+DH0001,30/04/2026,P05,1,39.000,ShopeeFood,completed
+DH0002,30/04/2026,P05,3,39.000,GrabFood,completed
+DH0045,30/04/2026,P06,3,18.000,GrabFood,completed
+DH0059,30/04/2026,P06,1,18.000,ShopeeFood,completed
+DH0066,30/04/2026,P02,2,35.000,ShopeeFood,completed
+DH0142,30/04/2026,P05,2,39.000,Tại quán,completed
+DH0164,30/04/2026,P02,1,35.000,ShopeeFood,completed
+DH0297,30/04/2026,P05,1,39.000,GrabFood,completed
+DH0393,30/04/2026,P06,2,18.000,ShopeeFood,completed
+DH0481,30/04/2026,P06,1,18.000,Tại quán,completed
+DH0545,30/04/2026,P04,1,32.000,GrabFood,completed
+DH0562,30/04/2026,P02,1,35.000,ShopeeFood,completed
+DH0141,01/05/2026,P04,3,32.000,GrabFood,completed
+DH0150,01/05/2026,P06,3,18.000,Tại quán,completed
+DH0280,01/05/2026,P05,3,39.000,ShopeeFood,refunded
+DH0321,01/05/2026,P05,2,39.000,GrabFood,completed
+DH0385,01/05/2026,P03,2,25.000,Tại quán,completed
+DH0023,02/05/2026,P03,1,25.000,ShopeeFood,completed
+DH0058,02/05/2026,P06,1,18.000,ShopeeFood,completed
+DH0135,02/05/2026,P01,2,29.000,GrabFood,completed
+DH0154,02/05/2026,P06,1,18.000,Tại quán,completed
+DH0355,02/05/2026,P01,1,29.000,ShopeeFood,completed
+DH0433,02/05/2026,P05,1,39.000,GrabFood,completed
+DH0468,02/05/2026,P03,3,25.000,Tại quán,completed
+DH0052,03/05/2026,P02,1,35.000,GrabFood,completed
+DH0094,03/05/2026,P02,3,35.000,Tại quán,completed
+DH0112,03/05/2026,P03,1,25.000,ShopeeFood,completed
+DH0329,03/05/2026,P02,1,35.000,Tại quán,completed
+DH0346,03/05/2026,P02,1,35.000,Tại quán,completed
+DH0374,03/05/2026,P06,2,18.000,GrabFood,refunded
+DH0521,03/05/2026,P03,1,25.000,ShopeeFood,completed
+DH0156,04/05/2026,P04,1,32.000,ShopeeFood,completed
+DH0202,04/05/2026,P06,3,18.000,Tại quán,completed
+DH0246,04/05/2026,P04,2,32.000,Tại quán,completed
+DH0257,04/05/2026,P03,1,25.000,GrabFood,completed
+DH0359,04/05/2026,P02,1,35.000,Tại quán,completed
+DH0370,04/05/2026,P03,1,25.000,GrabFood,completed
+DH0016,05/05/2026,P05,1,39.000,Tại quán,completed
+DH0060,05/05/2026,P02,1,35.000,ShopeeFood,cancelled
+DH0093,05/05/2026,P03,1,25.000,Tại quán,completed
+DH0124,05/05/2026,P06,3,18.000,ShopeeFood,completed
+DH0189,05/05/2026,P04,2,32.000,GrabFood,completed
+DH0247,05/05/2026,P05,1,39.000,Tại quán,completed
+DH0316,05/05/2026,P06,1,18.000,ShopeeFood,refunded
+DH0013,06/05/2026,P03,3,25.000,ShopeeFood,completed
+DH0155,06/05/2026,P05,1,39.000,Tại quán,completed
+DH0160,06/05/2026,P02,1,35.000,Tại quán,completed
+DH0234,06/05/2026,P03,2,25.000,GrabFood,completed
+DH0357,06/05/2026,P06,1,18.000,ShopeeFood,completed
+DH0446,06/05/2026,P03,3,25.000,GrabFood,completed
+DH0109,07/05/2026,P01,1,29.000,GrabFood,cancelled
+DH0228,07/05/2026,P06,1,18.000,GrabFood,completed
+DH0169,08/05/2026,P03,1,25.000,Tại quán,completed
+DH0185,08/05/2026,P01,2,29.000,ShopeeFood,completed
+DH0235,08/05/2026,P04,1,32.000,ShopeeFood,completed
+DH0493,08/05/2026,P02,2,35.000,Tại quán,refunded
+DH0496,08/05/2026,P03,1,25.000,GrabFood,completed
+DH0551,08/05/2026,P06,1,18.000,Tại quán,completed
+DH0593,08/05/2026,P04,2,32.000,Tại quán,completed
+DH0007,09/05/2026,P06,2,18.000,Tại quán,completed
+DH0009,09/05/2026,P05,1,39.000,Tại quán,completed
+DH0035,09/05/2026,P04,1,32.000,GrabFood,completed
+DH0165,09/05/2026,P06,1,18.000,ShopeeFood,completed
+DH0301,09/05/2026,P04,2,32.000,GrabFood,completed
+DH0461,09/05/2026,P04,3,32.000,Tại quán,completed
+DH0469,09/05/2026,P02,3,35.000,ShopeeFood,completed
+DH0515,09/05/2026,P01,2,29.000,Tại quán,completed
+DH0579,09/05/2026,P03,1,25.000,Tại quán,completed
+DH0042,10/05/2026,P02,3,35.000,Tại quán,completed
+DH0118,10/05/2026,P05,1,39.000,ShopeeFood,completed
+DH0161,10/05/2026,P03,1,25.000,ShopeeFood,completed
+DH0044,11/05/2026,P05,1,39.000,Tại quán,completed
+DH0083,11/05/2026,P01,1,29.000,Tại quán,completed
+DH0426,11/05/2026,P02,2,35.000,Tại quán,completed
+DH0457,11/05/2026,P05,1,39.000,GrabFood,completed
+DH0522,11/05/2026,P04,1,32.000,GrabFood,completed
+DH0020,12/05/2026,P04,2,32.000,ShopeeFood,cancelled
+DH0146,12/05/2026,P04,2,32.000,Tại quán,cancelled
+DH0172,12/05/2026,P01,2,29.000,ShopeeFood,completed
+DH0195,12/05/2026,P02,1,35.000,ShopeeFood,completed
+DH0208,12/05/2026,P04,1,32.000,ShopeeFood,completed
+DH0265,12/05/2026,P03,2,25.000,GrabFood,completed
+DH0275,12/05/2026,P02,1,35.000,GrabFood,completed
+DH0314,12/05/2026,P06,1,18.000,Tại quán,completed
+DH0384,12/05/2026,P05,1,39.000,ShopeeFood,completed
+DH0386,12/05/2026,P03,1,25.000,Tại quán,completed
+DH0442,12/05/2026,P01,1,29.000,Tại quán,completed
+DH0525,12/05/2026,P04,1,32.000,Tại quán,completed
+DH0077,13/05/2026,P04,1,32.000,Tại quán,completed
+DH0221,13/05/2026,P04,1,32.000,Tại quán,completed
+DH0225,13/05/2026,P04,2,32.000,GrabFood,completed
+DH0231,13/05/2026,P05,2,39.000,ShopeeFood,completed
+DH0277,13/05/2026,P06,1,18.000,Tại quán,completed
+DH0351,13/05/2026,P03,2,25.000,Tại quán,completed
+DH0539,13/05/2026,P04,2,32.000,Tại quán,completed
+DH0010,14/05/2026,P01,3,29.000,ShopeeFood,cancelled
+DH0041,14/05/2026,P02,1,35.000,GrabFood,completed
+DH0310,14/05/2026,P05,3,39.000,GrabFood,completed
+DH0339,14/05/2026,P06,1,18.000,GrabFood,completed
+DH0373,14/05/2026,P05,2,39.000,GrabFood,completed
+DH0402,14/05/2026,P04,1,32.000,GrabFood,completed
+DH0443,14/05/2026,P04,1,32.000,Tại quán,completed
+DH0071,15/05/2026,P06,1,18.000,ShopeeFood,completed
+DH0102,15/05/2026,P04,1,32.000,ShopeeFood,completed
+DH0368,15/05/2026,P06,1,18.000,Tại quán,completed
+DH0392,15/05/2026,P02,3,35.000,ShopeeFood,completed
+DH0484,15/05/2026,P06,1,18.000,GrabFood,completed
+DH0008,16/05/2026,P01,3,29.000,ShopeeFood,completed
+DH0049,16/05/2026,P01,2,29.000,Tại quán,completed
+DH0269,16/05/2026,P06,2,18.000,GrabFood,completed
+DH0423,16/05/2026,P05,1,39.000,Tại quán,completed
+DH0444,16/05/2026,P05,1,39.000,Tại quán,completed
+DH0490,16/05/2026,P02,1,35.000,ShopeeFood,completed
+DH0504,16/05/2026,P05,2,39.000,GrabFood,completed
+DH0584,16/05/2026,P04,3,32.000,ShopeeFood,refunded
+DH0033,17/05/2026,P04,1,32.000,ShopeeFood,completed
+DH0080,17/05/2026,P02,2,35.000,Tại quán,completed
+DH0253,17/05/2026,P02,3,35.000,ShopeeFood,completed
+DH0332,17/05/2026,P05,1,39.000,ShopeeFood,completed
+DH0432,17/05/2026,P03,1,25.000,Tại quán,refunded
+DH0197,18/05/2026,P05,2,39.000,Tại quán,cancelled
+DH0213,18/05/2026,P02,1,35.000,GrabFood,completed
+DH0327,18/05/2026,P05,2,39.000,ShopeeFood,refunded
+DH0372,18/05/2026,P04,1,32.000,ShopeeFood,cancelled
+DH0391,18/05/2026,P05,1,39.000,GrabFood,refunded
+DH0411,18/05/2026,P02,1,35.000,GrabFood,refunded
+DH0512,18/05/2026,P03,3,25.000,GrabFood,completed
+DH0047,19/05/2026,P04,3,32.000,Tại quán,completed
+DH0073,19/05/2026,P01,1,29.000,GrabFood,completed
+DH0085,19/05/2026,P04,3,32.000,Tại quán,completed
+DH0243,19/05/2026,P03,3,25.000,ShopeeFood,completed
+DH0291,19/05/2026,P06,1,18.000,ShopeeFood,completed
+DH0021,20/05/2026,P03,1,25.000,GrabFood,completed
+DH0075,20/05/2026,P02,1,35.000,ShopeeFood,completed
+DH0308,20/05/2026,P04,1,32.000,Tại quán,completed
+DH0395,20/05/2026,P06,1,18.000,Tại quán,completed
+DH0507,20/05/2026,P04,3,32.000,ShopeeFood,completed
+DH0218,21/05/2026,P06,2,18.000,Tại quán,completed
+DH0445,21/05/2026,P06,1,18.000,Tại quán,refunded
+DH0463,21/05/2026,P02,1,35.000,Tại quán,completed
+DH0482,21/05/2026,P04,2,32.000,ShopeeFood,completed
+DH0527,21/05/2026,P06,2,18.000,GrabFood,cancelled
+DH0158,22/05/2026,P02,2,35.000,GrabFood,completed
+DH0159,22/05/2026,P03,1,25.000,ShopeeFood,completed
+DH0173,22/05/2026,P01,2,29.000,ShopeeFood,cancelled
+DH0273,22/05/2026,P02,2,35.000,Tại quán,completed
+DH0508,22/05/2026,P03,1,25.000,Tại quán,completed
+DH0513,22/05/2026,P05,3,39.000,ShopeeFood,completed
+DH0559,22/05/2026,P04,2,32.000,Tại quán,completed
+DH0014,23/05/2026,P02,1,35.000,ShopeeFood,completed
+DH0101,23/05/2026,P06,1,18.000,GrabFood,completed
+DH0113,23/05/2026,P02,1,35.000,ShopeeFood,completed
+DH0122,23/05/2026,P03,3,25.000,ShopeeFood,completed
+DH0290,23/05/2026,P02,2,35.000,Tại quán,completed
+DH0306,23/05/2026,P05,1,39.000,GrabFood,completed
+DH0375,23/05/2026,P01,1,29.000,GrabFood,completed
+DH0415,23/05/2026,P05,2,39.000,ShopeeFood,completed
+DH0427,23/05/2026,P01,1,29.000,Tại quán,completed
+DH0486,23/05/2026,P04,1,32.000,GrabFood,completed
+DH0516,23/05/2026,P04,2,32.000,GrabFood,completed
+DH0577,23/05/2026,P01,2,29.000,ShopeeFood,completed
+DH0591,23/05/2026,P05,2,39.000,ShopeeFood,completed
+DH0175,24/05/2026,P04,1,32.000,ShopeeFood,completed
+DH0350,24/05/2026,P03,1,25.000,GrabFood,completed
+DH0529,24/05/2026,P04,3,32.000,Tại quán,completed
+DH0558,24/05/2026,P06,1,18.000,ShopeeFood,completed
+DH0129,25/05/2026,P04,1,32.000,ShopeeFood,completed
+DH0251,25/05/2026,P05,1,39.000,GrabFood,completed
+DH0272,25/05/2026,P06,3,18.000,GrabFood,refunded
+DH0491,25/05/2026,P06,1,18.000,GrabFood,completed
+DH0581,25/05/2026,P06,2,18.000,Tại quán,completed
+DH0051,26/05/2026,P05,2,39.000,ShopeeFood,completed
+DH0111,26/05/2026,P03,2,25.000,GrabFood,completed
+DH0264,26/05/2026,P06,1,18.000,Tại quán,completed
+DH0344,26/05/2026,P04,1,32.000,GrabFood,completed
+DH0458,26/05/2026,P01,1,29.000,Tại quán,cancelled
+DH0471,26/05/2026,P05,1,39.000,GrabFood,completed
+DH0534,26/05/2026,P04,2,32.000,GrabFood,completed
+DH0177,27/05/2026,P03,2,25.000,Tại quán,completed
+DH0437,27/05/2026,P02,1,35.000,ShopeeFood,cancelled
+DH0582,27/05/2026,P01,1,29.000,ShopeeFood,completed
+DH0324,28/05/2026,P02,2,35.000,GrabFood,completed
+DH0379,28/05/2026,P04,1,32.000,ShopeeFood,completed
+DH0380,28/05/2026,P04,1,32.000,GrabFood,completed
+DH0408,28/05/2026,P06,1,18.000,Tại quán,completed
+DH0076,29/05/2026,P04,1,32.000,ShopeeFood,completed
+DH0196,29/05/2026,P01,1,29.000,ShopeeFood,completed
+DH0214,29/05/2026,P02,1,35.000,Tại quán,completed
+DH0261,29/05/2026,P03,1,25.000,ShopeeFood,cancelled
+DH0292,29/05/2026,P05,2,39.000,ShopeeFood,completed
+DH0330,29/05/2026,P01,3,29.000,GrabFood,completed
+DH0399,29/05/2026,P02,2,35.000,Tại quán,completed
+DH0429,29/05/2026,P01,2,29.000,GrabFood,completed
+DH0452,29/05/2026,P04,2,32.000,GrabFood,completed
+DH0032,30/05/2026,P02,3,35.000,ShopeeFood,completed
+DH0519,30/05/2026,P06,3,18.000,Tại quán,completed
+DH0557,30/05/2026,P04,2,32.000,ShopeeFood,completed
+DH0563,30/05/2026,P06,1,18.000,Tại quán,completed
+DH0565,30/05/2026,P03,2,25.000,ShopeeFood,completed
+DH0168,31/05/2026,P04,1,32.000,ShopeeFood,completed
+DH0454,31/05/2026,P02,2,35.000,ShopeeFood,completed
+DH0456,31/05/2026,P05,3,39.000,Tại quán,completed
+DH0095,01/06/2026,P05,2,39.000,GrabFood,completed
+DH0335,01/06/2026,P02,1,35.000,Tại quán,refunded
+DH0478,01/06/2026,P03,1,25.000,Tại quán,completed
+DH0590,01/06/2026,P01,2,29.000,Tại quán,completed
+DH0198,02/06/2026,P03,2,25.000,Tại quán,completed
+DH0263,02/06/2026,P05,1,39.000,ShopeeFood,completed
+DH0298,02/06/2026,P05,3,39.000,ShopeeFood,completed
+DH0533,02/06/2026,P03,1,25.000,Tại quán,completed
+DH0595,02/06/2026,P05,2,39.000,ShopeeFood,completed
+DH0107,03/06/2026,P05,2,39.000,ShopeeFood,cancelled
+DH0119,03/06/2026,P05,1,39.000,GrabFood,completed
+DH0226,03/06/2026,P01,1,29.000,Tại quán,completed
+DH0317,03/06/2026,P05,1,39.000,Tại quán,completed
+DH0398,03/06/2026,P02,2,35.000,ShopeeFood,refunded
+DH0498,03/06/2026,P03,1,25.000,GrabFood,completed
+DH0517,03/06/2026,P06,1,18.000,ShopeeFood,completed
+DH0100,04/06/2026,P06,1,18.000,GrabFood,completed
+DH0312,04/06/2026,P03,2,25.000,Tại quán,completed
+DH0390,04/06/2026,P01,2,29.000,Tại quán,completed
+DH0184,05/06/2026,P05,1,39.000,ShopeeFood,completed
+DH0240,05/06/2026,P06,2,18.000,GrabFood,completed
+DH0283,05/06/2026,P03,1,25.000,ShopeeFood,completed
+DH0294,05/06/2026,P06,1,18.000,Tại quán,completed
+DH0302,05/06/2026,P02,1,35.000,GrabFood,completed
+DH0326,05/06/2026,P03,2,25.000,Tại quán,completed
+DH0381,05/06/2026,P01,2,29.000,ShopeeFood,completed
+DH0428,05/06/2026,P01,3,29.000,Tại quán,completed
+DH0441,05/06/2026,P05,2,39.000,ShopeeFood,completed
+DH0460,05/06/2026,P02,3,35.000,Tại quán,completed
+DH0489,05/06/2026,P06,2,18.000,Tại quán,cancelled
+DH0015,06/06/2026,P05,1,39.000,Tại quán,refunded
+DH0084,06/06/2026,P01,3,29.000,GrabFood,completed
+DH0222,06/06/2026,P06,1,18.000,Tại quán,completed
+DH0349,06/06/2026,P02,3,35.000,GrabFood,completed
+DH0430,06/06/2026,P05,1,39.000,Tại quán,refunded
+DH0436,06/06/2026,P02,2,35.000,Tại quán,cancelled
+DH0480,06/06/2026,P06,3,18.000,Tại quán,completed
+DH0063,07/06/2026,P04,1,32.000,GrabFood,completed
+DH0201,07/06/2026,P06,3,18.000,ShopeeFood,completed
+DH0404,07/06/2026,P06,1,18.000,ShopeeFood,completed
+DH0476,07/06/2026,P03,1,25.000,Tại quán,completed
+DH0179,08/06/2026,P04,3,32.000,ShopeeFood,cancelled
+DH0192,08/06/2026,P04,1,32.000,GrabFood,completed
+DH0286,08/06/2026,P05,1,39.000,ShopeeFood,completed
+DH0315,08/06/2026,P05,2,39.000,ShopeeFood,cancelled
+DH0378,08/06/2026,P05,1,39.000,ShopeeFood,refunded
+DH0589,08/06/2026,P06,1,18.000,ShopeeFood,completed
+DH0037,09/06/2026,P05,1,39.000,Tại quán,completed
+DH0046,09/06/2026,P06,2,18.000,Tại quán,completed
+DH0048,09/06/2026,P04,1,32.000,Tại quán,completed
+DH0099,09/06/2026,P01,1,29.000,ShopeeFood,completed
+DH0116,09/06/2026,P05,1,39.000,Tại quán,completed
+DH0182,09/06/2026,P05,3,39.000,Tại quán,completed
+DH0270,09/06/2026,P04,2,32.000,GrabFood,completed
+DH0285,09/06/2026,P05,1,39.000,Tại quán,completed
+DH0337,09/06/2026,P01,1,29.000,Tại quán,completed
+DH0353,09/06/2026,P06,3,18.000,ShopeeFood,completed
+DH0412,09/06/2026,P01,2,29.000,GrabFood,completed
+DH0502,09/06/2026,P05,3,39.000,GrabFood,completed
+DH0039,10/06/2026,P02,2,35.000,Tại quán,completed
+DH0110,10/06/2026,P01,3,29.000,GrabFood,completed
+DH0212,10/06/2026,P02,2,35.000,Tại quán,refunded
+DH0282,10/06/2026,P01,3,29.000,GrabFood,completed
+DH0313,10/06/2026,P01,3,29.000,Tại quán,cancelled
+DH0360,10/06/2026,P06,1,18.000,Tại quán,cancelled
+DH0403,10/06/2026,P04,2,32.000,GrabFood,completed
+DH0136,11/06/2026,P04,1,32.000,Tại quán,refunded
+DH0152,11/06/2026,P01,2,29.000,GrabFood,cancelled
+DH0157,11/06/2026,P01,2,29.000,GrabFood,completed
+DH0217,11/06/2026,P06,1,18.000,GrabFood,completed
+DH0252,11/06/2026,P04,1,32.000,ShopeeFood,completed
+DH0358,11/06/2026,P01,1,29.000,GrabFood,completed
+DH0396,11/06/2026,P05,1,39.000,GrabFood,completed
+DH0483,11/06/2026,P01,2,29.000,ShopeeFood,completed
+DH0505,11/06/2026,P01,1,29.000,GrabFood,completed
+DH0550,11/06/2026,P04,1,32.000,ShopeeFood,completed
+DH0069,12/06/2026,P02,2,35.000,Tại quán,completed
+DH0123,12/06/2026,P02,2,35.000,GrabFood,completed
+DH0139,12/06/2026,P03,2,25.000,ShopeeFood,completed
+DH0242,12/06/2026,P01,1,29.000,ShopeeFood,completed
+DH0262,12/06/2026,P03,1,25.000,ShopeeFood,completed
+DH0268,12/06/2026,P01,1,29.000,GrabFood,cancelled
+DH0453,12/06/2026,P06,1,18.000,ShopeeFood,completed
+DH0555,12/06/2026,P02,2,35.000,GrabFood,completed
+DH0560,12/06/2026,P06,1,18.000,ShopeeFood,completed
+DH0572,12/06/2026,P05,2,39.000,ShopeeFood,completed
+DH0599,12/06/2026,P04,2,32.000,GrabFood,completed
+DH0026,13/06/2026,P01,3,29.000,GrabFood,completed
+DH0193,13/06/2026,P05,1,39.000,GrabFood,completed
+DH0229,13/06/2026,P01,3,29.000,GrabFood,completed
+DH0244,13/06/2026,P02,1,35.000,GrabFood,completed
+DH0367,13/06/2026,P03,2,25.000,GrabFood,completed
+DH0388,13/06/2026,P03,2,25.000,ShopeeFood,completed
+DH0389,13/06/2026,P01,2,29.000,GrabFood,completed
+DH0103,14/06/2026,P01,1,29.000,ShopeeFood,completed
+DH0238,14/06/2026,P01,1,29.000,ShopeeFood,completed
+DH0417,14/06/2026,P03,1,25.000,GrabFood,completed
+DH0568,14/06/2026,P05,2,39.000,Tại quán,completed
+DH0117,15/06/2026,P02,3,35.000,ShopeeFood,refunded
+DH0151,15/06/2026,P05,3,39.000,Tại quán,completed
+DH0180,15/06/2026,P06,1,18.000,Tại quán,refunded
+DH0341,15/06/2026,P04,3,32.000,GrabFood,completed
+DH0523,15/06/2026,P05,1,39.000,ShopeeFood,completed
+DH0538,15/06/2026,P04,2,32.000,GrabFood,completed
+DH0137,16/06/2026,P06,1,18.000,GrabFood,completed
+DH0307,16/06/2026,P06,1,18.000,ShopeeFood,completed
+DH0319,16/06/2026,P02,3,35.000,Tại quán,completed
+DH0323,16/06/2026,P01,1,29.000,ShopeeFood,completed
+DH0409,16/06/2026,P03,3,25.000,GrabFood,completed
+DH0034,17/06/2026,P02,2,35.000,GrabFood,completed
+DH0566,17/06/2026,P01,3,29.000,ShopeeFood,completed
+DH0062,18/06/2026,P04,2,32.000,ShopeeFood,completed
+DH0564,18/06/2026,P02,1,35.000,Tại quán,completed
+DH0011,19/06/2026,P05,1,39.000,ShopeeFood,completed
+DH0029,19/06/2026,P04,3,32.000,ShopeeFood,completed
+DH0400,19/06/2026,P05,3,39.000,Tại quán,completed
+DH0413,19/06/2026,P05,1,39.000,Tại quán,completed
+DH0421,19/06/2026,P06,2,18.000,GrabFood,completed
+DH0072,20/06/2026,P02,2,35.000,Tại quán,completed
+DH0145,20/06/2026,P04,1,32.000,GrabFood,completed
+DH0162,20/06/2026,P06,2,18.000,Tại quán,cancelled
+DH0267,20/06/2026,P06,1,18.000,Tại quán,completed
+DH0284,20/06/2026,P04,3,32.000,Tại quán,refunded
+DH0487,20/06/2026,P04,2,32.000,GrabFood,completed
+DH0081,21/06/2026,P03,3,25.000,Tại quán,completed
+DH0088,21/06/2026,P01,1,29.000,ShopeeFood,completed
+DH0092,21/06/2026,P03,1,25.000,ShopeeFood,completed
+DH0274,21/06/2026,P05,2,39.000,GrabFood,completed
+DH0477,21/06/2026,P02,1,35.000,ShopeeFood,completed
+DH0121,22/06/2026,P06,2,18.000,Tại quán,completed
+DH0134,22/06/2026,P04,3,32.000,Tại quán,completed
+DH0140,22/06/2026,P05,1,39.000,GrabFood,completed
+DH0435,22/06/2026,P06,2,18.000,ShopeeFood,completed
+DH0450,22/06/2026,P04,3,32.000,Tại quán,completed
+DH0530,22/06/2026,P02,3,35.000,ShopeeFood,completed
+DH0596,22/06/2026,P06,2,18.000,GrabFood,completed
+DH0065,23/06/2026,P04,3,32.000,Tại quán,completed
+DH0108,23/06/2026,P06,2,18.000,Tại quán,completed
+DH0120,23/06/2026,P04,1,32.000,ShopeeFood,completed
+DH0176,23/06/2026,P06,2,18.000,ShopeeFood,completed
+DH0200,23/06/2026,P01,2,29.000,Tại quán,completed
+DH0211,23/06/2026,P04,1,32.000,GrabFood,completed
+DH0345,23/06/2026,P06,2,18.000,Tại quán,completed
+DH0434,23/06/2026,P03,3,25.000,Tại quán,completed
+DH0588,23/06/2026,P06,1,18.000,GrabFood,completed
+DH0091,24/06/2026,P01,2,29.000,GrabFood,completed
+DH0105,24/06/2026,P06,1,18.000,ShopeeFood,refunded
+DH0163,24/06/2026,P02,2,35.000,GrabFood,completed
+DH0186,24/06/2026,P05,2,39.000,Tại quán,refunded
+DH0266,24/06/2026,P01,2,29.000,ShopeeFood,completed
+DH0501,24/06/2026,P05,2,39.000,Tại quán,completed
+DH0543,24/06/2026,P02,1,35.000,ShopeeFood,completed
+DH0586,24/06/2026,P06,1,18.000,Tại quán,completed
+DH0597,24/06/2026,P01,2,29.000,GrabFood,completed
+DH0057,25/06/2026,P02,1,35.000,Tại quán,refunded
+DH0245,25/06/2026,P02,1,35.000,Tại quán,completed
+DH0289,25/06/2026,P01,1,29.000,GrabFood,completed
+DH0354,25/06/2026,P05,2,39.000,ShopeeFood,completed
+DH0439,25/06/2026,P05,2,39.000,GrabFood,completed
+DH0544,25/06/2026,P06,1,18.000,ShopeeFood,completed
+DH0574,25/06/2026,P06,3,18.000,GrabFood,completed
+DH0592,25/06/2026,P05,2,39.000,Tại quán,completed
+DH0149,26/06/2026,P01,1,29.000,GrabFood,completed
+DH0170,26/06/2026,P05,1,39.000,ShopeeFood,cancelled
+DH0181,26/06/2026,P02,3,35.000,ShopeeFood,completed
+DH0188,26/06/2026,P01,1,29.000,Tại quán,cancelled
+DH0232,26/06/2026,P02,2,35.000,ShopeeFood,completed
+DH0237,26/06/2026,P06,1,18.000,ShopeeFood,completed
+DH0340,26/06/2026,P04,2,32.000,GrabFood,completed
+DH0361,26/06/2026,P03,3,25.000,Tại quán,completed
+DH0371,26/06/2026,P03,1,25.000,GrabFood,completed
+DH0418,26/06/2026,P03,3,25.000,GrabFood,completed
+DH0455,26/06/2026,P03,2,25.000,ShopeeFood,completed
+DH0526,26/06/2026,P03,1,25.000,ShopeeFood,completed
+DH0600,26/06/2026,P03,2,25.000,GrabFood,completed
+DH0056,27/06/2026,P02,1,35.000,Tại quán,completed
+DH0167,27/06/2026,P02,2,35.000,ShopeeFood,completed
+DH0206,27/06/2026,P01,2,29.000,GrabFood,completed
+DH0540,27/06/2026,P06,1,18.000,GrabFood,completed
+DH0561,27/06/2026,P02,1,35.000,GrabFood,refunded
+DH0583,27/06/2026,P04,2,32.000,ShopeeFood,cancelled
+DH0079,28/06/2026,P03,1,25.000,ShopeeFood,completed
+DH0153,28/06/2026,P01,2,29.000,Tại quán,cancelled
+DH0338,28/06/2026,P04,1,32.000,GrabFood,completed
+DH0364,28/06/2026,P04,2,32.000,GrabFood,completed
+DH0449,28/06/2026,P02,2,35.000,ShopeeFood,cancelled
+DH0464,28/06/2026,P06,2,18.000,Tại quán,completed
+DH0465,28/06/2026,P01,2,29.000,Tại quán,completed
+DH0514,28/06/2026,P02,1,35.000,Tại quán,completed
+DH0299,29/06/2026,P06,1,18.000,Tại quán,completed
+DH0473,29/06/2026,P05,3,39.000,Tại quán,completed
+DH0518,29/06/2026,P03,2,25.000,ShopeeFood,completed
+DH0542,29/06/2026,P05,1,39.000,ShopeeFood,cancelled
+DH0027,30/06/2026,P01,1,29.000,GrabFood,completed
+DH0074,30/06/2026,P04,2,32.000,Tại quán,completed
+DH0438,30/06/2026,P03,1,25.000,Tại quán,completed
+DH0451,30/06/2026,P05,3,39.000,GrabFood,completed
+DH0524,30/06/2026,P03,1,25.000,ShopeeFood,completed
+TOTAL,,,1016,,,
