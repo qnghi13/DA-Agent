@@ -1,5 +1,8 @@
 // Typed client for the DA-Agent HTTP API (docs/adr/0020-http-api.md).
 
+import type { Answer } from "./run";
+import { type SseEvent, streamEvents } from "./sse";
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -119,6 +122,66 @@ export class Api {
       body: JSON.stringify(spec ? { spec } : {}),
     });
   }
+
+  createRun(datasetId: string, question: string, asOf?: string): Promise<{ id: string }> {
+    return this.request("/v1/runs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dataset_id: datasetId, question, ...(asOf ? { as_of: asOf } : {}) }),
+    });
+  }
+
+  getRun(id: string): Promise<Run> {
+    return this.request(`/v1/runs/${encodeURIComponent(id)}`);
+  }
+
+  /** The run's events; reconnects until the run ends. */
+  streamRunEvents(id: string, onEvent: (event: SseEvent) => void, signal: AbortSignal) {
+    return streamEvents(`/v1/runs/${encodeURIComponent(id)}/events`, {
+      headers: { Authorization: `Bearer ${this.key}` },
+      onEvent,
+      signal,
+    });
+  }
+
+  /** The standalone HTML report. It needs the key, so it cannot be a plain link. */
+  async getReport(id: string): Promise<string> {
+    const response = await fetch(`/v1/runs/${encodeURIComponent(id)}/report`, {
+      headers: { Authorization: `Bearer ${this.key}` },
+    });
+    if (!response.ok) throw new ApiError(response.status, await errorDetail(response));
+    return response.text();
+  }
+}
+
+export interface QueryRecord {
+  sql: string;
+  columns: string[];
+  rows: unknown[][];
+  truncated?: boolean;
+}
+
+export interface RunResult {
+  answer: Answer | null;
+  stop_reason: string;
+  steps: { tool: string; ok: boolean; sql?: string | null; chart?: VegaLiteSpec | null }[];
+  iterations: number;
+  error: string | null;
+  question_for_user: string | null;
+  queries: QueryRecord[];
+}
+
+export type VegaLiteSpec = Record<string, unknown>;
+
+export interface Run {
+  id: string;
+  dataset_id: string;
+  question: string;
+  as_of: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  attempts: number;
+  error: string | null;
+  result: RunResult | null;
 }
 
 export function errorMessage(caught: unknown): string {
@@ -127,7 +190,7 @@ export function errorMessage(caught: unknown): string {
   return caught instanceof Error ? caught.message : String(caught);
 }
 
-async function errorDetail(response: Response): Promise<string> {
+export async function errorDetail(response: Response): Promise<string> {
   try {
     const body = (await response.json()) as { detail?: unknown };
     if (typeof body.detail === "string") return body.detail;

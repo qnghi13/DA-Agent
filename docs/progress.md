@@ -6,11 +6,15 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
 
 ## Next step
 
-1. React: `web/` (Vite 8, React 19, TS 7, exact pins; `/v1` proxied to :8000, so no CORS). Done:
-   key form, dataset list, upload, review (summary, column editor, JSON editor, approve). Checked
-   by build and OpenAPI only, not yet in a browser against a live stack. Next: chat over SSE read
-   with `fetch` (EventSource cannot send the bearer key). Open, brainstorm: trace view (runs expose no
-   `trace_id`), answering `question` events (no resume endpoint), run history (no list endpoint).
+1. React: `web/` (Vite 8, React 19, TS 7, exact pins; `/v1` proxied to :8000, so no CORS).
+   Upload and review tested by the user in a browser. Q&A added: SSE read with `fetch` and
+   `Last-Event-ID` (`sse.ts`), evidence trail (plan, tools with SQL and rows, verify), answer,
+   lazy Vega chart (vega 6.4, interpreter, palette validated), sandboxed report iframe, run
+   history in localStorage. `npm test` 16 pass; Q&A not yet tried in a browser.
+   Follow-up: the HTML report loads vega 5.33 / interpreter 1.0.5 from the CDN, both with high
+   advisories (npm audit); bump them in `reports/html.py` with its CSP hash.
+   Open, brainstorm: trace view (runs expose no `trace_id`), answering `question` events (no
+   resume endpoint), run history (no list endpoint).
    Backend done (ADRs 0017–0022): end to end with Groq over HTTP, $0.0014.
    Charts and reports done (ADRs 0015–0016); `--report` writes HTML (`report-sample`, $0.017).
    RAG experiment cut: plan with titles only +2 vs all rules +11 already answers it (note 05).
