@@ -134,6 +134,29 @@ def test_records_tokens_and_cost_per_call() -> None:
     assert totals.cost_usd == pytest.approx(0.002)
 
 
+def test_failed_attempts_are_recorded_by_kind_without_counting_as_calls() -> None:
+    primary = ScriptedAdapter(
+        "groq",
+        [RateLimitedError("slow"), TransientLLMError("timeout"), PermanentLLMError("no"), reply()],
+    )
+    fallback = ScriptedAdapter("gemini", [InvalidToolCallError("bad tool")])
+    client, ledger, _ = make_client(primary, fallback, max_retries=2)
+
+    with pytest.raises(InvalidToolCallError):
+        client.complete(REQUEST, run_id="r1")
+    client.complete(REQUEST, run_id="r1")
+
+    failed = [(r.provider, r.error) for r in ledger.records() if r.error]
+    assert failed == [
+        ("groq", "rate_limited"),
+        ("groq", "transient"),
+        ("groq", "permanent"),
+        ("gemini", "invalid_tool_call"),
+    ]
+    assert all(r.cost_usd == 0 and r.input_tokens == 0 for r in ledger.records() if r.error)
+    assert ledger.totals("r1").calls == 1
+
+
 def test_ledger_keeps_runs_separate_and_sums_overall() -> None:
     client, ledger, _ = make_client(ScriptedAdapter("groq", [reply(), reply()]))
 

@@ -77,6 +77,19 @@ class CostRecord:
     cached_input_tokens: int
     cost_usd: float
     latency_seconds: float
+    # Set on a failed attempt: rate_limited, transient, permanent, or invalid_tool_call. Failed
+    # attempts cost nothing and are not counted as calls, but operators see them (ADR 0026).
+    error: str | None = None
+
+
+def error_kind(error: LLMError) -> str:
+    if isinstance(error, RateLimitedError):
+        return "rate_limited"
+    if isinstance(error, TransientLLMError):
+        return "transient"
+    if isinstance(error, InvalidToolCallError):
+        return "invalid_tool_call"
+    return "permanent"
 
 
 @dataclass(frozen=True)
@@ -92,7 +105,10 @@ class CostTotals:
 
 
 class CostLedger:
-    """Keeps a record of every successful call, and appends to a JSONL file when given a path."""
+    """Keeps a record of every call, and appends to a JSONL file when given a path.
+
+    Failed attempts are kept with their error kind; totals count only successful calls.
+    """
 
     def __init__(self, path: Path | None = None) -> None:
         self._path = path
@@ -106,10 +122,18 @@ class CostLedger:
                 with self._path.open("a", encoding="utf-8") as file:
                     file.write(json.dumps(asdict(record)) + "\n")
 
+    def records(self) -> list[CostRecord]:
+        with self._lock:
+            return list(self._records)
+
     def totals(self, run_id: str | None = None) -> CostTotals:
         """Sum one run, or every run when run_id is None."""
         with self._lock:
-            records = [r for r in self._records if run_id is None or r.run_id == run_id]
+            records = [
+                r
+                for r in self._records
+                if r.error is None and (run_id is None or r.run_id == run_id)
+            ]
         return CostTotals(
             calls=len(records),
             input_tokens=sum(r.input_tokens for r in records),
@@ -201,6 +225,13 @@ class LLMClient:
                 response = route.adapter.complete(request, route.model)
             except LLMError as error:
                 span.set_status(Status(StatusCode.ERROR, type(error).__name__))
+                self._ledger.record(
+                    CostRecord(
+                        run_id=run_id, provider=route.adapter.provider, model=route.model,
+                        input_tokens=0, output_tokens=0, cached_input_tokens=0, cost_usd=0.0,
+                        latency_seconds=time.monotonic() - started, error=error_kind(error),
+                    )
+                )  # fmt: skip
                 raise
             latency = time.monotonic() - started
 

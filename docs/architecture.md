@@ -88,6 +88,18 @@ browser ─127.0.0.1:8080─> web (nginx: UI files, /v1 proxy)
 - `python -m da_agent.worker` without `DA_AGENT_RUNNER_URL` starts sandboxes itself. That is for
   local development only.
 
+## Sign-in and operations
+
+- **Who calls the API** ([ADR 0025](adr/0025-browser-sessions-and-login-links.md)): scripts send an
+  API key as a bearer token. Browsers open a one-time login link (`/login#token=...`, printed by
+  `python -m da_agent.admin login-link` or made in the UI) and get an `HttpOnly` session cookie.
+  A session is a workspace member or the operator. The operator has no workspace.
+- **Operator dashboard** ([ADR 0026](adr/0026-operator-dashboard.md)): the same UI shows the
+  operator `/v1/ops/summary` and `/v1/ops/failures`, aggregates over `jobs`, `llm_calls`,
+  `run_events`, `audit_log`, and `datasets`: queue health, run outcomes, latency, model calls and
+  failed attempts, cost against budgets, quality signals, sign-ins, and recent failures. Phoenix
+  stays the place for a single run's detail.
+
 ## Request flow
 
 1. The client uploads files. The API stores them and enqueues an ingestion job.

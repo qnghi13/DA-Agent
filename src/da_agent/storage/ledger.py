@@ -29,13 +29,13 @@ class PostgresCostLedger(CostLedger):
         with self._db_lock:
             self._conn.execute(
                 "INSERT INTO llm_calls (run_id, workspace_id, provider, model, input_tokens, "
-                "output_tokens, cached_input_tokens, cost_usd, latency_seconds) "
+                "output_tokens, cached_input_tokens, cost_usd, latency_seconds, error_kind) "
                 "VALUES (%s, (SELECT workspace_id FROM jobs WHERE id = %s), %s, %s, %s, %s, %s, "
-                "%s, %s)",
+                "%s, %s, %s)",
                 (
                     record.run_id, _job_id(record.run_id), record.provider, record.model,
                     record.input_tokens, record.output_tokens, record.cached_input_tokens,
-                    record.cost_usd, record.latency_seconds,
+                    record.cost_usd, record.latency_seconds, record.error,
                 ),
             )  # fmt: skip
 
@@ -43,7 +43,8 @@ class PostgresCostLedger(CostLedger):
         with self._db_lock:
             row = self._conn.execute(
                 "SELECT count(*), coalesce(sum(input_tokens), 0), coalesce(sum(output_tokens), 0), "
-                "coalesce(sum(cost_usd), 0) FROM llm_calls WHERE %s::text IS NULL OR run_id = %s",
+                "coalesce(sum(cost_usd), 0) FROM llm_calls "
+                "WHERE error_kind IS NULL AND (%s::text IS NULL OR run_id = %s)",
                 (run_id, run_id),
             ).fetchone()
         calls, input_tokens, output_tokens, cost = row or (0, 0, 0, 0.0)

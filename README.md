@@ -15,12 +15,19 @@ API key (free tier).
 ```bash
 cp .env.example .env          # then fill in the three required values
 docker compose up -d --build  # the first build takes a few minutes
-docker compose exec api python -m da_agent.admin create-workspace "My shop"   # prints a key once
+docker compose exec api python -m da_agent.admin create-workspace "My shop"   # prints its id and a key
+docker compose exec api python -m da_agent.admin login-link --workspace WORKSPACE_ID
 ```
 
-Open http://127.0.0.1:8080, paste the key, and upload the three files in `examples/demo-shop/`.
-Approve the proposed spec, then ask "What was the revenue in June 2026?" (8,714,000 VND).
-Traces are in Phoenix at http://127.0.0.1:6006.
+Open the printed link within 15 minutes; it signs the browser in and works once. Upload the three
+files in `examples/demo-shop/`, approve the proposed spec, then ask "What was the revenue in June
+2026?" (8,714,000 VND). "Invite or add a device" in the UI makes more links for the workspace.
+
+For the operator dashboard (queue, outcomes, latency, model errors, cost against budgets, recent
+failures), run `login-link --operator` and open that link. Traces are in Phoenix at
+http://127.0.0.1:6006. If the UI is not served from http://127.0.0.1:8080, set
+`DA_AGENT_PUBLIC_URL` to its address: links point there, and the API refuses changes from other
+origins.
 
 Before you upload your own data, know what leaves the machine: column profiles, sample values,
 and query results go to the model provider. Sandboxes are containers (runc) without network
@@ -74,7 +81,8 @@ export DA_AGENT_DATA_DIR=/path/to/data            # uploads, staging, and built 
 export DA_AGENT_ROUTES=groq:openai/gpt-oss-20b    # the worker only; GROQ_API_KEY too
 
 uv run python -m da_agent.admin create-workspace "My shop"   # prints a key once
-uv run python -m da_agent.api --port 8000
+DA_AGENT_PUBLIC_URL=http://localhost:5173 uv run python -m da_agent.api --port 8000
+uv run python -m da_agent.admin login-link --workspace WORKSPACE_ID   # for the browser
 uv run python -m da_agent.worker
 ```
 
@@ -108,7 +116,8 @@ Set `DA_AGENT_API_URL` if the API is not on `http://127.0.0.1:8000`.
 ```bash
 cd web
 npm ci
-npm run dev          # http://localhost:5173, then paste the workspace key
+npm run dev          # http://localhost:5173; open a login link (the API needs
+                     # DA_AGENT_PUBLIC_URL=http://localhost:5173)
 npm test             # unit tests (vitest)
 npm run build        # type-check and bundle into web/dist
 ```

@@ -1,5 +1,7 @@
 // Typed client for the DA-Agent HTTP API (docs/adr/0020-http-api.md).
 
+import type { Me } from "./auth";
+import type { FailureRow, OpsSummary, Window } from "./ops";
 import type { Answer } from "./run";
 import { type SseEvent, streamEvents } from "./sse";
 
@@ -85,17 +87,55 @@ export const BUSY_STATUSES: readonly DatasetStatus[] = ["uploaded", "building"];
 // Extensions the API accepts (src/da_agent/ingestion/raw.py).
 export const UPLOAD_ACCEPT = ".csv,.tsv,.xlsx,.xlsm,.sqlite,.sqlite3,.db,.md,.txt";
 
+async function send<T>(path: string, init: RequestInit = {}): Promise<T> {
+  // The session cookie goes with every same-origin request; the browser adds Origin to POSTs,
+  // which the API checks (docs/adr/0025).
+  const response = await fetch(path, { ...init, credentials: "same-origin" });
+  if (!response.ok) throw new ApiError(response.status, await errorDetail(response));
+  return (response.status === 204 ? undefined : await response.json()) as T;
+}
+
+const JSON_HEADERS = { "Content-Type": "application/json" };
+
+/** Who this browser is signed in as. Rejects with a 401 ApiError when it is not. */
+export function fetchMe(): Promise<Me> {
+  return send("/v1/auth/me");
+}
+
+/** Use a one-time login link. */
+export function redeemLink(token: string): Promise<Me> {
+  return send("/v1/auth/redeem", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ token }),
+  });
+}
+
+/** Exchange an API key for a session once; the browser does not keep the key. */
+export function signInWithKey(key: string): Promise<Me> {
+  return send("/v1/auth/session", { method: "POST", headers: { Authorization: `Bearer ${key}` } });
+}
+
+export function signOut(): Promise<void> {
+  return send("/v1/auth/logout", { method: "POST" });
+}
+
+/** A one-time link that signs another browser in with the caller's role. */
+export function createLoginLink(): Promise<{ url: string; expires_in_seconds: number }> {
+  return send("/v1/auth/links", { method: "POST", headers: JSON_HEADERS, body: "{}" });
+}
+
 export class Api {
-  constructor(private readonly key: string) {}
+  /** `onSignedOut` runs when the session has ended, such as after expiry or revocation. */
+  constructor(private readonly onSignedOut: () => void = () => {}) {}
 
   async request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const headers = new Headers(init.headers);
-    headers.set("Authorization", `Bearer ${this.key}`);
-    const response = await fetch(path, { ...init, headers });
-    if (!response.ok) {
-      throw new ApiError(response.status, await errorDetail(response));
+    try {
+      return await send<T>(path, init);
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 401) this.onSignedOut();
+      throw caught;
     }
-    return (await response.json()) as T;
   }
 
   listDatasets(): Promise<{ datasets: Dataset[] }> {
@@ -148,16 +188,27 @@ export class Api {
   /** The run's events; reconnects until the run ends. */
   streamRunEvents(id: string, onEvent: (event: SseEvent) => void, signal: AbortSignal) {
     return streamEvents(`/v1/runs/${encodeURIComponent(id)}/events`, {
-      headers: { Authorization: `Bearer ${this.key}` },
       onEvent,
       signal,
     });
   }
 
-  /** The standalone HTML report. It needs the key, so it cannot be a plain link. */
+  /** Operator dashboard panels for a window (docs/adr/0026). */
+  getOpsSummary(window: Window): Promise<OpsSummary> {
+    return this.request(`/v1/ops/summary?window=${window}`);
+  }
+
+  /** Jobs that failed, wait to retry, or stopped without an answer; newest first. */
+  getOpsFailures(before?: string): Promise<{ failures: FailureRow[] }> {
+    const params = new URLSearchParams({ limit: "25" });
+    if (before) params.set("before", before);
+    return this.request(`/v1/ops/failures?${params}`);
+  }
+
+  /** The standalone HTML report, shown in a sandboxed frame. */
   async getReport(id: string): Promise<string> {
     const response = await fetch(`/v1/runs/${encodeURIComponent(id)}/report`, {
-      headers: { Authorization: `Bearer ${this.key}` },
+      credentials: "same-origin",
     });
     if (!response.ok) throw new ApiError(response.status, await errorDetail(response));
     return response.text();
@@ -205,7 +256,7 @@ export interface RunSummary {
 }
 
 export function errorMessage(caught: unknown): string {
-  if (caught instanceof ApiError && caught.status === 401) return "The API key was rejected.";
+  if (caught instanceof ApiError && caught.status === 401) return "You are signed out.";
   if (caught instanceof ApiError && caught.status === 429) return `Slow down: ${caught.message}`;
   return caught instanceof Error ? caught.message : String(caught);
 }

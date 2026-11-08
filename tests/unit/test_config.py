@@ -40,6 +40,12 @@ def test_optional_settings_are_read_and_checked() -> None:
     assert Settings.from_env(REQUIRED).trace_ui_url is None
 
 
+def test_the_public_url_defaults_to_the_local_compose_ui() -> None:
+    assert Settings.from_env(REQUIRED).public_url == "http://127.0.0.1:8080"
+    env = REQUIRED | {"DA_AGENT_PUBLIC_URL": "https://da.example/"}
+    assert Settings.from_env(env).public_url == "https://da.example"
+
+
 @pytest.mark.parametrize(
     ("env", "message"),
     [
@@ -47,6 +53,7 @@ def test_optional_settings_are_read_and_checked() -> None:
         (REQUIRED | {"DA_AGENT_DAILY_BUDGET_USD": "lots"}, "DA_AGENT_DAILY_BUDGET_USD"),
         (REQUIRED | {"DA_AGENT_RUN_BUDGET_USD": "-1"}, "DA_AGENT_RUN_BUDGET_USD"),
         (REQUIRED | {"DA_AGENT_TRACE_UI_URL": "javascript:alert(1)"}, "DA_AGENT_TRACE_UI_URL"),
+        (REQUIRED | {"DA_AGENT_PUBLIC_URL": "da.example"}, "DA_AGENT_PUBLIC_URL"),
     ],
 )
 def test_bad_settings_name_the_variable(env: dict[str, str], message: str) -> None:

@@ -16,3 +16,8 @@ def create_workspace(conn: psycopg.Connection, name: str) -> UUID:
 def set_daily_budget(conn: psycopg.Connection, workspace_id: UUID, usd: float | None) -> None:
     """Override the default daily model budget for a workspace; None restores the default."""
     conn.execute("UPDATE workspaces SET daily_budget_usd = %s WHERE id = %s", (usd, workspace_id))
+
+
+def workspace_exists(conn: psycopg.Connection, workspace_id: UUID) -> bool:
+    row = conn.execute("SELECT 1 FROM workspaces WHERE id = %s", (workspace_id,)).fetchone()
+    return row is not None

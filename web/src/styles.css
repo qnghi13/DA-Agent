@@ -18,6 +18,11 @@
   --info-bg: #e4e6fb;
   --info-ink: #26246e;
   --code-bg: #f4f5f8;
+  /* Status (dataviz palette): marks use the fill, text uses the ink, which passes 4.5:1. */
+  --good: #0ca30c;
+  --warning: #fab219;
+  --critical: #d03b3b;
+  --critical-bg: #fbe7e6;
   --font: "IBM Plex Sans", system-ui, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
   font-family: var(--font);
@@ -44,6 +49,7 @@
     --info-bg: #262a4d;
     --info-ink: #d4d4ff;
     --code-bg: #171a26;
+    --critical-bg: #3a1d22;
     color-scheme: dark;
   }
 }
@@ -723,6 +729,362 @@ textarea.code {
 
 .as-of input {
   padding: 4px 8px;
+}
+
+/* Sign-in (ADR 0025) */
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.sign-in {
+  display: grid;
+  gap: 14px;
+  max-width: 560px;
+  margin: 8vh auto 0;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.sign-in details {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.sign-in summary {
+  color: var(--indigo);
+  min-height: 32px;
+  padding: 4px 0;
+}
+
+.sign-in form {
+  margin-top: 10px;
+}
+
+.notice {
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+
+.invite {
+  position: relative;
+}
+
+.invite-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 10;
+  display: grid;
+  gap: 10px;
+  width: min(420px, calc(100vw - 32px));
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.12);
+}
+
+.invite-panel input {
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 0.82rem;
+}
+
+.invite-actions {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+/* Operator dashboard (ADR 0026) */
+
+.ops {
+  display: grid;
+  /* minmax(0, 1fr): a chart sized to its container must not widen the track it sits in. */
+  grid-template-columns: minmax(0, 1fr);
+  gap: 28px;
+}
+
+.ops-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+}
+
+.ops-updated {
+  margin-left: auto;
+}
+
+.segmented {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.segmented button {
+  min-height: 34px;
+  padding: 4px 14px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+}
+
+.segmented button:hover {
+  color: var(--ink);
+}
+
+.segmented button[aria-pressed="true"] {
+  background: var(--indigo);
+  color: var(--on-indigo);
+}
+
+.ops-alerts {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ops-alert {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  border-left: 4px solid;
+}
+
+.ops-alert.critical {
+  border-color: var(--critical);
+  background: var(--critical-bg);
+}
+
+.ops-alert.warning {
+  border-color: var(--warning);
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+
+.ops-alert-icon {
+  font-weight: 700;
+}
+
+.ops-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  min-width: 0;
+}
+
+.ops-section h3 {
+  font-size: 1.02rem;
+  font-weight: 600;
+}
+
+.ops-subhead {
+  margin: 0 0 6px;
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--line);
+}
+
+.tile {
+  flex: 1 1 150px;
+  display: grid;
+  gap: 2px;
+  align-content: start;
+  padding: 12px 14px;
+  background: var(--surface);
+}
+
+.tile-value {
+  font-size: 1.35rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.tile-label {
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.35;
+}
+
+.tile.critical .tile-value {
+  color: var(--danger);
+}
+
+.tile.warning .tile-value {
+  color: var(--warn-ink);
+}
+
+.tile.warning {
+  background: var(--warn-bg);
+}
+
+.tile-mark {
+  margin-right: 6px;
+  font-size: 0.9em;
+}
+
+.ops-hero {
+  display: grid;
+  grid-template-columns: minmax(180px, 240px) 1fr;
+  gap: 24px;
+  align-items: center;
+}
+
+.hero-figure {
+  font-size: 3.6rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.ops-split {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(240px, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.ops-split.even {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.ops-table tfoot td {
+  color: var(--muted);
+  font-size: 0.84rem;
+  border-bottom: 0;
+}
+
+.table-scroll {
+  overflow-x: auto;
+}
+
+/* Wide tables scroll sideways on a phone instead of squeezing their columns. */
+.table-scroll > table {
+  min-width: 640px;
+}
+
+.failures td {
+  vertical-align: top;
+}
+
+.failures a {
+  display: inline-block;
+  min-height: 28px;
+  margin-right: 10px;
+  color: var(--indigo);
+}
+
+.error-text {
+  display: block;
+  margin-top: 2px;
+  color: var(--danger);
+  overflow-wrap: anywhere;
+}
+
+.nowrap {
+  white-space: nowrap;
+}
+
+.meters {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.meter-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 0.9rem;
+}
+
+.meter-track {
+  height: 8px;
+  margin-top: 4px;
+  border-radius: 4px;
+  background: var(--info-bg);
+  overflow: hidden;
+}
+
+.meter-fill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--indigo);
+}
+
+.meter.warning .meter-fill {
+  background: var(--warning);
+}
+
+.meter.critical .meter-fill {
+  background: var(--critical);
+}
+
+.meter.critical .meter-row .num {
+  color: var(--danger);
+}
+
+.ops .chart {
+  max-width: none;
+}
+
+.ops-empty {
+  padding: 12px 0;
+}
+
+@media (max-width: 760px) {
+  .ops-hero,
+  .ops-split,
+  .ops-split.even {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ops-updated {
+    margin-left: 0;
+  }
+
+  .hero-figure {
+    font-size: 2.8rem;
+  }
+
+  .ops-section {
+    padding: 14px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

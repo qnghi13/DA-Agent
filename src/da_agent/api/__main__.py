@@ -21,6 +21,7 @@ def api_settings(settings: Settings) -> ApiSettings:
         schema=settings.schema,
         daily_budget_usd=settings.daily_budget_usd,
         trace_ui_url=settings.trace_ui_url,
+        public_url=settings.public_url,
     )
 
 

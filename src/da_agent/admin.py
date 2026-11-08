@@ -1,11 +1,14 @@
-"""Operator commands. There is no sign-up: an operator creates workspaces and keys here.
+"""Operator commands. There is no sign-up: an operator creates workspaces, keys, and links here.
 
     python -m da_agent.admin create-workspace "Shop" [--daily-budget 2.0]
     python -m da_agent.admin create-key WORKSPACE_ID
     python -m da_agent.admin revoke-key KEY
     python -m da_agent.admin set-budget WORKSPACE_ID USD|default
+    python -m da_agent.admin login-link --workspace WORKSPACE_ID | --operator
+    python -m da_agent.admin revoke-sessions --workspace WORKSPACE_ID | --operator
 
-Keys are printed once and cannot be shown again.
+Keys and links are printed once and cannot be shown again. A login link works once, within 15
+minutes, and signs a browser in (ADR 0025).
 """
 
 import argparse
@@ -16,7 +19,8 @@ from uuid import UUID
 from da_agent.config import ConfigError, Settings
 from da_agent.storage.db import connect, migrate
 from da_agent.storage.keys import create_key, revoke_key
-from da_agent.storage.workspaces import create_workspace, set_daily_budget
+from da_agent.storage.sessions import create_login_link, revoke_sessions
+from da_agent.storage.workspaces import create_workspace, set_daily_budget, workspace_exists
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -32,6 +36,14 @@ def _parser() -> argparse.ArgumentParser:
     budget = commands.add_parser("set-budget", help="set a workspace's daily model budget")
     budget.add_argument("workspace_id", type=UUID)
     budget.add_argument("usd", help="a number, or 'default'")
+    for name, help_text in (
+        ("login-link", "print a one-time link that signs a browser in"),
+        ("revoke-sessions", "sign every browser of a workspace, or of the operator, out"),
+    ):
+        command = commands.add_parser(name, help=help_text)
+        who = command.add_mutually_exclusive_group(required=True)
+        who.add_argument("--workspace", type=UUID, help="a workspace's members")
+        who.add_argument("--operator", action="store_true", help="the operator (dashboard)")
     return parser
 
 
@@ -60,6 +72,16 @@ def main(argv: list[str] | None = None, settings: Settings | None = None) -> int
             usd = None if args.usd == "default" else float(args.usd)
             set_daily_budget(conn, args.workspace_id, usd)
             print(f"daily budget: {args.usd}")
+        elif args.command == "login-link":
+            role = "operator" if args.operator else "member"
+            if args.workspace and not workspace_exists(conn, args.workspace):
+                print("error: no such workspace", file=sys.stderr)
+                return 1
+            token = create_login_link(conn, role=role, workspace_id=args.workspace)
+            print(f"{settings.public_url}/login#token={token}")
+        elif args.command == "revoke-sessions":
+            count = revoke_sessions(conn, workspace_id=args.workspace)
+            print(f"revoked {count} session(s)")
     return 0
 
 

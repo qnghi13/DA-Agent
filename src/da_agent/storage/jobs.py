@@ -74,7 +74,8 @@ class JobQueue:
         return self._one(
             """
             UPDATE jobs SET status = 'running', attempts = attempts + 1, worker_id = %s,
-                lease_until = now() + make_interval(secs => %s), updated_at = now()
+                lease_until = now() + make_interval(secs => %s), updated_at = now(),
+                started_at = coalesce(started_at, now())
             WHERE id = (
                 SELECT id FROM jobs
                 WHERE attempts < max_attempts AND (
@@ -101,7 +102,8 @@ class JobQueue:
     def complete(self, job_id: UUID, worker_id: str, result: dict[str, Any]) -> bool:
         cursor = self._conn.execute(
             "UPDATE jobs SET status = 'succeeded', result = %s, lease_until = NULL, "
-            "updated_at = now() WHERE id = %s AND worker_id = %s AND status = 'running'",
+            "updated_at = now(), finished_at = now() "
+            "WHERE id = %s AND worker_id = %s AND status = 'running'",
             (Jsonb(result), job_id, worker_id),
         )
         return cursor.rowcount == 1
@@ -116,10 +118,12 @@ class JobQueue:
             UPDATE jobs SET last_error = %s, lease_until = NULL, updated_at = now(),
                 status = CASE WHEN %s::float8 IS NOT NULL AND attempts < max_attempts
                               THEN 'queued' ELSE 'failed' END,
+                finished_at = CASE WHEN %s::float8 IS NOT NULL AND attempts < max_attempts
+                                   THEN NULL ELSE now() END,
                 run_after = now() + make_interval(secs => coalesce(%s::float8, 0))
             WHERE id = %s AND worker_id = %s AND status = 'running'
             """,
-            (error, retry_in_seconds, retry_in_seconds, job_id, worker_id),
+            (error, retry_in_seconds, retry_in_seconds, retry_in_seconds, job_id, worker_id),
         )
         return cursor.rowcount == 1
 
@@ -127,6 +131,7 @@ class JobQueue:
         """End jobs whose lease ran out on their last attempt. Returns how many."""
         cursor = self._conn.execute(
             "UPDATE jobs SET status = 'failed', lease_until = NULL, updated_at = now(), "
+            "finished_at = now(), "
             "last_error = 'the worker stopped renewing its lease on the last attempt' "
             "WHERE status = 'running' AND lease_until < now() AND attempts >= max_attempts"
         )

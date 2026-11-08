@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { type Api, errorMessage } from "./api";
 
 /**
- * The run's HTML report, fetched with the key and shown in a sandboxed frame. Without
- * allow-same-origin the frame cannot read this page or its key; the report's own CSP meta tag
+ * The run's HTML report, fetched with the session cookie and shown in a sandboxed frame. Without
+ * allow-same-origin the frame cannot read this page or call the API; the report's own CSP meta tag
  * still limits its scripts to the chart libraries.
  */
 export function ReportViewer({ api, runId }: { api: Api; runId: string }) {

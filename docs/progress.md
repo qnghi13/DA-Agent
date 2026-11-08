@@ -1,20 +1,21 @@
 # Progress
 
 Loaded into every session, so keep it under 60 lines. Replace stale content instead of appending.
-**Last updated:** 2026-11-08
-**Phase:** Day 20, packaging ([plan §6](plan.md#6-roadmap)). Days 18–19 closed (note 07).
+**Last updated:** 2026-11-09
+**Phase:** Day 20b–c, sign-in and operations ([plan §6](plan.md#6-roadmap)), added 2026-11-09.
 
 ## Next step
 
-1. Day 20: Compose, images, CI, and demo data done (ADR 0024, note 08). The Runner is its own
-   service, the only holder of the socket; data on volume `da-agent-data` with `volume-subpath`.
-   `compose.yml`, `deploy/app.Dockerfile`, `web/Dockerfile` + nginx, `.env.example`,
-   `deploy/smoke.sh`, `.github/workflows/ci.yml` (python with Postgres, web, compose smoke),
-   `examples/demo-shop/` (June revenue 8,714,000). Ran here: stack up, demo end to end through
-   nginx with Groq ($0.001), boundaries checked in containers, smoke OK, CI job on a clean copy.
-   CI itself never ran (no GitHub repo yet). Open: the plan's "dashboard" (Phoenix covers
-   traces; cut it?), image publishing (CD) once a repo exists. Then Day 21.
-2. `regression` (150, ~$0.40) only at the end, if affordable.
+1. Day 20 packaging done (ADR 0024, note 08): Compose, images, CI (never ran: no GitHub repo),
+   demo data (June revenue 8,714,000). Day 20b–c done in code (ADRs 0025–0026, note 09): login
+   links + `HttpOnly` cookie sessions, operator role, `admin login-link|revoke-sessions`,
+   `DA_AGENT_PUBLIC_URL`, failed model attempts in `llm_calls.error_kind`,
+   `jobs.started_at|finished_at`, `/v1/ops/summary|failures`, `/ops` page
+   (`web/src/OpsDashboard.tsx`). Checked in Chromium (playwright-cli) at 1440 and 390, light and
+   dark: link sign-in, invite, upload with the cookie, sign-out, spent link; this found and fixed
+   a StrictMode race in sign-in. `deploy/smoke.sh` now signs the operator in; passed on a fresh
+   Compose stack. Open: image publishing (CD).
+2. Day 21. `regression` (150, ~$0.40) only at the end, if affordable.
 ## Baselines (`bootstrap`, biz_123, 30 questions; correct / wrong / abstained, score)
 
 - A −5; B sandbox −11; **B4 dedupe +13**. `eval/reports/baseline-*`; dev answers for patterns only.
@@ -27,7 +28,7 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
   B8 with all checks: 17/7/6 +10 vs B7 +11, $0.11; no new check fired: noise.
 ## Done
 
-- Days 1–19: ADRs 0001–0023, notes 01–07; Day 20: ADR 0024, note 08. Scorer 3000/3000 on the real answers; splits in
+- Days 1–19: ADRs 0001–0023, notes 01–07; Day 20: ADRs 0024–0026, notes 08–09. Scorer 3000/3000 on the real answers; splits in
   `eval/splits/splits.json` (24 dev, 6 holdout; `bootstrap`, `smoke`, `regression`).
 - Agent: `LLMClient`, SQL guard, LangGraph with checkpoints and verify, Groq `gpt-oss-20b`.
   Sandbox: all escape tests pass; ingestion and agent SQL run in it (ADRs 0009–0012).

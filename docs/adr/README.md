@@ -29,3 +29,5 @@ decision, add a new ADR and mark the old one as superseded.
 | [0022](0022-rate-and-money-limits.md) | Rate limits and daily money limits in Postgres | Accepted |
 | [0023](0023-trace-links-and-run-list.md) | Operators open each run's traces from the UI, and runs are listed by the API | Accepted |
 | [0024](0024-runner-service.md) | The Runner runs as its own service when deployed, the only holder of the Docker socket | Accepted |
+| [0025](0025-browser-sessions-and-login-links.md) | Browsers sign in with one-time links and keep a cookie session; keys stay for scripts | Accepted |
+| [0026](0026-operator-dashboard.md) | An operator dashboard in the web UI, built on Postgres aggregates | Accepted |

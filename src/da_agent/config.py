@@ -11,6 +11,7 @@
 | DA_AGENT_RUN_MAX_TOKENS | 60000 | Tokens per job |
 | DA_AGENT_OTLP_ENDPOINT | none | Where traces go, such as http://phoenix:6006/v1/traces |
 | DA_AGENT_TRACE_UI_URL | none | Trace viewer runs link to, such as http://127.0.0.1:6006 |
+| DA_AGENT_PUBLIC_URL | http://127.0.0.1:8080 | Where browsers open the UI; https: Secure cookies |
 | DA_AGENT_RUNNER_URL | none | Runner service; unset runs sandboxes from the worker itself |
 | DA_AGENT_RUNNER_TOKEN | none; required with a URL | Shared by worker and Runner, 32+ chars |
 | DA_AGENT_SANDBOX_USER | 65534:65534 | uid:gid of sandboxes; never 0 |
@@ -96,6 +97,7 @@ class Settings:
     run_max_tokens: int = 60_000
     otlp_endpoint: str | None = None
     trace_ui_url: str | None = None
+    public_url: str = "http://127.0.0.1:8080"
     runner_url: str | None = None
     runner_token: str | None = field(default=None, repr=False)
     sandbox_user: str = DEFAULT_SANDBOX_USER
@@ -126,6 +128,7 @@ class Settings:
             run_max_tokens=int(_number(env, "DA_AGENT_RUN_MAX_TOKENS", cls.run_max_tokens)),
             otlp_endpoint=env.get("DA_AGENT_OTLP_ENDPOINT", "").strip() or None,
             trace_ui_url=_http_url(env, "DA_AGENT_TRACE_UI_URL"),
+            public_url=_http_url(env, "DA_AGENT_PUBLIC_URL") or cls.public_url,
             runner_url=(runner_url := _http_url(env, "DA_AGENT_RUNNER_URL")),
             runner_token=_token(env, "DA_AGENT_RUNNER_TOKEN") if runner_url else None,
             sandbox_user=_sandbox_user(env),

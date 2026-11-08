@@ -29,7 +29,7 @@ role. Architecture, reliability, and operability are the goals. Scores only dete
 | Working mode | Claude writes most of the code. The user asks about anything unclear |
 | Orchestration | LangGraph from the start |
 | UI | React (Vite) |
-| Users | Workspace + API key. No sign-up or login |
+| Users | Workspace + API key for scripts; one-time login links and cookie sessions for browsers, plus an operator role (ADR 0025). No passwords or sign-up |
 | Language | Code, README, and architecture docs in English. Learning notes in Vietnamese. The agent answers in the asker's language |
 | LLM | Free tiers first, then a small Haiku 5.5 budget to measure quality |
 
@@ -108,7 +108,8 @@ only generated demo data.
 | **14–15 Charts, reports, RAG** | Vega-Lite, HTML reports, retrieval experiment | Sample report traces every number. RAG compared with the full rulebook in the prompt |
 | **16–17 Backend** | FastAPI, workspace + API key, job queue, SSE, audit log, rate limit | Upload and ask through the API end to end. Workspace isolation tests pass |
 | **18–19 React** | Upload and spec approval, streaming chat, plan, code, chart, and trace views | Full demo flow works in a browser |
-| **20 Packaging** | Compose, images, CI/CD, dashboard, demo data | `docker compose up` works on a clean machine. CI is green |
+| **20 Packaging** | Compose, images, CI/CD, demo data | `docker compose up` works on a clean machine. CI is green |
+| **20b–20c Sign-in and operations** (added 2026-11-09) | Login links and sessions (ADR 0025), operator dashboard (ADR 0026) | A browser signs in without pasting a key. The operator sees outcomes, latency, cost, model errors, and failures on `/ops`; members and keys cannot |
 | **21 Finish** | Holdout run, README, diagrams, demo video, eval report | Repo is ready to publish |
 
 Each milestone gets a Vietnamese note in `docs/learning/`: the concept, why this choice, rejected
@@ -121,7 +122,7 @@ the sandbox, verification, evals, or cost limits.
 
 ## 7. Non-goals
 
-Kubernetes, SSO, account sign-up and login, multi-agent, multi-region, connecting to a user's external
+Kubernetes, SSO, account sign-up and passwords, multi-agent, multi-region, connecting to a user's external
 database, fine-tuning, tuning for the competition score.
 
 ## 8. Verification

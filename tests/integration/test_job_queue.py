@@ -185,3 +185,47 @@ def test_a_claim_skips_a_job_another_worker_is_claiming_instead_of_waiting(
         job = queue.claim("w2", lease_seconds=30)
 
     assert job is not None and job.id == second
+
+
+def times(conn: psycopg.Connection, job_id: UUID) -> tuple:
+    row = conn.execute(
+        "SELECT started_at, finished_at FROM jobs WHERE id = %s", (job_id,)
+    ).fetchone()
+    assert row is not None
+    return row
+
+
+def test_jobs_record_when_work_first_started_and_when_it_ended(
+    conn: psycopg.Connection, workspace: UUID
+) -> None:
+    queue = JobQueue(conn)
+    job_id = queue.enqueue(workspace, "run", {})
+    assert times(conn, job_id) == (None, None)
+
+    queue.claim("w1", lease_seconds=30)
+    first_start, finished = times(conn, job_id)
+    assert first_start is not None and finished is None
+
+    queue.fail(job_id, "w1", "boom", retry_in_seconds=0)
+    assert times(conn, job_id) == (first_start, None)
+
+    queue.claim("w2", lease_seconds=30)
+    queue.complete(job_id, "w2", {})
+    started, finished = times(conn, job_id)
+    assert started == first_start and finished is not None
+
+
+def test_failed_jobs_record_when_they_ended(conn: psycopg.Connection, workspace: UUID) -> None:
+    queue = JobQueue(conn)
+    failed = queue.enqueue(workspace, "run", {}, max_attempts=1)
+    abandoned = queue.enqueue(workspace, "run", {}, max_attempts=1)
+    queue.claim("w1", lease_seconds=30)
+    queue.fail(failed, "w1", "boom", retry_in_seconds=None)
+    queue.claim("w1", lease_seconds=0)
+    conn.execute(
+        "UPDATE jobs SET lease_until = now() - interval '1 second' WHERE id = %s", (abandoned,)
+    )
+
+    assert queue.fail_expired() == 1
+    assert times(conn, failed)[1] is not None
+    assert times(conn, abandoned)[1] is not None

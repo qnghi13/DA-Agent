@@ -1,6 +1,7 @@
 """Entry points: the admin commands and the worker built from settings. Needs Postgres."""
 
 from pathlib import Path
+from uuid import UUID
 
 import psycopg
 import pytest
@@ -8,6 +9,7 @@ import pytest
 from da_agent import admin
 from da_agent.config import Settings
 from da_agent.storage.keys import authenticate
+from da_agent.storage.sessions import create_session, find_session, redeem_login_link
 from da_agent.worker.__main__ import build_worker
 from tests.integration.conftest import POSTGRES_URL
 
@@ -44,6 +46,52 @@ def test_admin_revokes_a_key(
     assert admin.main(["revoke-key", key], settings(tmp_path, schema)) == 0
     assert authenticate(conn, key) is None
     assert admin.main(["revoke-key", key], settings(tmp_path, schema)) == 1
+
+
+def test_admin_prints_login_links_for_members_and_the_operator(
+    tmp_path: Path, schema: str, conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    env = {"DA_AGENT_PUBLIC_URL": "https://da.example"}
+    admin.main(["create-workspace", "Shop"], settings(tmp_path, schema))
+    workspace = capsys.readouterr().out.split("workspace: ")[1].split()[0]
+
+    assert (
+        admin.main(["login-link", "--workspace", workspace], settings(tmp_path, schema, **env)) == 0
+    )
+    member = capsys.readouterr().out.strip()
+    assert admin.main(["login-link", "--operator"], settings(tmp_path, schema, **env)) == 0
+    operator = capsys.readouterr().out.strip()
+
+    assert member.startswith("https://da.example/login#token=dal_")
+    member_grant = redeem_login_link(conn, member.split("#token=")[1])
+    operator_grant = redeem_login_link(conn, operator.split("#token=")[1])
+    assert member_grant is not None and str(member_grant.workspace_id) == workspace
+    assert operator_grant is not None and operator_grant.role == "operator"
+
+
+def test_admin_link_needs_a_known_workspace(
+    tmp_path: Path, schema: str, conn: psycopg.Connection
+) -> None:
+    unknown = "00000000-0000-0000-0000-000000000000"
+
+    assert admin.main(["login-link", "--workspace", unknown], settings(tmp_path, schema)) == 1
+
+
+def test_admin_revokes_sessions(
+    tmp_path: Path, schema: str, conn: psycopg.Connection, capsys: pytest.CaptureFixture[str]
+) -> None:
+    admin.main(["create-workspace", "Shop"], settings(tmp_path, schema))
+    workspace = capsys.readouterr().out.split("workspace: ")[1].split()[0]
+    member, _ = create_session(conn, role="member", workspace_id=UUID(workspace))
+    operator, _ = create_session(conn, role="operator", workspace_id=None)
+
+    admin.main(["revoke-sessions", "--workspace", workspace], settings(tmp_path, schema))
+    assert capsys.readouterr().out.strip() == "revoked 1 session(s)"
+    assert find_session(conn, member) is None
+    assert find_session(conn, operator) is not None
+
+    admin.main(["revoke-sessions", "--operator"], settings(tmp_path, schema))
+    assert find_session(conn, operator) is None
 
 
 def test_the_worker_handles_every_job_kind_with_durable_costs(

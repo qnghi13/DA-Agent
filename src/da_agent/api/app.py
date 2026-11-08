@@ -14,7 +14,8 @@ import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 from uuid import UUID
 
 import psycopg
@@ -29,12 +30,12 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from da_agent.agent.answer import result_from_json
 from da_agent.reports.html import CONTENT_SECURITY_POLICY, render_report
-from da_agent.storage import audit
+from da_agent.storage import audit, ops
 from da_agent.storage.datasets import (
     DatasetNotFoundError,
     DatasetRecord,
@@ -45,9 +46,18 @@ from da_agent.storage.datasets import (
 from da_agent.storage.db import connect
 from da_agent.storage.events import RunEvent, RunEvents
 from da_agent.storage.jobs import Job, JobQueue
-from da_agent.storage.keys import KEY_PATTERN, KeyIdentity, authenticate
+from da_agent.storage.keys import KEY_PATTERN, authenticate
 from da_agent.storage.ledger import daily_budget, spent_today
 from da_agent.storage.limits import RateLimiter
+from da_agent.storage.sessions import (
+    LINK_TTL,
+    MAX_AGE,
+    create_login_link,
+    create_session,
+    find_session,
+    redeem_login_link,
+    revoke_session,
+)
 from da_agent.storage.uploads import UploadRejectedError, storage_name
 
 CHUNK_BYTES = 1024 * 1024
@@ -74,6 +84,9 @@ class ApiSettings:
     daily_budget_usd: float = 5.0
     # Trace viewer for operators (ADR 0023). Unset, runs carry no trace links.
     trace_ui_url: str | None = None
+    # Where browsers open the UI (ADR 0025): login links point here, cookie requests that change
+    # things must come from this origin, and https makes the cookie Secure.
+    public_url: str = "http://127.0.0.1:8080"
 
 
 MAX_RUNS_PER_PAGE = 50
@@ -118,12 +131,12 @@ def _dataset_view(record: DatasetRecord) -> dict[str, Any]:
     }
 
 
-def _trace_links(job: Job, trace_ui_url: str | None) -> list[dict[str, Any]]:
+def _trace_links(trace_ids: list[str], trace_ui_url: str | None) -> list[dict[str, Any]]:
     if not trace_ui_url:
         return []
     return [
         {"attempt": attempt, "url": f"{trace_ui_url}/redirects/traces/{trace_id}"}
-        for attempt, trace_id in enumerate(job.trace_ids, start=1)
+        for attempt, trace_id in enumerate(trace_ids, start=1)
     ]
 
 
@@ -137,7 +150,7 @@ def _run_view(job: Job, trace_ui_url: str | None = None) -> dict[str, Any]:
         "attempts": job.attempts,
         "error": job.last_error,
         "result": job.result,
-        "traces": _trace_links(job, trace_ui_url),
+        "traces": _trace_links(job.trace_ids, trace_ui_url),
     }
 
 
@@ -172,34 +185,122 @@ def _too_many(wait: float, detail: str) -> HTTPException:
     )
 
 
-def identity(request: Request, conn: Db) -> KeyIdentity:
-    settings = _settings(request)
-    limiter = RateLimiter(conn)
+@dataclass(frozen=True)
+class Principal:
+    """Whoever sent the request: a key or a member session (with a workspace), or the operator."""
+
+    role: str
+    workspace_id: UUID | None
+    key_id: UUID | None = None
+    session_id: UUID | None = None
+
+
+@dataclass(frozen=True)
+class Member:
+    """A caller inside one workspace. Every workspace endpoint works with this."""
+
+    workspace_id: UUID
+    key_id: UUID | None = None
+    session_id: UUID | None = None
+
+
+UNSAFE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+def _origin(url: str) -> str:
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc}"
+
+
+def _secure(settings: ApiSettings) -> bool:
+    return urlsplit(settings.public_url).scheme == "https"
+
+
+def cookie_name(settings: ApiSettings) -> str:
+    """`__Host-` makes browsers refuse the cookie unless it is Secure, host-only, and Path=/."""
+    return "__Host-da_session" if _secure(settings) else "da_session"
+
+
+def _require_origin(request: Request, settings: ApiSettings) -> None:
+    """Cookie-authenticated changes, and sign-ins, must come from our own pages (ADR 0025)."""
+    if request.headers.get("origin") != _origin(settings.public_url):
+        raise HTTPException(status_code=403, detail="this request must come from the DA-Agent UI")
+
+
+def _refuse(
+    request: Request, conn: psycopg.Connection, settings: ApiSettings, detail: dict[str, Any]
+) -> HTTPException:
+    """Count a failed credential against the client address, log it, and build the 401."""
     address = request.client.host if request.client else "unknown"
-    failures = f"authfail:{address}"
-    wait = limiter.exceeded(failures, limit=settings.failed_auth_per_minute, window_seconds=60)
-    if wait is not None:
-        raise _too_many(wait, "too many failed keys from this address")
-    scheme, _, key = request.headers.get("authorization", "").partition(" ")
-    key = key.strip()
-    found = authenticate(conn, key) if scheme.lower() == "bearer" else None
-    if found is None:
-        limiter.hit(failures, limit=settings.failed_auth_per_minute, window_seconds=60)
-        # Only a well-formed prefix is logged: a pasted secret of another kind is not.
-        match = KEY_PATTERN.fullmatch(key)
-        detail = {"path": request.url.path, "prefix": match.group(1) if match else None}
-        audit.record(conn, "auth.failed", detail=detail)
-        raise HTTPException(
-            status_code=401, detail="a valid API key is required",
-            headers={"WWW-Authenticate": "Bearer"},
-        )  # fmt: skip
-    wait = limiter.hit(f"key:{found.key_id}", limit=settings.requests_per_minute, window_seconds=60)
-    if wait is not None:
-        raise _too_many(wait, "too many requests for this key")
-    return found
+    RateLimiter(conn).hit(
+        f"authfail:{address}", limit=settings.failed_auth_per_minute, window_seconds=60
+    )
+    audit.record(conn, "auth.failed", detail={"path": request.url.path, **detail})
+    return HTTPException(
+        status_code=401, detail="sign in, or send a valid API key",
+        headers={"WWW-Authenticate": "Bearer"},
+    )  # fmt: skip
 
 
-def _may_start_job(conn: psycopg.Connection, caller: KeyIdentity, settings: ApiSettings) -> None:
+def _not_blocked(request: Request, conn: psycopg.Connection, settings: ApiSettings) -> None:
+    address = request.client.host if request.client else "unknown"
+    wait = RateLimiter(conn).exceeded(
+        f"authfail:{address}", limit=settings.failed_auth_per_minute, window_seconds=60
+    )
+    if wait is not None:
+        raise _too_many(wait, "too many failed sign-ins or keys from this address")
+
+
+def principal(request: Request, conn: Db) -> Principal:
+    """Authenticate a bearer key or, without one, the session cookie."""
+    settings = _settings(request)
+    _not_blocked(request, conn, settings)
+    header = request.headers.get("authorization")
+    if header is not None:
+        scheme, _, key = header.partition(" ")
+        key = key.strip()
+        found = authenticate(conn, key) if scheme.lower() == "bearer" else None
+        if found is None:
+            # Only a well-formed prefix is logged: a pasted secret of another kind is not.
+            match = KEY_PATTERN.fullmatch(key)
+            raise _refuse(request, conn, settings, {"prefix": match.group(1) if match else None})
+        caller = Principal("member", found.workspace_id, key_id=found.key_id)
+        bucket = f"key:{found.key_id}"
+    else:
+        token = request.cookies.get(cookie_name(settings))
+        if token is None:
+            raise _refuse(request, conn, settings, {"prefix": None})
+        session = find_session(conn, token)
+        if session is None:
+            raise _refuse(request, conn, settings, {"session": "expired or unknown"})
+        if request.method in UNSAFE_METHODS:
+            _require_origin(request, settings)
+        caller = Principal(session.role, session.workspace_id, session_id=session.session_id)
+        bucket = f"session:{session.session_id}"
+    wait = RateLimiter(conn).hit(bucket, limit=settings.requests_per_minute, window_seconds=60)
+    if wait is not None:
+        raise _too_many(wait, "too many requests for this key or session")
+    return caller
+
+
+Who = Annotated[Principal, Depends(principal)]
+
+
+def identity(caller: Who) -> Member:
+    """Workspace endpoints. The operator has no workspace, so they do not exist for it."""
+    if caller.workspace_id is None:
+        raise _not_found()
+    return Member(caller.workspace_id, key_id=caller.key_id, session_id=caller.session_id)
+
+
+def operator(caller: Who) -> Principal:
+    """Operator endpoints. Members and keys get the same 404 as for anything unknown."""
+    if caller.role != "operator":
+        raise _not_found()
+    return caller
+
+
+def _may_start_job(conn: psycopg.Connection, caller: Member, settings: ApiSettings) -> None:
     """New jobs have their own rate per workspace, and stop when the day's model budget is spent."""
     wait = RateLimiter(conn).hit(
         f"jobs:{caller.workspace_id}", limit=settings.jobs_per_minute, window_seconds=60
@@ -215,16 +316,123 @@ def _may_start_job(conn: psycopg.Connection, caller: KeyIdentity, settings: ApiS
         raise _too_many(wait, f"the workspace has spent its daily model budget (${limit:.2f})")
 
 
-Caller = Annotated[KeyIdentity, Depends(identity)]
+Caller = Annotated[Member, Depends(identity)]
+Operator = Annotated[Principal, Depends(operator)]
 Settings = Annotated[ApiSettings, Depends(_settings)]
 router = APIRouter(prefix="/v1")
 
 
-def log(conn: psycopg.Connection, caller: KeyIdentity, action: str, target: str, **detail: Any):
+def log(
+    conn: psycopg.Connection, caller: Member | Principal, action: str, target: str, **detail: Any
+) -> None:
     audit.record(
         conn, action, workspace_id=caller.workspace_id, key_id=caller.key_id,
-        target=target, detail=detail,
+        session_id=caller.session_id, target=target, detail=detail,
     )  # fmt: skip
+
+
+# Sign-in (ADR 0025)
+
+
+class RedeemRequest(BaseModel):
+    token: str = Field(max_length=200, description="The token after `#token=` in a login link.")
+
+
+class LinkRequest(BaseModel):
+    role: Literal["member", "operator"] | None = Field(
+        default=None, description="Defaults to the caller's own role."
+    )
+
+
+def _me(conn: psycopg.Connection, role: str, workspace_id: UUID | None) -> dict[str, Any]:
+    name = None
+    if workspace_id is not None:
+        row = conn.execute("SELECT name FROM workspaces WHERE id = %s", (workspace_id,)).fetchone()
+        name = row[0] if row else None
+    return {
+        "role": role,
+        "workspace_id": str(workspace_id) if workspace_id else None,
+        "workspace_name": name,
+    }
+
+
+def _start_session(
+    conn: psycopg.Connection,
+    settings: ApiSettings,
+    role: str,
+    workspace_id: UUID | None,
+    **detail: Any,
+) -> JSONResponse:
+    token, session_id = create_session(conn, role=role, workspace_id=workspace_id)
+    audit.record(
+        conn, "auth.sign_in", workspace_id=workspace_id, session_id=session_id,
+        detail={"role": role, **detail},
+    )  # fmt: skip
+    response = JSONResponse(_me(conn, role, workspace_id))
+    response.set_cookie(
+        cookie_name(settings), token, max_age=int(MAX_AGE.total_seconds()), path="/",
+        secure=_secure(settings), httponly=True, samesite="strict",
+    )  # fmt: skip
+    return response
+
+
+@router.post("/auth/redeem")
+def redeem(body: RedeemRequest, request: Request, conn: Db, settings: Settings) -> JSONResponse:
+    """Exchange a one-time login link for a session cookie."""
+    _not_blocked(request, conn, settings)
+    _require_origin(request, settings)
+    grant = redeem_login_link(conn, body.token.strip())
+    if grant is None:
+        raise _refuse(request, conn, settings, {"link": "used, expired, or unknown"})
+    return _start_session(conn, settings, grant.role, grant.workspace_id, via="link")
+
+
+@router.post("/auth/session")
+def key_to_session(request: Request, conn: Db, caller: Who, settings: Settings) -> JSONResponse:
+    """Exchange an API key, sent once as a bearer token, for a session cookie."""
+    _require_origin(request, settings)
+    if caller.key_id is None or caller.workspace_id is None:
+        raise HTTPException(status_code=400, detail="send an API key as a bearer token")
+    return _start_session(conn, settings, "member", caller.workspace_id, via="key")
+
+
+@router.get("/auth/me")
+def me(conn: Db, caller: Who) -> dict[str, Any]:
+    return _me(conn, caller.role, caller.workspace_id)
+
+
+@router.post("/auth/links", status_code=201)
+def create_link(body: LinkRequest, conn: Db, caller: Who, settings: Settings) -> dict[str, Any]:
+    """A one-time link that signs another browser in, with the caller's own role."""
+    role = body.role or caller.role
+    if role != caller.role:
+        raise _not_found()
+    token = create_login_link(conn, role=role, workspace_id=caller.workspace_id)
+    log(conn, caller, "auth.link", role)
+    return {
+        "url": f"{settings.public_url.rstrip('/')}/login#token={token}",
+        "expires_in_seconds": int(LINK_TTL.total_seconds()),
+    }
+
+
+@router.post("/auth/logout", status_code=204)
+def logout(request: Request, conn: Db, settings: Settings) -> Response:
+    """End this browser's session. Without one there is nothing to end."""
+    token = request.cookies.get(cookie_name(settings))
+    session = find_session(conn, token) if token else None
+    if session is not None:
+        _require_origin(request, settings)
+        revoke_session(conn, session.session_id)
+        audit.record(
+            conn, "auth.sign_out", workspace_id=session.workspace_id,
+            session_id=session.session_id,
+        )  # fmt: skip
+    response = Response(status_code=204)
+    response.delete_cookie(
+        cookie_name(settings), path="/", secure=_secure(settings), httponly=True,
+        samesite="strict",
+    )  # fmt: skip
+    return response
 
 
 def create_app(settings: ApiSettings) -> FastAPI:
@@ -330,7 +538,7 @@ def create_run(body: RunRequest, conn: Db, caller: Caller, settings: Settings) -
     return {"id": str(run_id), "status": "queued"}
 
 
-def run_job(run_id: str, conn: psycopg.Connection, caller: KeyIdentity) -> Job:
+def run_job(run_id: str, conn: psycopg.Connection, caller: Member) -> Job:
     job = JobQueue(conn).get(_uuid(run_id), caller.workspace_id)
     if job is None or job.kind != "run":
         raise _not_found()
@@ -445,3 +653,37 @@ def stream_run_events(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# Operator dashboard (ADR 0026)
+
+NO_STORE = {"Cache-Control": "no-store"}
+
+
+@router.get("/ops/summary")
+def ops_summary(
+    conn: Db,
+    caller: Operator,
+    settings: Settings,
+    window: Literal["24h", "7d", "30d"] = "24h",
+) -> JSONResponse:
+    data = ops.summary(conn, window)
+    for row in data["cost"]["today"]:
+        if row["budget_usd"] is None:
+            row["budget_usd"] = settings.daily_budget_usd
+    data["daily_budget_default_usd"] = settings.daily_budget_usd
+    return JSONResponse(data, headers=NO_STORE)
+
+
+@router.get("/ops/failures")
+def ops_failures(
+    conn: Db,
+    caller: Operator,
+    settings: Settings,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    before: dt.datetime | None = None,
+) -> JSONResponse:
+    rows = ops.failures(conn, limit=limit, before=before.isoformat() if before else None)
+    for row in rows:
+        row["traces"] = _trace_links(row.pop("trace_ids"), settings.trace_ui_url)
+    return JSONResponse({"failures": rows}, headers=NO_STORE)

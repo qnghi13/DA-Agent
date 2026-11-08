@@ -3,6 +3,7 @@
 Needs Postgres (DA_AGENT_TEST_POSTGRES_URL).
 """
 
+import dataclasses
 import threading
 from pathlib import Path
 from uuid import UUID
@@ -78,6 +79,21 @@ def test_the_ledger_keeps_a_runs_cost_across_processes(
 
     assert (totals.calls, totals.total_tokens, totals.cost_usd) == (1, 300, pytest.approx(0.02))
     assert spent_today(conn, workspace) == pytest.approx(0.02)
+
+
+def test_failed_calls_are_kept_with_their_kind_but_cost_and_count_nothing(
+    conn: psycopg.Connection, workspace: UUID
+) -> None:
+    job_id = str(JobQueue(conn).enqueue(workspace, "run", {}))
+    ledger = PostgresCostLedger(conn)
+    ledger.record(call(job_id, 0.01))
+    ledger.record(dataclasses.replace(call(job_id, 0.0, tokens=0), error="rate_limited"))
+
+    totals = ledger.totals(job_id)
+
+    assert (totals.calls, totals.cost_usd) == (1, 0.01)
+    rows = conn.execute("SELECT error_kind FROM llm_calls ORDER BY id").fetchall()
+    assert rows == [(None,), ("rate_limited",)]
 
 
 def test_spending_is_counted_per_workspace(conn: psycopg.Connection, workspace: UUID) -> None:
