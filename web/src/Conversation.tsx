@@ -2,29 +2,6 @@ import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from 
 import { type Api, errorMessage } from "./api";
 import { RunCard } from "./RunCard";
 
-// The API has no run list yet, so this browser remembers which runs were asked here.
-function storageKey(datasetId: string) {
-  return `da-agent.runs.${datasetId}`;
-}
-
-function loadRuns(datasetId: string): string[] {
-  try {
-    const raw = localStorage.getItem(storageKey(datasetId));
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveRuns(datasetId: string, ids: string[]) {
-  try {
-    localStorage.setItem(storageKey(datasetId), JSON.stringify(ids.slice(-50)));
-  } catch {
-    // Storage blocked: the history lasts until the page closes.
-  }
-}
-
 function today(): string {
   const now = new Date();
   const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
@@ -32,16 +9,55 @@ function today(): string {
 }
 
 export function Conversation({ api, datasetId }: { api: Api; datasetId: string }) {
-  const [runs, setRuns] = useState<string[]>(() => loadRuns(datasetId));
+  // Oldest first, as a conversation reads.
+  const [runs, setRuns] = useState<string[] | null>(null);
+  const [olderBefore, setOlderBefore] = useState<string | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [question, setQuestion] = useState("");
   const [asOf, setAsOf] = useState(today);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const scrollOnNext = useRef(true);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView?.({ block: "end" });
-  }, [runs.length]);
+    let cancelled = false;
+    api
+      .listRuns(datasetId)
+      .then((page) => {
+        if (cancelled) return;
+        setRuns(page.runs.map((run) => run.id).reverse());
+        setOlderBefore(page.next_before);
+      })
+      .catch((caught) => {
+        if (cancelled) return;
+        setRuns([]);
+        setError(errorMessage(caught));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api, datasetId]);
+
+  useEffect(() => {
+    if (runs && scrollOnNext.current) endRef.current?.scrollIntoView?.({ block: "end" });
+    scrollOnNext.current = true;
+  }, [runs]);
+
+  async function loadOlder() {
+    if (!olderBefore) return;
+    setLoadingOlder(true);
+    try {
+      const page = await api.listRuns(datasetId, olderBefore);
+      scrollOnNext.current = false;
+      setRuns((current) => [...page.runs.map((run) => run.id).reverse(), ...(current ?? [])]);
+      setOlderBefore(page.next_before);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setLoadingOlder(false);
+    }
+  }
 
   async function ask(event?: FormEvent) {
     event?.preventDefault();
@@ -51,9 +67,7 @@ export function Conversation({ api, datasetId }: { api: Api; datasetId: string }
     setError(null);
     try {
       const { id } = await api.createRun(datasetId, text, asOf);
-      const next = [...runs, id];
-      setRuns(next);
-      saveRuns(datasetId, next);
+      setRuns((current) => [...(current ?? []), id]);
       setQuestion("");
     } catch (caught) {
       setError(errorMessage(caught));
@@ -71,7 +85,9 @@ export function Conversation({ api, datasetId }: { api: Api; datasetId: string }
 
   return (
     <div className="conversation">
-      {runs.length === 0 ? (
+      {runs === null ? (
+        <p className="muted">Loading questions…</p>
+      ) : runs.length === 0 ? (
         <div className="empty">
           <p>Ask a question about this data in your own words.</p>
           <p className="muted small">
@@ -81,6 +97,16 @@ export function Conversation({ api, datasetId }: { api: Api; datasetId: string }
         </div>
       ) : (
         <div className="runs">
+          {olderBefore && (
+            <button
+              type="button"
+              className="button-quiet older"
+              disabled={loadingOlder}
+              onClick={loadOlder}
+            >
+              {loadingOlder ? "Loading…" : "Show earlier questions"}
+            </button>
+          )}
           {runs.map((id) => (
             <RunCard key={id} api={api} runId={id} />
           ))}

@@ -65,7 +65,13 @@ curl -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
      -d "{\"dataset_id\": \"$DATASET\", \"question\": \"Total revenue in June?\"}" localhost:8000/v1/runs
 curl -N -H "Authorization: Bearer $KEY" localhost:8000/v1/runs/$RUN/events     # live progress
 curl -H "Authorization: Bearer $KEY" localhost:8000/v1/runs/$RUN/report > report.html
+curl -H "Authorization: Bearer $KEY" "localhost:8000/v1/runs?dataset_id=$DATASET"  # history
 ```
+
+Traces go to any OpenTelemetry (OTLP) endpoint set in `DA_AGENT_OTLP_ENDPOINT`, such as a local
+Phoenix (`http://127.0.0.1:6006/v1/traces`). Setting `DA_AGENT_TRACE_UI_URL=http://127.0.0.1:6006`
+on the API adds an "Open trace" link to each run in the UI. Phoenix shows every workspace's
+traces, so set it only where the operator is the only user.
 
 Every setting is listed in [`src/da_agent/config.py`](src/da_agent/config.py). The interactive API
 reference is at `/docs`.

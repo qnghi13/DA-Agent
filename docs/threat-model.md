@@ -48,7 +48,7 @@ Injection is assumed to succeed sometimes. Permissions, not prompts, must limit 
 | Malicious spreadsheet: zip bomb, external entities, huge sheets | Parsing runs in the sandbox. Size, compression ratio, row, column, and cell limits. `defusedxml` guards openpyxl. Macros are ignored | **Done:** zip bomb, oversized, broken, and unreadable file tests (`tests/unit/test_ingestion_raw.py`) |
 | Sandbox output tricks the Runner: symlinks in `/out`, huge output | The Runner refuses links and special files, caps the output size, and opens the report with `O_NOFOLLOW` | **Done:** `tests/unit/test_runner.py` |
 | Path traversal through upload names | Stored names keep only the last path part, in ASCII letters, digits, `_` and `-`, with an allowed extension. Original names are kept only as metadata | **Done:** `tests/unit/test_uploads.py`, and an API test uploading `../../../escape.csv` |
-| Cross-workspace access | Every query carries `workspace_id`, and anything outside the caller's workspace is "not found". Run jobs open only ready datasets of their own workspace. One DuckDB file per dataset. The sandbox mounts one dataset | **Done:** API, queue, and dataset tests across two workspaces (`-m security`); dropping the workspace filter fails them |
+| Cross-workspace access | Every query carries `workspace_id`, and anything outside the caller's workspace is "not found". Run jobs open only ready datasets of their own workspace. One DuckDB file per dataset. The sandbox mounts one dataset | **Done:** API, queue, and dataset tests across two workspaces (`-m security`), including the run list; dropping the workspace filter fails them |
 | Stolen or guessed API key | 256-bit keys stored as SHA-256 hashes, compared in constant time, revocable. Failed attempts are logged with the key prefix only. Rate limits per key and per address | **Done:** API tests for missing, wrong, and revoked keys, hash-only storage, audit rows ([ADR 0020](adr/0020-http-api.md)), request limits per key, and wrong keys per address blocking even a valid key until the window ends ([ADR 0022](adr/0022-rate-and-money-limits.md)) |
 | Cost runaway | Token and money limits per run, day, and workspace, from a ledger in Postgres that survives retries. A breach stops the run cleanly; the API refuses new jobs until midnight UTC | **Done:** budget stop tests in the graph and the worker, a ledger read by a second worker, and API 429s ([ADR 0022](adr/0022-rate-and-money-limits.md)) |
 | Personal data in prompts, logs, traces | Sensitive columns masked. Columns marked hidden do not appear in views | **Partly done:** a hidden-column canary never reaches the model, steps, or spans (`test_injection.py`). Logs and the UI come later |
@@ -69,5 +69,9 @@ Injection is assumed to succeed sometimes. Permissions, not prompts, must limit 
 - **Data sent to LLM providers.** Column profiles, sample values, and query results leave the machine.
   Free tiers may use them under different terms. During development, send only demo or DataMate data.
   The README must warn self-hosters and point to local models.
+- **Phoenix has no workspace isolation.** Anyone who can open it reads every workspace's traces,
+  including prompts with cell values. Phoenix stays on `127.0.0.1`, and `DA_AGENT_TRACE_UI_URL`,
+  which puts trace links in API responses, is for operators only and stays unset on a shared or
+  public deployment ([ADR 0023](adr/0023-trace-links-and-run-list.md)).
 - **Successful injection can still produce a wrong answer.** Verification reduces this but cannot
   eliminate it.

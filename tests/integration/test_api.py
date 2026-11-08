@@ -4,6 +4,7 @@ Handlers only read and write Postgres and the uploads directory; jobs are comple
 instead of by a worker. Needs Postgres (DA_AGENT_TEST_POSTGRES_URL).
 """
 
+import dataclasses
 import json
 import threading
 import time
@@ -296,6 +297,60 @@ def test_a_report_waits_for_the_run_to_finish(
     assert client.get(f"/v1/runs/{run_id}/report", headers=auth(key)).status_code == 409
 
 
+def test_trace_links_appear_only_when_an_operator_configures_them(
+    client: TestClient, conn: psycopg.Connection, key: str, settings: ApiSettings
+) -> None:
+    dataset_id = ready_dataset(client, conn, key)
+    run_id = client.post(
+        "/v1/runs", headers=auth(key), json={"dataset_id": dataset_id, "question": "Total?"}
+    ).json()["id"]
+    queue = JobQueue(conn)
+    while (job := queue.claim("w", lease_seconds=30)) is not None:
+        if job.kind == "run":
+            assert queue.add_trace(job.id, "w", "ab" * 16)
+
+    assert client.get(f"/v1/runs/{run_id}", headers=auth(key)).json()["traces"] == []
+
+    operator = TestClient(
+        create_app(dataclasses.replace(settings, trace_ui_url="http://127.0.0.1:6006"))
+    )
+    assert operator.get(f"/v1/runs/{run_id}", headers=auth(key)).json()["traces"] == [
+        {"attempt": 1, "url": f"http://127.0.0.1:6006/redirects/traces/{'ab' * 16}"}
+    ]
+
+
+def ask(client: TestClient, key: str, dataset_id: str, question: str) -> str:
+    response = client.post(
+        "/v1/runs", headers=auth(key), json={"dataset_id": dataset_id, "question": question}
+    )
+    assert response.status_code == 202
+    return response.json()["id"]
+
+
+def test_runs_of_a_dataset_are_listed_newest_first_in_pages(
+    client: TestClient, conn: psycopg.Connection, key: str
+) -> None:
+    first, other = ready_dataset(client, conn, key), ready_dataset(client, conn, key)
+    asked = [ask(client, key, first, f"Question {n}?") for n in range(3)]
+    ask(client, key, other, "Elsewhere?")
+
+    page = client.get(
+        "/v1/runs", headers=auth(key), params={"dataset_id": first, "limit": 2}
+    ).json()
+
+    assert [run["id"] for run in page["runs"]] == [asked[2], asked[1]]
+    assert page["runs"][0]["question"] == "Question 2?"
+    assert page["runs"][0]["status"] == "queued"
+    assert {"as_of", "created_at"} <= set(page["runs"][0])
+    rest = client.get(
+        "/v1/runs",
+        headers=auth(key),
+        params={"dataset_id": first, "limit": 2, "before": page["next_before"]},
+    ).json()
+    assert [run["id"] for run in rest["runs"]] == [asked[0]]
+    assert rest["next_before"] is None
+
+
 # Isolation
 
 
@@ -323,6 +378,8 @@ def test_a_workspace_cannot_see_or_use_another_workspaces_data(
     )
     assert client.get(f"/v1/runs/{run_id}", headers=intruder).status_code == 404
     assert client.get(f"/v1/runs/{run_id}/report", headers=intruder).status_code == 404
+    listed = client.get("/v1/runs", headers=intruder, params={"dataset_id": dataset_id})
+    assert listed.status_code == 404
 
 
 @pytest.mark.security

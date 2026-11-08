@@ -641,7 +641,21 @@ textarea.code {
 
 .run-actions {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 10px;
+}
+
+.run-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.older {
+  align-self: flex-start;
+  margin-bottom: 8px;
 }
 
 .report {

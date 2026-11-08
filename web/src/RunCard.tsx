@@ -90,15 +90,49 @@ export function RunCard({ api, runId }: { api: Api; runId: string }) {
         </Suspense>
       )}
 
-      {run.status === "succeeded" && result && (
-        <div className="run-actions">
+      <div className="run-actions">
+        {run.status === "succeeded" && result && (
           <button type="button" className="button-quiet" onClick={() => setShowReport((v) => !v)}>
             {showReport ? "Hide report" : "View report"}
           </button>
-        </div>
-      )}
+        )}
+        {(run.traces ?? []).map((link) => (
+          <a
+            key={link.attempt}
+            className="button-quiet"
+            href={link.url}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {(run.traces ?? []).length > 1 ? `Open trace, attempt ${link.attempt}` : "Open trace"}
+          </a>
+        ))}
+        <RunId id={run.id} />
+      </div>
       {showReport && <ReportViewer api={api} runId={run.id} />}
     </article>
+  );
+}
+
+/** The run id, for finding the run in the trace viewer by da_agent.job_id. */
+function RunId({ id }: { id: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(id);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard blocked: the id is still visible to select by hand.
+    }
+  }
+  return (
+    <span className="run-id muted small">
+      Run <code>{id.slice(0, 8)}</code>
+      <button type="button" className="link" onClick={copy} aria-label={`Copy run id ${id}`}>
+        {copied ? "Copied" : "Copy ID"}
+      </button>
+    </span>
   );
 }
 

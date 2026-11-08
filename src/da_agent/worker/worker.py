@@ -52,11 +52,17 @@ class WorkerConfig:
 
 
 class Worker:
-    def __init__(self, config: WorkerConfig, handlers: dict[str, Handler]) -> None:
+    def __init__(
+        self,
+        config: WorkerConfig,
+        handlers: dict[str, Handler],
+        *,
+        tracer: trace.Tracer | None = None,
+    ) -> None:
         self.config = config
         self.worker_id = config.worker_id or f"worker-{uuid.uuid4().hex[:8]}"
         self.handlers = handlers
-        self._tracer = trace.get_tracer("da_agent.worker")
+        self._tracer = tracer or trace.get_tracer("da_agent.worker")
 
     def _connect(self):
         return connect(self.config.url, schema=self.config.schema)
@@ -73,6 +79,10 @@ class Worker:
                 span.set_attribute("da_agent.job_id", str(job.id))
                 span.set_attribute("da_agent.workspace_id", str(job.workspace_id))
                 span.set_attribute("da_agent.job_attempt", job.attempts)
+                context = span.get_span_context()
+                if context.is_valid:
+                    # Lets an operator open each attempt's trace from the run (ADR 0023).
+                    queue.add_trace(job.id, self.worker_id, trace.format_trace_id(context.trace_id))
                 self._process(queue, job)
             return True
 

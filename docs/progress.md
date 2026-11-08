@@ -10,11 +10,14 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
    Upload and review tested by the user in a browser. Q&A added: SSE read with `fetch` and
    `Last-Event-ID` (`sse.ts`), evidence trail (plan, tools with SQL and rows, verify), answer,
    lazy Vega chart (vega 6.4, interpreter, palette validated), sandboxed report iframe, run
-   history in localStorage. `npm test` 16 pass; Q&A not yet tried in a browser.
-   Follow-up: the HTML report loads vega 5.33 / interpreter 1.0.5 from the CDN, both with high
-   advisories (npm audit); bump them in `reports/html.py` with its CSP hash.
-   Open, brainstorm: trace view (runs expose no `trace_id`), answering `question` events (no
-   resume endpoint), run history (no list endpoint).
+   history in localStorage. `npm test` 16 pass. User tried it; visual polish deferred to Day 21.
+   Report moved to Vega 6 (ADR 0016 updated, security test on pinned versions, chart schema v6);
+   rendered in Node only, open a report with a chart in a browser once.
+   Trace links and run list (ADR 0023): `jobs.trace_ids` per attempt (migration 0006), links
+   only with `DA_AGENT_TRACE_UI_URL` (operators; Phoenix has no workspace isolation),
+   `GET /v1/runs?dataset_id=` paged; UI reads history from it, shows run id and "Open trace".
+   New integration tests not yet run here (need `DA_AGENT_TEST_POSTGRES_URL`). Deferred:
+   answering `question` events (no resume endpoint). Then Day 20 (needs the Compose plugin).
    Backend done (ADRs 0017–0022): end to end with Groq over HTTP, $0.0014.
    Charts and reports done (ADRs 0015–0016); `--report` writes HTML (`report-sample`, $0.017).
    RAG experiment cut: plan with titles only +2 vs all rules +11 already answers it (note 05).

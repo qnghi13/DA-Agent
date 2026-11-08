@@ -27,6 +27,7 @@ def test_optional_settings_are_read_and_checked() -> None:
         "DA_AGENT_DAILY_BUDGET_USD": "2.5",
         "DA_AGENT_RUN_MAX_TOKENS": "40000",
         "DA_AGENT_OTLP_ENDPOINT": "http://phoenix:6006/v1/traces",
+        "DA_AGENT_TRACE_UI_URL": "http://127.0.0.1:6006/",
     }
 
     settings = Settings.from_env(env)
@@ -35,6 +36,8 @@ def test_optional_settings_are_read_and_checked() -> None:
     assert settings.daily_budget_usd == 2.5
     assert settings.run_max_tokens == 40000
     assert settings.otlp_endpoint == "http://phoenix:6006/v1/traces"
+    assert settings.trace_ui_url == "http://127.0.0.1:6006"
+    assert Settings.from_env(REQUIRED).trace_ui_url is None
 
 
 @pytest.mark.parametrize(
@@ -43,6 +46,7 @@ def test_optional_settings_are_read_and_checked() -> None:
         ({"DA_AGENT_DATA_DIR": "/srv"}, "DA_AGENT_DATABASE_URL"),
         (REQUIRED | {"DA_AGENT_DAILY_BUDGET_USD": "lots"}, "DA_AGENT_DAILY_BUDGET_USD"),
         (REQUIRED | {"DA_AGENT_RUN_BUDGET_USD": "-1"}, "DA_AGENT_RUN_BUDGET_USD"),
+        (REQUIRED | {"DA_AGENT_TRACE_UI_URL": "javascript:alert(1)"}, "DA_AGENT_TRACE_UI_URL"),
     ],
 )
 def test_bad_settings_name_the_variable(env: dict[str, str], message: str) -> None:

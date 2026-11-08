@@ -10,6 +10,9 @@
 | DA_AGENT_RUN_BUDGET_USD | 0.25 | Model spending per job |
 | DA_AGENT_RUN_MAX_TOKENS | 60000 | Tokens per job |
 | DA_AGENT_OTLP_ENDPOINT | none | Where traces go, such as http://phoenix:6006/v1/traces |
+| DA_AGENT_TRACE_UI_URL | none | Trace viewer runs link to, such as http://127.0.0.1:6006 |
+
+Set DA_AGENT_TRACE_UI_URL only for operators: Phoenix shows every workspace's traces.
 
 Provider keys (GROQ_API_KEY and others) are read by the model routes, and only by the worker.
 """
@@ -28,6 +31,15 @@ def _required(env: Mapping[str, str], name: str) -> str:
     if not value:
         raise ConfigError(f"{name} is required")
     return value
+
+
+def _http_url(env: Mapping[str, str], name: str) -> str | None:
+    raw = env.get(name, "").strip()
+    if not raw:
+        return None
+    if not raw.startswith(("http://", "https://")):
+        raise ConfigError(f"{name} must be an http or https URL")
+    return raw.rstrip("/")
 
 
 def _number(env: Mapping[str, str], name: str, default: float) -> float:
@@ -53,6 +65,7 @@ class Settings:
     run_budget_usd: float = 0.25
     run_max_tokens: int = 60_000
     otlp_endpoint: str | None = None
+    trace_ui_url: str | None = None
     # For tests: confine every query to one Postgres schema.
     schema: str | None = None
 
@@ -79,5 +92,6 @@ class Settings:
             run_budget_usd=_number(env, "DA_AGENT_RUN_BUDGET_USD", cls.run_budget_usd),
             run_max_tokens=int(_number(env, "DA_AGENT_RUN_MAX_TOKENS", cls.run_max_tokens)),
             otlp_endpoint=env.get("DA_AGENT_OTLP_ENDPOINT", "").strip() or None,
+            trace_ui_url=_http_url(env, "DA_AGENT_TRACE_UI_URL"),
             schema=schema,
         )

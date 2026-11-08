@@ -18,7 +18,17 @@ from typing import Annotated, Any
 from uuid import UUID
 
 import psycopg
-from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -62,6 +72,11 @@ class ApiSettings:
     jobs_per_minute: int = 30
     failed_auth_per_minute: int = 20
     daily_budget_usd: float = 5.0
+    # Trace viewer for operators (ADR 0023). Unset, runs carry no trace links.
+    trace_ui_url: str | None = None
+
+
+MAX_RUNS_PER_PAGE = 50
 
 
 class ApproveRequest(BaseModel):
@@ -103,7 +118,16 @@ def _dataset_view(record: DatasetRecord) -> dict[str, Any]:
     }
 
 
-def _run_view(job: Job) -> dict[str, Any]:
+def _trace_links(job: Job, trace_ui_url: str | None) -> list[dict[str, Any]]:
+    if not trace_ui_url:
+        return []
+    return [
+        {"attempt": attempt, "url": f"{trace_ui_url}/redirects/traces/{trace_id}"}
+        for attempt, trace_id in enumerate(job.trace_ids, start=1)
+    ]
+
+
+def _run_view(job: Job, trace_ui_url: str | None = None) -> dict[str, Any]:
     return {
         "id": str(job.id),
         "dataset_id": job.payload.get("dataset_id"),
@@ -113,6 +137,7 @@ def _run_view(job: Job) -> dict[str, Any]:
         "attempts": job.attempts,
         "error": job.last_error,
         "result": job.result,
+        "traces": _trace_links(job, trace_ui_url),
     }
 
 
@@ -312,9 +337,39 @@ def run_job(run_id: str, conn: psycopg.Connection, caller: KeyIdentity) -> Job:
     return job
 
 
+@router.get("/runs")
+def list_runs(
+    conn: Db,
+    caller: Caller,
+    dataset_id: str,
+    limit: Annotated[int, Query(ge=1, le=MAX_RUNS_PER_PAGE)] = 20,
+    before: dt.datetime | None = None,
+) -> dict[str, Any]:
+    """A dataset's runs, newest first. Pass next_before as before to read the next page."""
+    record = DatasetStore(conn).get(_uuid(dataset_id), caller.workspace_id)
+    if record is None:
+        raise _not_found()
+    runs = JobQueue(conn).runs_of_dataset(
+        caller.workspace_id, str(record.id), limit=limit, before=before
+    )
+    return {
+        "runs": [
+            {
+                "id": str(run.id),
+                "question": run.question,
+                "as_of": run.as_of,
+                "status": run.status,
+                "created_at": run.created_at.isoformat(),
+            }
+            for run in runs
+        ],
+        "next_before": runs[-1].created_at.isoformat() if len(runs) == limit else None,
+    }
+
+
 @router.get("/runs/{run_id}")
-def get_run(run_id: str, conn: Db, caller: Caller) -> dict[str, Any]:
-    return _run_view(run_job(run_id, conn, caller))
+def get_run(run_id: str, conn: Db, caller: Caller, settings: Settings) -> dict[str, Any]:
+    return _run_view(run_job(run_id, conn, caller), settings.trace_ui_url)
 
 
 @router.get("/runs/{run_id}/report", response_class=HTMLResponse)

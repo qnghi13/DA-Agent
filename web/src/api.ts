@@ -131,6 +131,16 @@ export class Api {
     });
   }
 
+  /** A dataset's runs, newest first. Pass next_before back as `before` for older ones. */
+  listRuns(
+    datasetId: string,
+    before?: string,
+  ): Promise<{ runs: RunSummary[]; next_before: string | null }> {
+    const params = new URLSearchParams({ dataset_id: datasetId, limit: "20" });
+    if (before) params.set("before", before);
+    return this.request(`/v1/runs?${params}`);
+  }
+
   getRun(id: string): Promise<Run> {
     return this.request(`/v1/runs/${encodeURIComponent(id)}`);
   }
@@ -182,6 +192,16 @@ export interface Run {
   attempts: number;
   error: string | null;
   result: RunResult | null;
+  /** One link per attempt, present only when an operator configured a trace viewer. */
+  traces: { attempt: number; url: string }[];
+}
+
+export interface RunSummary {
+  id: string;
+  question: string;
+  as_of: string | null;
+  status: Run["status"];
+  created_at: string;
 }
 
 export function errorMessage(caught: unknown): string {

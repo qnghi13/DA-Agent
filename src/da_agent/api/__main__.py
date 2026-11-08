@@ -20,6 +20,7 @@ def api_settings(settings: Settings) -> ApiSettings:
         uploads_root=settings.uploads_root,
         schema=settings.schema,
         daily_budget_usd=settings.daily_budget_usd,
+        trace_ui_url=settings.trace_ui_url,
     )
 
 

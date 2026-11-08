@@ -9,7 +9,8 @@ that runs out of attempts ends failed instead of looping forever.
 Every method is one SQL statement on an autocommit connection, so each is atomic on its own.
 """
 
-from dataclasses import dataclass
+import datetime as dt
+from dataclasses import dataclass, field
 from typing import Any, Literal
 from uuid import UUID
 
@@ -33,6 +34,16 @@ class Job:
     max_attempts: int
     last_error: str | None
     result: dict[str, Any] | None
+    trace_ids: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class RunSummary:
+    id: UUID
+    question: str
+    as_of: str | None
+    status: str
+    created_at: dt.datetime
 
 
 class JobQueue:
@@ -125,6 +136,34 @@ class JobQueue:
         """A job, only if it belongs to the workspace."""
         return self._one(
             "SELECT id, workspace_id, kind, payload, status, attempts, max_attempts, last_error, "
-            "result FROM jobs WHERE id = %s AND workspace_id = %s",
+            "result, trace_ids FROM jobs WHERE id = %s AND workspace_id = %s",
             (job_id, workspace_id),
         )
+
+    def add_trace(self, job_id: UUID, worker_id: str, trace_id: str) -> bool:
+        """Record the trace of the attempt this worker is running."""
+        cursor = self._conn.execute(
+            "UPDATE jobs SET trace_ids = array_append(trace_ids, %s) "
+            "WHERE id = %s AND worker_id = %s AND status = 'running'",
+            (trace_id, job_id, worker_id),
+        )
+        return cursor.rowcount == 1
+
+    def runs_of_dataset(
+        self,
+        workspace_id: UUID,
+        dataset_id: str,
+        *,
+        limit: int,
+        before: dt.datetime | None = None,
+    ) -> list[RunSummary]:
+        """A dataset's runs in the workspace, newest first, older than `before` if given."""
+        with self._conn.cursor(row_factory=class_row(RunSummary)) as cursor:
+            return cursor.execute(
+                "SELECT id, payload ->> 'question' AS question, payload ->> 'as_of' AS as_of, "
+                "status, created_at FROM jobs "
+                "WHERE workspace_id = %s AND kind = 'run' AND payload ->> 'dataset_id' = %s "
+                "AND (%s::timestamptz IS NULL OR created_at < %s::timestamptz) "
+                "ORDER BY created_at DESC, id DESC LIMIT %s",
+                (workspace_id, dataset_id, before, before, limit),
+            ).fetchall()

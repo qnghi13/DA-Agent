@@ -12,6 +12,9 @@ from uuid import UUID
 
 import psycopg
 import pytest
+from opentelemetry import trace
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import format_trace_id
 
 from da_agent.agent.answer import result_from_json
 from da_agent.agent.loop_types import Document
@@ -23,6 +26,7 @@ from da_agent.storage.jobs import Job, JobQueue
 from da_agent.storage.ledger import PostgresCostLedger, spent_today
 from da_agent.storage.sqlite_dataset import SqliteDataset
 from da_agent.storage.workspaces import set_daily_budget
+from da_agent.telemetry.tracing import configure_tracing
 from da_agent.worker.limits import WorkspaceBudgets
 from da_agent.worker.runs import RunHandler
 from da_agent.worker.worker import PermanentJobError, RetryableJobError, Worker, WorkerConfig
@@ -286,3 +290,36 @@ def test_a_workspace_without_budget_left_gets_a_clear_failure(
     failed = job(conn, job_id, workspace)
     assert failed.status == "failed" and "daily model budget" in (failed.last_error or "")
     assert adapter.requests == []
+
+
+def test_each_attempt_records_the_trace_it_ran_in(
+    schema: str, conn: psycopg.Connection, workspace: UUID
+) -> None:
+    exporter = InMemorySpanExporter()
+    provider = configure_tracing("http://unused", exporter=exporter)
+    job_id = JobQueue(conn).enqueue(workspace, "run", {})
+
+    def busy(job: Job, lost: Any) -> dict[str, Any]:
+        raise RetryableJobError("the sandbox is busy")
+
+    worker = Worker(
+        config(schema, "w1", retry_delays=(0,)), {"run": busy}, tracer=provider.get_tracer("t")
+    )
+    assert worker.run_once() and worker.run_once()
+    provider.force_flush()
+
+    roots = [s for s in exporter.get_finished_spans() if s.name == "job.run"]
+    assert len(roots) == 2
+    expected = [format_trace_id(span.context.trace_id) for span in roots if span.context]
+    assert job(conn, job_id, workspace).trace_ids == expected
+
+
+def test_without_tracing_no_trace_is_recorded(
+    schema: str, conn: psycopg.Connection, workspace: UUID
+) -> None:
+    job_id = JobQueue(conn).enqueue(workspace, "run", {})
+    worker = Worker(config(schema, "w1"), {"run": lambda job, lost: {}}, tracer=trace.NoOpTracer())
+
+    assert worker.run_once()
+
+    assert job(conn, job_id, workspace).trace_ids == []
