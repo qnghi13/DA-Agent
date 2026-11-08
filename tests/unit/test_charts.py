@@ -27,7 +27,7 @@ def spec(arguments: dict[str, Any], result: QueryResult = MONTHLY) -> dict[str, 
 def test_a_bar_chart_holds_the_query_rows_and_typed_encodings() -> None:
     built = spec({"mark": "bar", "x": "channel", "y": "revenue", "title": "Revenue by channel"})
 
-    assert built["$schema"].startswith("https://vega.github.io/schema/vega-lite/v5")
+    assert built["$schema"].startswith("https://vega.github.io/schema/vega-lite/v6")
     assert built["title"] == "Revenue by channel"
     assert built["mark"]["type"] == "bar"
     assert built["data"]["values"][1] == {"month": "2026-02", "revenue": 250, "channel": "web"}

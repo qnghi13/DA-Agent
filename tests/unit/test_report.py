@@ -179,6 +179,35 @@ def test_data_and_model_text_cannot_inject_markup_or_scripts() -> None:
     assert "default-src 'none'" in policy and "unsafe-eval" not in policy
 
 
+# Lowest versions free of the high advisories npm audit reports (expression injection to XSS).
+SAFE_CHART_VERSIONS = {
+    "vega": (6, 2, 0),
+    "vega-lite": (6, 0, 0),
+    "vega-embed": (7, 0, 0),
+    "vega-interpreter": (1, 2, 1),
+}
+
+
+@pytest.mark.security
+def test_chart_libraries_are_versions_without_known_advisories() -> None:
+    query = QueryRecord(sql="SELECT 'web' AS c, 1 AS n", columns=["c", "n"], rows=[["web", 1]])
+    chart = chart_spec(
+        {"mark": "bar", "x": "c", "y": "n"},
+        QueryResult(columns=query.columns, rows=query.rows, truncated=False),
+    )
+    steps = [ToolStep(tool="make_chart", ok=True, sql=query.sql, row_count=1, chart=chart)]
+    page = report(AgentResult(answer=AgentAnswer("number", 1), steps=steps, queries=[query]))
+
+    sources = [s.get("src") or "" for s in page.scripts if s.get("src")]
+    pinned = {}
+    for src in sources:
+        name, _, rest = src.removeprefix("https://cdn.jsdelivr.net/npm/").partition("@")
+        pinned[name] = tuple(int(part) for part in rest.split("/")[0].split("."))
+    assert {"vega", "vega-lite", "vega-embed"} <= set(pinned)
+    for name, version in pinned.items():
+        assert version >= SAFE_CHART_VERSIONS[name], f"{name} {version} has known advisories"
+
+
 @pytest.mark.parametrize(
     ("written", "value"),
     [

@@ -15,7 +15,7 @@ from da_agent.llm.types import ToolSpec
 from da_agent.storage.sqlite_dataset import QueryResult
 
 MAKE_CHART = "make_chart"
-VEGA_LITE_SCHEMA = "https://vega.github.io/schema/vega-lite/v5.json"
+VEGA_LITE_SCHEMA = "https://vega.github.io/schema/vega-lite/v6.json"
 MARKS = ("bar", "line", "point", "area", "arc")
 # Bounds state and the final result, which carry every spec of the run.
 MAX_CHARTS = 3

@@ -18,25 +18,21 @@ from typing import Any
 from da_agent.agent.answer import AgentResult, QueryRecord
 from da_agent.agent.verify import traces
 
-# Vega 5 builds, pinned by version and hash. The interpreter lets Vega run without eval, so the
-# policy below needs no 'unsafe-eval'.
+# Vega 6 builds, pinned by version and hash. vega-embed 7 bundles the expression interpreter and
+# uses it when `ast` is set, so Vega runs without eval and the policy below needs no
+# 'unsafe-eval'. Vega 5 and vega-interpreter before 1.2.1 have expression-injection advisories.
 CHART_LIBRARIES = (
     (
-        "vega@5.33.0/build/vega.min.js",
-        "sha384-Kpi0LDGE2Pg6N3+B3LiVIugYJ3rGL3AAqlnkRLfFxZtmejptl+TJ3iKY54HF5U3l",
+        "vega@6.4.0/build/vega.min.js",
+        "sha384-VKdcJr3ZaBIJMbVcopTAI/JEuUkSY6qnwVu9iLuw0DnQ9gQ1JjsfZJhXFQAgNi43",
     ),
     (
-        "vega-lite@5.23.0/build/vega-lite.min.js",
-        "sha384-D9LYH0esGjcxQJsBuxOuXtCDJGXRWW1+KhluzWPqi0rLJmiR/ygPChefaD+rFFDQ",
+        "vega-lite@6.5.0/build/vega-lite.min.js",
+        "sha384-pV2l7nzmyxZh02knvUH7N8zvtyCYsYiGt+SsE/emG/dFiBI6G0YJZFZ2FzEX72P3",
     ),
     (
-        # 1.2.x fails inside Vega 5.33 and 2.x ships only as an ES module; 1.0.5 works.
-        "vega-interpreter@1.0.5/build/vega-interpreter.min.js",
-        "sha384-9LanOUB60Mnbvh+fwRI/G5STHUPkO7uZitLePc1jEQdjQWSQy34Oc+TzpdvXTIh2",
-    ),
-    (
-        "vega-embed@6.29.0/build/vega-embed.min.js",
-        "sha384-M+Ax7e/WFJpxSOF09HzI+Sj4wg9ottVd/uxmV2ItGGh02fLH28t2FAOJx3TJBap5",
+        "vega-embed@7.3.0/build/vega-embed.min.js",
+        "sha384-Muy1QRxYFeNrA1zShc1KtN4OfipkR/61gt+HWqN57c1Zxu3Oe16TsilsruVVjfKL",
     ),
 )
 CDN = "https://cdn.jsdelivr.net/npm/"
@@ -46,7 +42,7 @@ for (const holder of document.querySelectorAll("[data-spec]")) {
   if (typeof vegaEmbed !== "function") break;
   const spec = JSON.parse(document.getElementById(holder.dataset.spec).textContent);
   spec.width = "container";
-  const options = {actions: false, renderer: "svg", ast: true, expr: vega.expressionInterpreter};
+  const options = {actions: false, renderer: "svg", ast: true};
   if (matchMedia("(prefers-color-scheme: dark)").matches) options.theme = "dark";
   vegaEmbed(holder, spec, options).then(() => holder.classList.add("drawn"), () => {});
 }

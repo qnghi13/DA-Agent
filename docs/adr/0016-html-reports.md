@@ -15,8 +15,9 @@ injection surface, and charts need a JavaScript library to draw.
   matches, using the same rounding rule as verification. Each cell has its own anchor and is
   highlighted when the link is followed. Answer numbers that match no cell are marked and counted.
   Numbers in the explanation are read in both 1,234.5 and 1.234,5 styles, and dates are skipped.
-- Charts use Vega 5 builds from jsDelivr, pinned by version and SRI hash. Vega runs with
-  `vega-interpreter`, so the Content Security Policy allows only those scripts and the one inline
+- Charts use Vega 6 builds from jsDelivr (vega 6.4.0, vega-lite 6.5.0, vega-embed 7.3.0),
+  pinned by version and SRI hash. vega-embed bundles the expression interpreter and uses it when
+  `ast` is set, so the Content Security Policy allows only those scripts and the one inline
   script, by its hash, with no `unsafe-eval`. Specs sit in `application/json` blocks with `<`, `>`
   and `&` escaped. Every other piece of text is HTML-escaped.
 - Without network the charts are not drawn, but each chart's data and query stay in the page.
@@ -24,8 +25,11 @@ injection surface, and charts need a JavaScript library to draw.
 **Consequences:**
 - A report checked in headless Chrome draws its chart under the policy. Tests cover links,
   escaping, the policy, and number reading.
-- `vega-interpreter` 1.2.1 fails inside Vega 5.33 and 2.x ships only as an ES module, so 1.0.5 is
-  pinned. Upgrading Vega means checking the four builds together in a browser.
+- 2026-11-08: moved from Vega 5.33 with `vega-interpreter` 1.0.5 to Vega 6, because npm audit
+  reports high expression-injection advisories for vega up to 6.1.2 and vega-interpreter before
+  1.2.1. A security test fails if a pinned library is below its first fixed version. The specs
+  were rendered to SVG with Vega 6 and the interpreter in Node, not yet in a browser. Upgrading
+  means checking the three builds together; the web UI uses the same versions from npm.
 - An explanation can contain numbers that are not query results, such as "top 3". They are
   marked as not traced but not counted, since only the answer value is verified.
 
