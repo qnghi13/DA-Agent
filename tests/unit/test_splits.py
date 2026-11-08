@@ -15,6 +15,7 @@ from eval.splits.make_splits import (
     Shop,
     assign_shops,
     build_question_sets,
+    holdout_question_ids,
     load_question_set,
     sample_questions,
 )
@@ -163,6 +164,27 @@ def test_load_question_set_rejects_unknown_names(tmp_path: Path) -> None:
     assert load_question_set(path, "smoke") == {"q1"}
     with pytest.raises(ValueError, match="holdout"):
         load_question_set(path, "holdout")
+
+
+def test_holdout_sample_is_deterministic_spread_and_holdout_only(tmp_path: Path) -> None:
+    rows = [
+        {"id": f"{shop}_q{i}", "business_id": shop}
+        for shop in ("dev_a", "hold_a", "hold_b")
+        for i in range(20)
+    ]
+    questions = tmp_path / "questions.jsonl"
+    questions.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    splits = tmp_path / "splits.json"
+    splits.write_text(
+        json.dumps({"seed": 3, "holdout_shops": ["hold_a", "hold_b"], "question_sets": {}}),
+        encoding="utf-8",
+    )
+
+    ids = holdout_question_ids(splits, questions, size=10)
+
+    assert ids == holdout_question_ids(splits, questions, size=10)
+    assert len(set(ids)) == 10
+    assert Counter(id_.split("_q")[0] for id_ in ids) == {"hold_a": 5, "hold_b": 5}
 
 
 def test_scorer_cli_can_score_one_question_set(tmp_path: Path) -> None:

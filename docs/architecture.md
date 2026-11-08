@@ -3,8 +3,8 @@
 DA-Agent turns uploaded tabular files and a free-form description into a queryable dataset, then
 answers questions about it with cited, verified results.
 
-This document describes the intended design. Most of it is not implemented yet. See
-[progress.md](progress.md) for what exists. Security controls are in
+This document describes the design as built; the few parts that are not built say so. See
+[progress.md](progress.md) for the current state. Security controls are in
 [threat-model.md](threat-model.md), and the reasons behind major choices are in [adr/](adr/).
 
 ## System overview
@@ -177,8 +177,8 @@ Rules ([ADR 0013](adr/0013-agent-graph.md)):
 ### State
 
 Now: `question, as_of, clarifications, plan_steps, messages, steps, iterations, nudges, repairs,
-proposed, verified, verify_problems, answer, stop_reason, error`. Later: `workspace_id, dataset_id, artifact_refs`.
-The dataset, model client, and tracer are runtime context, not state.
+proposed, verified, verify_problems, answer, stop_reason, error`. The dataset, model client, and
+tracer are runtime context, not state; the worker keeps workspace and dataset ids in Postgres.
 
 State stays small and serializable. Large results are stored as artifacts, and state keeps only a
 preview and a reference. Each field has one owner node, and accumulating fields have explicit
@@ -186,8 +186,10 @@ reducers.
 
 ### Tools
 
-`describe_dataset`, `profile_column`, `search_rules`, `run_sql`, `run_python`, `make_chart`,
-`ask_user`, `submit_answer`.
+`describe_dataset`, `search_rules`, `run_sql`, `make_chart` (only when a run asks for charts),
+`submit_answer`. Questions to the user go through the `clarify` node, not a tool. Not built:
+`profile_column` and `run_python`; SQL covered every question so far, and Python would widen what
+the sandbox must contain.
 
 Tools have Pydantic input and output schemas and bounded output. Errors come back as structured
 results the model can act on, and do not crash the graph.
@@ -213,9 +215,8 @@ Mostly code, not LLM self-assessment ([ADR 0007](adr/0007-code-first-verificatio
   `_row`, and `_quarantine` lists failed values by the same keys, so a probe counts them inside
   the query's rows. A hit withholds the answer without a repair ([ADR 0014](adr/0014-probe-checks-in-verify.md)).
 
-Planned for the reliability phase:
-
-- Important answers are recomputed a second way.
+Not built: recomputing important answers a second way, which was planned for the reliability
+phase and cut for time.
 
 ### Memory and RAG
 
@@ -223,8 +224,8 @@ Planned for the reliability phase:
 - **Long-term, per dataset:** the approved spec, rules, and user corrections, each with provenance.
 - **RAG:** dataset docs and rules. Rules that shape every answer stay in the prompt. Topic sections
   are listed by title and fetched with `search_rules`, by title or keywords
-  ([ADR 0008](adr/0008-rules-on-demand.md)). Embedding retrieval is tried later and measured with
-  evals.
+  ([ADR 0008](adr/0008-rules-on-demand.md)). Embedding retrieval was cut: about ten
+  sections fit in the prompt, and the failures it would address came from elsewhere (note 05).
 
 ### Output
 

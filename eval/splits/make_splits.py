@@ -22,6 +22,8 @@ HOLDOUT_SIZE = 6
 SMOKE_SIZE = 30
 REGRESSION_SIZE = 150
 BOOTSTRAP_SHOP = "biz_123"
+HOLDOUT_SET = "holdout"
+HOLDOUT_SAMPLE_SIZE = 150
 DEFAULT_OUTPUT = Path(__file__).with_name("splits.json")
 
 # We read these shops closely while designing the project, so they cannot give an unseen result.
@@ -146,8 +148,30 @@ def build_question_sets(
     }
 
 
-def load_question_set(path: Path, name: str) -> set[str]:
-    """Load one named question set. Holdout is deliberately not a named set."""
+def holdout_question_ids(
+    splits_path: Path, questions_path: Path, size: int = HOLDOUT_SAMPLE_SIZE
+) -> list[str]:
+    """The one-time holdout sample: questions from holdout shops, spread evenly across shops.
+
+    It reads only question ids and shop ids, never answers, so the eval run can draw it too. The
+    seed comes from splits.json, so the run and the scorer always get the same sample."""
+    splits = json.loads(splits_path.read_text(encoding="utf-8"))
+    holdout = set(splits["holdout_shops"])
+    pool = [
+        Question(row["id"], row["business_id"], kind="any")
+        for row in load_jsonl(questions_path)
+        if row["business_id"] in holdout
+    ]
+    return sample_questions(pool, min(size, len(pool)), splits["seed"])
+
+
+def load_question_set(path: Path, name: str, questions_path: Path | None = None) -> set[str]:
+    """Load one named question set. Holdout is not stored as a set: it is drawn from the questions
+    file, so asking for it needs questions_path."""
+    if name == HOLDOUT_SET:
+        if questions_path is None:
+            raise ValueError("the holdout set needs the questions file")
+        return set(holdout_question_ids(path, questions_path))
     sets = json.loads(path.read_text(encoding="utf-8"))["question_sets"]
     if name not in sets:
         raise ValueError(f"unknown question set {name!r}, expected one of {sorted(sets)}")

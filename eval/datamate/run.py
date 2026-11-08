@@ -42,6 +42,7 @@ from eval.datamate.adapter import (
     to_submission,
 )
 from eval.scorer.scoring import load_jsonl
+from eval.splits.make_splits import HOLDOUT_SET, holdout_question_ids
 
 DEFAULT_SPLITS = Path("eval/splits/splits.json")
 MAX_ERROR_CHARS = 500
@@ -72,18 +73,35 @@ def select_questions(
     question_set: str,
     limit: int | None = None,
     shops: list[str] | None = None,
+    *,
+    holdout: bool = False,
 ) -> list[dict[str, Any]]:
     """Return the questions in a set, optionally only for some shops. Refuses any set that
-    touches a holdout shop."""
+    touches a holdout shop. The holdout set itself runs once, at the end, and only when the caller
+    passes holdout=True."""
     splits = json.loads(splits_path.read_text(encoding="utf-8"))
+    questions_path = data_dir / "questions.jsonl"
+    if question_set == HOLDOUT_SET:
+        if not holdout:
+            raise ValueError("the holdout set runs once, at the end: pass --holdout to run it")
+        wanted = set(holdout_question_ids(splits_path, questions_path))
+        return _filter(
+            [row for row in load_jsonl(questions_path) if row["id"] in wanted], limit, shops
+        )
     if question_set not in splits["question_sets"]:
         raise ValueError(f"unknown question set {question_set!r}")
     wanted = set(splits["question_sets"][question_set])
-    holdout = set(splits["holdout_shops"])
-    questions = [row for row in load_jsonl(data_dir / "questions.jsonl") if row["id"] in wanted]
-    touched = sorted({row["business_id"] for row in questions} & holdout)
+    held_out = set(splits["holdout_shops"])
+    questions = [row for row in load_jsonl(questions_path) if row["id"] in wanted]
+    touched = sorted({row["business_id"] for row in questions} & held_out)
     if touched:
         raise ValueError(f"question set {question_set!r} touches holdout shops: {touched}")
+    return _filter(questions, limit, shops)
+
+
+def _filter(
+    questions: list[dict[str, Any]], limit: int | None, shops: list[str] | None
+) -> list[dict[str, Any]]:
     if shops is not None:
         questions = [row for row in questions if row["business_id"] in set(shops)]
     return questions[:limit] if limit is not None else questions
@@ -239,6 +257,10 @@ def run_questions(
         if config.delay_seconds:
             sleep(config.delay_seconds)
 
+    if shops and not any(shops.values()):
+        # Every shop failed to open, usually a wrong --datasets-dir. Scoring would report all
+        # abstentions as if the agent had run.
+        raise ValueError(f"no shop could be opened: {sorted(shops)}")
     metrics = _build_metrics(results, skipped, failed, failed_tokens, stopped)
     (config.output_dir / "metrics.json").write_text(
         json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -247,7 +269,11 @@ def run_questions(
 
 
 def score_run(
-    answers_path: Path, output_dir: Path, splits_path: Path, question_set: str
+    answers_path: Path,
+    output_dir: Path,
+    splits_path: Path,
+    question_set: str,
+    questions_path: Path | None = None,
 ) -> dict[str, Any]:
     """Score in a separate process, so this one never loads the answers."""
     submission = output_dir / "submission.jsonl"
@@ -266,6 +292,7 @@ def score_run(
             str(splits_path),
             "--set",
             question_set,
+            *(["--questions", str(questions_path)] if questions_path else []),
         ],
         capture_output=True,
         text=True,
@@ -292,6 +319,9 @@ def main() -> int:
     parser.add_argument("--splits", type=Path, default=DEFAULT_SPLITS)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--shops", nargs="*", help="only questions about these shops")
+    parser.add_argument(
+        "--holdout", action="store_true", help="allow --set holdout: the one run at the end"
+    )
     parser.add_argument("--max-iterations", type=int, default=10)
     parser.add_argument("--max-tokens-per-question", type=int, default=60_000)
     parser.add_argument("--max-total-tokens", type=int, required=True)
@@ -325,8 +355,9 @@ def main() -> int:
         routes = build_routes(args.routes, os.environ)
         llm = LLMClient(routes, ledger, record_content=args.record_content)
         questions = select_questions(
-            args.data_dir, args.splits, args.question_set, args.limit, args.shops
-        )
+            args.data_dir, args.splits, args.question_set, args.limit, args.shops,
+            holdout=args.holdout,
+        )  # fmt: skip
         config = RunConfig(
             output_dir=args.output_dir,
             max_iterations=args.max_iterations,
@@ -355,8 +386,9 @@ def main() -> int:
         report: dict[str, Any] = {"metrics": metrics}
         if not args.no_score:
             report["score"] = score_run(
-                args.data_dir / "answers.jsonl", args.output_dir, args.splits, args.question_set
-            )
+                args.data_dir / "answers.jsonl", args.output_dir, args.splits, args.question_set,
+                questions_path=args.data_dir / "questions.jsonl",
+            )  # fmt: skip
     except (OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1

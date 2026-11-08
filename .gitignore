@@ -31,7 +31,16 @@ dist/
 # Personal Claude Code overrides
 .claude/settings.local.json
 .claude/worktrees/
-.agents
+
+# Third-party agent skills: reinstall them instead (see README, Development). Skills written for
+# this project (tdd, agent-architecture) stay tracked.
+/.agents/
+/.claude/skills/agent-browser
+/.claude/skills/brainstorming
+/.claude/skills/design-taste-frontend
+/.claude/skills/find-skills
+/.claude/skills/frontend-design
+/.claude/skills/playwright-cli/
 
 # OS noise
 *:Zone.Identifier

@@ -10,6 +10,7 @@ from da_agent.agent.answer import AgentAnswer, AgentResult
 from da_agent.llm.client import CostLedger, LLMClient, Route
 from da_agent.llm.types import LLMRequest, LLMResponse, PermanentLLMError, ToolCall, Usage
 from eval.datamate.adapter import (
+    ShopContext,
     UnsupportedShopError,
     agent_rulebook,
     open_shop,
@@ -85,6 +86,7 @@ def splits(tmp_path: Path) -> Path:
     path.write_text(
         json.dumps(
             {
+                "seed": 7,
                 "dev_shops": ["biz_1", "biz_2"],
                 "holdout_shops": ["biz_9"],
                 "question_sets": {
@@ -225,6 +227,21 @@ def test_unsupported_shops_are_skipped_and_reported(
     assert metrics["attempted"] == 1
     assert metrics["skipped_unsupported"] == ["q3"]
     assert len(adapter.requests) == 1
+
+
+def test_a_run_that_opens_no_shop_fails_instead_of_scoring_zero(
+    data_dir: Path, splits: Path, tmp_path: Path
+) -> None:
+    llm, ledger, _ = make_llm([])
+    questions = select_questions(data_dir, splits, "good")
+
+    def no_dataset(shop: str) -> ShopContext:
+        raise UnsupportedShopError(f"{shop} has no prepared dataset")
+
+    with pytest.raises(ValueError, match="no shop could be opened"):
+        run_questions(
+            questions, data_dir, llm, ledger, RunConfig(tmp_path / "out"), open_shop_fn=no_dataset
+        )
 
 
 def test_resume_skips_finished_questions(data_dir: Path, tmp_path: Path) -> None:
@@ -391,6 +408,54 @@ def test_rulebook_keeps_answer_rules_inline_and_topics_on_demand() -> None:
         assert rule in inline.text
     assert "Doanh thu không tính đơn huỷ" in topics.text
     assert "Doanh thu không tính đơn huỷ" not in inline.text
+
+
+def test_holdout_set_is_refused_without_the_explicit_flag(data_dir: Path, splits: Path) -> None:
+    with pytest.raises(ValueError, match="holdout"):
+        select_questions(data_dir, splits, "holdout")
+
+
+def test_holdout_set_samples_only_holdout_questions_when_asked(
+    data_dir: Path, splits: Path
+) -> None:
+    questions = select_questions(data_dir, splits, "holdout", holdout=True)
+
+    assert [q["id"] for q in questions] == ["q9"]
+
+
+def test_holdout_flag_does_not_open_holdout_shops_to_dev_sets(data_dir: Path, splits: Path) -> None:
+    with pytest.raises(ValueError, match="holdout"):
+        select_questions(data_dir, splits, "leaky", holdout=True)
+
+
+def test_holdout_run_is_scored_on_the_same_sample(
+    data_dir: Path, splits: Path, tmp_path: Path
+) -> None:
+    output = tmp_path / "run"
+    output.mkdir()
+    (output / "submission.jsonl").write_text(
+        '{"id": "q9", "type": "number", "answer": 9}\n', encoding="utf-8"
+    )
+    answers = tmp_path / "answers.jsonl"
+    answers.write_text(
+        '{"id": "q9", "type": "number", "answer": 9, "alias": []}\n'
+        '{"id": "q1", "type": "number", "answer": 1, "alias": []}\n',
+        encoding="utf-8",
+    )
+
+    summary = score_run(
+        answers, output, splits, "holdout", questions_path=data_dir / "questions.jsonl"
+    )
+
+    assert (summary["total"], summary["score"]) == (1, 1)
+
+
+def test_prepare_selects_holdout_shops_only_when_asked(splits: Path) -> None:
+    from eval.datamate.prepare import select_shops
+
+    assert select_shops(splits, None, holdout=True) == ["biz_9"]
+    with pytest.raises(ValueError, match="unknown"):
+        select_shops(splits, ["biz_1"], holdout=True)
 
 
 def test_prepare_refuses_holdout_and_unknown_shops(splits: Path) -> None:

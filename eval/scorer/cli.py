@@ -19,6 +19,7 @@ def main() -> int:
     )
     parser.add_argument("--splits", type=Path, help="splits.json, used together with --set")
     parser.add_argument("--set", dest="question_set", help="score only this question set")
+    parser.add_argument("--questions", type=Path, help="questions.jsonl, needed for --set holdout")
     args = parser.parse_args()
     if bool(args.splits) != bool(args.question_set):
         parser.error("--splits and --set must be used together")
@@ -26,7 +27,7 @@ def main() -> int:
     try:
         truths = load_jsonl(args.answers)
         if args.question_set:
-            wanted = load_question_set(args.splits, args.question_set)
+            wanted = load_question_set(args.splits, args.question_set, args.questions)
             truths = [truth for truth in truths if truth["id"] in wanted]
         report = score_submission(truths, load_jsonl(args.submission))
     except (OSError, ValueError) as error:

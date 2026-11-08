@@ -12,7 +12,7 @@ uv run python -m eval.datamate.prepare --data-dir train --output-dir eval/report
     --reuse-specs eval/reports/datasets-dev --max-cost 0
 
 Shop files are copied into an uploads directory, because Runner mounts must sit under its roots.
-Holdout shops are refused.
+Holdout shops are refused unless --holdout is given, for the one holdout run at the end.
 """
 
 import argparse
@@ -67,14 +67,16 @@ def load_specs(directory: Path, shops: list[str]) -> dict[str, DatasetSpec]:
     return specs
 
 
-def select_shops(splits_path: Path, shops: list[str] | None) -> list[str]:
+def select_shops(splits_path: Path, shops: list[str] | None, *, holdout: bool = False) -> list[str]:
+    """Dev shops by default. With holdout=True, holdout shops only, for the one run at the end."""
     splits = json.loads(splits_path.read_text(encoding="utf-8"))
-    holdout = set(splits["holdout_shops"])
-    chosen = shops or list(splits["dev_shops"])
-    refused = sorted(set(chosen) & holdout)
-    if refused:
-        raise ValueError(f"refusing holdout shops: {refused}")
-    unknown = sorted(set(chosen) - set(splits["dev_shops"]))
+    group = "holdout_shops" if holdout else "dev_shops"
+    chosen = shops or list(splits[group])
+    if not holdout:
+        refused = sorted(set(chosen) & set(splits["holdout_shops"]))
+        if refused:
+            raise ValueError(f"refusing holdout shops: {refused}")
+    unknown = sorted(set(chosen) - set(splits[group]))
     if unknown:
         raise ValueError(f"unknown shops: {unknown}")
     return chosen
@@ -118,12 +120,13 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--splits", type=Path, default=DEFAULT_SPLITS)
     parser.add_argument("--shops", nargs="*")
+    parser.add_argument("--holdout", action="store_true", help="prepare holdout shops instead")
     parser.add_argument("--image", default="da-agent-sandbox:dev")
     parser.add_argument("--max-cost", type=float, required=True)
     parser.add_argument("--max-tokens-per-shop", type=int, default=150_000)
     args = parser.parse_args()
 
-    shops = select_shops(args.splits, args.shops)
+    shops = select_shops(args.splits, args.shops, holdout=args.holdout)
     root = args.output_dir.resolve()
     runner = make_runner(root, args.image)
     ledger = CostLedger(root / "ledger.jsonl")

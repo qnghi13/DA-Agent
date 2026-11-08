@@ -4,8 +4,9 @@ An open-source agent that analyses uploaded CSV, Excel, and SQLite files. You up
 free-form description and ask questions. It answers with results you can trace back to the queries
 that produced them.
 
-> **Status: early development.** The agent, ingestion, sandbox, HTTP API, web UI, and Docker
-> Compose packaging work and are tested. Expect rough edges.
+> **Status:** a learning and portfolio project, complete for its plan: agent, ingestion, sandbox,
+> HTTP API, web UI, operator dashboard, and Docker Compose packaging work and are tested. It has not
+> run in production.
 
 ## Quick start
 
@@ -37,18 +38,66 @@ access, which is not a hard boundary against kernel exploits. See the
 `deploy/smoke.sh` checks a running stack without calling a model. `docker compose down` stops it;
 add `-v` to delete all data.
 
-## Planned features
+## How it works
 
-- Handles messy, unknown spreadsheets through a reviewable dataset specification.
-- Runs generated SQL and Python in an isolated sandbox.
-- Verifies answers with code checks, and abstains when the data is insufficient.
-- Resumes runs after a crash, and enforces hard cost limits.
-- Evaluation suite, with tracing through OpenTelemetry and Phoenix.
-- Self-hosted with Docker Compose.
+```mermaid
+flowchart LR
+    browser[Browser: React UI] -- "HTTP, SSE" --> api[API: FastAPI]
+    api -- jobs --> pg[(Postgres: jobs, checkpoints,<br/>audit, costs)]
+    worker[Worker: ingestion + LangGraph] -- claims jobs --> pg
+    worker --> llm[LLMClient] --> providers[Model providers]
+    worker -- "SQL only" --> runner[Runner]
+    runner --> sandbox[Sandbox container:<br/>no network, no secrets,<br/>one read-only dataset]
+```
+
+- **Messy files become a reviewable spec.** Code profiles each upload inside a sandbox. The model
+  proposes a declarative `DatasetSpec` (types, number and date formats, rows to exclude,
+  sensitive columns), code dry-runs it and reports parse rates, and the user approves it before
+  anything is queried ([ADR 0006](docs/adr/0006-dataset-spec.md)).
+- **Generated SQL runs in a sandbox.** A SQL guard allows read-only queries, and each query runs in
+  a container without network or secrets that sees one dataset
+  ([ADR 0009](docs/adr/0009-parse-uploads-in-sandbox.md),
+  [ADR 0011](docs/adr/0011-sql-per-request-sandbox.md)).
+- **Answers are checked by code.** Numbers must come from query results, periods must fall inside
+  the data, joins must not double-count, and unparseable values withhold the answer. Failed checks
+  get two repairs, then the agent abstains ([ADR 0007](docs/adr/0007-code-first-verification.md)).
+
+```mermaid
+flowchart LR
+    plan --> agent
+    plan -. "ambiguous, interactive" .-> clarify -.-> plan
+    agent <--> tools
+    agent -- submit_answer --> verify
+    verify -- pass --> answer
+    verify -- "fail, repairs left" --> agent
+    verify -- "fail, none left" --> abstain
+```
+
+- **Runs survive crashes and stay within budget.** Every model turn is a Postgres checkpoint, so a
+  killed worker's run continues without repeating finished steps. Token and money limits apply per
+  run and per workspace.
+- **Operable.** OpenTelemetry traces in Phoenix, a cost ledger per model call, an audit log, and an
+  operator dashboard for queue health, outcomes, latency, model errors, and cost.
+- **Measured.** An evaluation harness with a separate scorer process, fixed dev and holdout
+  splits, and a cost report for every run. See [Evaluation](#evaluation).
+
+## Evaluation
+
+On the [DataMate](docs/eval/README.md) benchmark of messy Vietnamese retail data, scored +1
+correct, −1 wrong, 0 abstained, with Groq `gpt-oss-20b` and the full pipeline from raw files:
+
+| Set | Correct | Wrong | Abstained | Score | Cost |
+|---|---|---|---|---|---|
+| 150 dev questions (24 shops) | 62% | 27% | 11% | +53 | $0.38 |
+| 150 holdout questions (6 unseen shops, run once) | 60% | 31% | 9% | +44 | $0.30 |
+
+Holdout is within noise of dev. Details, the history of changes, and caveats are in
+[docs/eval](docs/eval/README.md).
 
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [Evaluation results](docs/eval/README.md)
 - [Threat model](docs/threat-model.md)
 - [Decision records](docs/adr/README.md)
 - [Plan and roadmap](docs/plan.md)
@@ -67,6 +116,15 @@ uv run ruff check .
 
 Tests that need Postgres are skipped unless `DA_AGENT_TEST_POSTGRES_URL` is set; each test runs in
 its own schema.
+
+The project was built with Claude Code. `CLAUDE.md`, `.claude/settings.json`, the hooks, agents,
+and the `tdd` and `agent-architecture` skills are part of the repo. Third-party skills are not
+committed; restore them if you want the same setup (needs Node):
+
+```bash
+npx skills experimental_install          # the versions pinned in skills-lock.json
+playwright-cli install --skills          # from @playwright/cli, for browser checks of the UI
+```
 
 ## Running the backend without Compose
 

@@ -33,8 +33,9 @@ React + Vite + TypeScript, OpenTelemetry + Phoenix, Docker Compose.
 - **Language:** reply to the user in Vietnamese. Code, README, and architecture docs are in English.
   Learning notes in `docs/learning/` are in Vietnamese.
 - **Git:** commit or push only when the user asks.
-- **Dependencies:** add only what the current task needs. Project skills are pinned in
-  `skills-lock.json`. Ask before adding a plugin or skill.
+- **Dependencies:** add only what the current task needs. Third-party skills are pinned in
+  `skills-lock.json` and not committed (README, Development, restores them). Ask before adding a
+  plugin or skill.
 - **Approved work:** do not redo design or brainstorming for what `docs/plan.md` already decides. Use
   `brainstorming` only for what it leaves open.
 - **Tests first:** new behaviour starts with a failing test. Use the `tdd` skill.
