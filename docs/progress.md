@@ -1,7 +1,7 @@
 # Progress
 
 Loaded into every session, so keep it under 60 lines. Replace stale content instead of appending.
-**Last updated:** 2026-11-10 (Day 22 committed, 3249037)
+**Last updated:** 2026-11-10 (Day 22 committed, 3df9d88; history emails rewritten)
 **Phase:** finishing: CI and release on GitHub, demo video ([plan §6](plan.md#6-roadmap)).
 
 ## Next step

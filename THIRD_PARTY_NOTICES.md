@@ -13,7 +13,7 @@ in their packages and are not listed here.
 
 ## In earlier commits only
 
-These agent skills were committed before commit `354a2d3` and are no longer tracked. Contributors
+These agent skills were committed before commit `55d9290` and are no longer tracked. Contributors
 restore them with `skills-lock.json` (see the README, Development).
 
 | Skill | Source | License |
