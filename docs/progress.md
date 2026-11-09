@@ -45,8 +45,11 @@ Loaded into every session, so keep it under 60 lines. Replace stale content inst
 
 ## Waiting on the user
 
-- Repo is on GitHub (qnghi13/DA-Agent). **Before going public:** check the organizer's data rules, whether `cccd` and phone are fake, the
-  licenses of skills in `.agents/`, and the `brainstorming` scripts.
+- Repo and GHCR packages public (2026-11-10). Skill licenses MIT/Apache-2.0, credited in
+  `THIRD_PARTY_NOTICES.md`. Organizer rules (§4): no rows, questions, rulebook, or answers in any
+  commit or image; README and `docs/eval/` now cite challenge.zalo.ai. Open for the user: model
+  calls sent cell values (customer names not hidden) to Groq; delete `train/`, `eval/reports/`,
+  and the Docker volumes with eval data when the challenge ends.
 
 ## Spend so far: about $2.59 (agent runs $2.13, spec proposals $0.46, demos $0.0025).
 ## Watch out

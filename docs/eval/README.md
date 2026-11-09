@@ -5,9 +5,11 @@ values. How the evaluation works is in [plan §3](../plan.md#3-evaluation).
 
 ## Setup
 
-- **Data:** the DataMate benchmark, 30 Vietnamese retail shops with messy xlsx, csv, and SQLite
+- **Data:** the DataMate benchmark from challenge.zalo.ai, 30 Vietnamese retail shops with messy xlsx, csv, and SQLite
   files, and 3,000 questions with typed answers. The core has no DataMate-specific code. An
-  adapter in `eval/datamate/` turns the agent's answer into the benchmark format.
+  adapter in `eval/datamate/` turns the agent's answer into the benchmark format. The data is
+  used for non-commercial, educational purposes under the challenge's rules and is not included
+  or redistributed here: no rows, questions, rulebook text, or answers are in the repository.
 - **Scoring:** +1 correct, −1 wrong, 0 abstained, so a wrong answer costs more than no answer. A
   separate scorer process is the only code that reads the answers.
 - **Splits** (`eval/splits/splits.json`, fixed seed): 24 dev shops and 6 holdout shops,

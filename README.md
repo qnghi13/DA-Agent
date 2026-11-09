@@ -102,7 +102,10 @@ flowchart LR
 ## Evaluation
 
 On the [DataMate](docs/eval/README.md) benchmark of messy Vietnamese retail data, scored +1
-correct, −1 wrong, 0 abstained, with Groq `gpt-oss-20b` and the full pipeline from raw files:
+correct, −1 wrong, 0 abstained, with Groq `gpt-oss-20b` and the full pipeline from raw files.
+The dataset is from challenge.zalo.ai, used for non-commercial, educational purposes under its
+rules; it is not in this repository and is not redistributed.
+
 
 | Set | Correct | Wrong | Abstained | Score | Cost |
 |---|---|---|---|---|---|
@@ -202,4 +205,4 @@ npm run build        # type-check and bundle into web/dist
 
 ## License
 
-[Apache-2.0](LICENSE)
+[Apache-2.0](LICENSE). Third-party material and its licenses: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
