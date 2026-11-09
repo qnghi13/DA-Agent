@@ -1,7 +1,14 @@
-import { useEffect, useState } from "react";
+import { AlertCircle, ArrowRight, Check, ChevronRight, Loader2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { type Api, BUSY_STATUSES, type Dataset, type DatasetSpec, errorMessage } from "./api";
 import { Conversation } from "./Conversation";
+import { DatasetSummary } from "./components/dataset-summary";
+import { SetupPage } from "./components/setup/stepper";
+import { StatusBadge } from "./components/status-badge";
+import { Button } from "./components/ui/button";
+import { Skeleton } from "./components/ui/skeleton";
 import { SpecEditor } from "./SpecEditor";
+import { datasetStatus } from "./status";
 
 const POLL_MS = 2000;
 
@@ -10,7 +17,7 @@ const STATUS_TEXT: Record<Dataset["status"], string> = {
   proposed: "Review how the files will be read, then approve or edit the spec.",
   building: "Rebuilding the dataset with your edited spec.",
   ready: "",
-  failed: "The dataset could not be prepared.",
+  failed: "The dataset could not be prepared. The details are below.",
 };
 
 export function DatasetView({
@@ -27,6 +34,9 @@ export function DatasetView({
   const [approving, setApproving] = useState(false);
   // Bumped after an approval so the poll starts again.
   const [version, setVersion] = useState(0);
+  // A dataset that turns ready while open here shows a short confirmation before the chat.
+  const firstStatus = useRef<Dataset["status"] | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -35,6 +45,7 @@ export function DatasetView({
       try {
         const next = await api.getDataset(datasetId);
         if (cancelled) return;
+        firstStatus.current ??= next.status;
         setDataset(next);
         onChange(next);
         setError(null);
@@ -63,136 +74,93 @@ export function DatasetView({
     }
   }
 
+  const becameReady = firstStatus.current !== null && firstStatus.current !== "ready";
+
   if (!dataset) {
-    return error ? <p className="error">{error}</p> : <p className="muted">Loading…</p>;
+    return error ? (
+      <p role="alert" className="text-danger p-6 text-sm">
+        {error}
+      </p>
+    ) : (
+      <div className="grid h-full place-items-center">
+        <Loader2 className="text-muted-foreground size-5 animate-spin" aria-label="Loading" />
+      </div>
+    );
   }
 
-  const ready = dataset.status === "ready";
-  return (
-    <div className="stack">
-      <header className="dataset-head">
-        <h2>
-          {dataset.name} <span className={`badge ${dataset.status}`}>{dataset.status}</span>
-        </h2>
-        {STATUS_TEXT[dataset.status] && (
-          <p className="muted">
-            {BUSY_STATUSES.includes(dataset.status) && <span className="spinner" aria-hidden />}
-            {STATUS_TEXT[dataset.status]}
+  if (dataset.status === "ready" && !(becameReady && !chatOpen)) {
+    return <Conversation api={api} dataset={dataset} />;
+  }
+  if (dataset.status === "ready") {
+    return (
+      <SetupPage step={3} title={`${dataset.name} is ready`}>
+        <div className="bg-card flex flex-col items-start gap-4 rounded-xl border p-6">
+          <div className="border-success-line bg-success-soft text-success grid size-10 place-items-center rounded-full border">
+            <Check className="size-5" aria-hidden />
+          </div>
+          <p className="text-muted-foreground max-w-xl text-[15px] leading-relaxed">
+            The data is built with the spec you approved. Ask questions in your own words; every
+            answer comes with the queries behind it.
           </p>
-        )}
-        {dataset.error && <p className="error">{dataset.error}</p>}
-      </header>
+          <Button onClick={() => setChatOpen(true)} autoFocus>
+            Ask a question
+            <ArrowRight />
+          </Button>
+        </div>
+      </SetupPage>
+    );
+  }
 
+  const status = datasetStatus(dataset.status);
+  return (
+    <SetupPage
+      step={2}
+      title={
+        <span className="flex flex-wrap items-center gap-3">
+          {dataset.name}
+          <StatusBadge tone={status.tone} busy={status.busy}>
+            {status.label}
+          </StatusBadge>
+        </span>
+      }
+      description={STATUS_TEXT[dataset.status]}
+    >
       {error && (
-        <p role="alert" className="error">
+        <p role="alert" className="text-danger text-sm">
           {error}
         </p>
       )}
-
-      {ready ? (
-        <>
-          <Conversation api={api} datasetId={dataset.id} />
-          <details className="about">
-            <summary>About this dataset</summary>
-            <div className="stack">
-              <DatasetDetails dataset={dataset} />
-              {dataset.spec && (
-                <details>
-                  <summary>Approved spec</summary>
-                  <pre className="code">{JSON.stringify(dataset.spec, null, 2)}</pre>
-                </details>
-              )}
-            </div>
-          </details>
-        </>
-      ) : (
-        <>
-          <DatasetDetails dataset={dataset} />
-          {dataset.status === "proposed" && dataset.spec && (
-            <SpecEditor spec={dataset.spec} busy={approving} onApprove={approve} />
-          )}
-        </>
+      {dataset.status === "failed" && (
+        <div className="border-danger-line bg-danger-soft flex gap-3 rounded-lg border px-4 py-3 text-sm">
+          <AlertCircle className="text-danger mt-0.5 size-4 shrink-0" aria-hidden />
+          <div className="whitespace-pre-wrap">{dataset.error ?? "No details were recorded."}</div>
+        </div>
       )}
-    </div>
-  );
-}
-
-function DatasetDetails({ dataset }: { dataset: Dataset }) {
-  const summary = dataset.summary;
-  return (
-    <>
-      <details>
-        <summary>
-          {dataset.files.length} file{dataset.files.length === 1 ? "" : "s"}
-          {dataset.documents > 0 && `, ${dataset.documents} document(s)`}
-        </summary>
-        <ul className="file-list">
-          {dataset.files.map((file) => (
-            <li key={file.stored_as}>
-              {file.name}
-              {file.stored_as !== file.name && <span className="muted"> stored as {file.stored_as}</span>}
-            </li>
-          ))}
-        </ul>
-        {dataset.description && <p className="prewrap">{dataset.description}</p>}
-      </details>
-
-      {summary?.tables && summary.tables.length > 0 && (
-        <section>
-          <h3>Tables</h3>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Table</th>
-                  <th className="num">Rows</th>
-                  <th className="num">Columns</th>
-                  <th>One row is</th>
-                </tr>
-              </thead>
-              <tbody>
-                {summary.tables.map((table) => (
-                  <tr key={table.name}>
-                    <td>
-                      <code>{table.name}</code>
-                    </td>
-                    <td className="num">{table.rows.toLocaleString()}</td>
-                    <td className="num">{table.columns}</td>
-                    <td>{table.row}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      {status.busy && (
+        <div className="flex flex-col gap-3" aria-hidden>
+          <div className="bg-card flex flex-col gap-3 rounded-xl border p-5">
+            <Skeleton className="h-4 w-40" />
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-8 w-full" />
+            <Skeleton className="h-8 w-2/3" />
           </div>
-        </section>
+        </div>
       )}
-
-      <Notes title="Problems to check" tone="warn" items={summary?.problems} />
-      <Notes title="Proposal problems" tone="warn" items={summary?.proposal_problems} />
-      <Notes title="Exclusion rules dropped" tone="info" items={summary?.dropped_rules} />
-      <Notes title="Exact repeats removed" tone="info" items={summary?.deduplicated} />
-    </>
+      {dataset.status === "proposed" && dataset.spec && (
+        <SpecEditor spec={dataset.spec} busy={approving} onApprove={approve} />
+      )}
+      {!status.busy && (
+        <details className="group bg-card rounded-xl border" open={dataset.status === "failed"}>
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium">
+            <ChevronRight className="text-muted-foreground size-4 transition-transform group-open:rotate-90" />
+            Files and build report
+          </summary>
+          <div className="border-t p-4">
+            <DatasetSummary dataset={dataset} showSpec={false} />
+          </div>
+        </details>
+      )}
+    </SetupPage>
   );
 }
 
-function Notes({
-  title,
-  tone,
-  items,
-}: {
-  title: string;
-  tone: "warn" | "info";
-  items: string[] | undefined;
-}) {
-  if (!items?.length) return null;
-  return (
-    <section className={`notes ${tone}`}>
-      <h3>{title}</h3>
-      <ul>
-        {items.map((item) => (
-          <li key={item}>{item}</li>
-        ))}
-      </ul>
-    </section>
-  );
-}

@@ -111,6 +111,7 @@ only generated demo data.
 | **20 Packaging** | Compose, images, CI/CD, demo data | `docker compose up` works on a clean machine. CI is green |
 | **20b–20c Sign-in and operations** (added 2026-11-09) | Login links and sessions (ADR 0025), operator dashboard (ADR 0026) | A browser signs in without pasting a key. The operator sees outcomes, latency, cost, model errors, and failures on `/ops`; members and keys cannot |
 | **21 Finish** | Holdout run, README, diagrams, demo video, eval report | Repo is ready to publish |
+| **22 UI redesign** (added 2026-11-09) | Vercel-style, chat-first web UI with Tailwind + shadcn/ui ([design](design/2026-11-09-web-ui-redesign.md), [steps](design/2026-11-09-web-ui-redesign-plan.md)) | Every current capability kept; screenshots at 1440 and 390 px, light and dark, approved by the user |
 
 Each milestone gets a Vietnamese note in `docs/learning/`: the concept, why this choice, rejected
 options, and likely interview questions. LangGraph notes also explain the internals the framework

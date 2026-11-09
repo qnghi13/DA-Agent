@@ -1,5 +1,10 @@
+import { AlertCircle, RefreshCw, TriangleAlert } from "lucide-react";
 import { lazy, type ReactNode, Suspense, useCallback, useEffect, useState } from "react";
 import { type Api, errorMessage, type VegaLiteSpec } from "./api";
+import { Button } from "./components/ui/button";
+import { Skeleton } from "./components/ui/skeleton";
+import { useDark } from "./hooks/use-dark";
+import { cn } from "./lib/utils";
 import {
   alerts,
   type FailureRow,
@@ -25,25 +30,15 @@ const WINDOWS: { id: Window; label: string }[] = [
   { id: "30d", label: "30 days" },
 ];
 
-// Outcome colours, in GROUPS order, validated adjacent-pair with the dataviz validator against
-// the card surface: answered, abstained, stopped, error, in progress. The light amber sits under
-// 3:1, so every outcome chart has a legend and the outcome table beside it.
+// Outcome colours, in GROUPS order (answered, abstained, stopped, error, in progress), validated
+// adjacent-pair with the dataviz validator against the card surface of each mode (#ffffff,
+// #111111): all gates pass. The light amber sits under 3:1, so the outcome chart has a legend and
+// the outcome table beside it.
 const OUTCOME_COLOURS = {
-  light: ["#0ca30c", "#2a8fbf", "#d99a00", "#d03b3b", "#4744c9"],
-  dark: ["#0ca30c", "#3aa0d0", "#c98500", "#d6363f", "#7270f0"],
+  light: ["#0ca30c", "#2a8fbf", "#d99a00", "#d03b3b", "#6250d6"],
+  dark: ["#0ca30c", "#3aa0d0", "#c98500", "#d6363f", "#9085e9"],
 };
-const SURFACE = { light: "#ffffff", dark: "#1e2230" };
-
-function usePrefersDark(): boolean {
-  const query = window.matchMedia?.("(prefers-color-scheme: dark)");
-  const [dark, setDark] = useState(query?.matches ?? false);
-  useEffect(() => {
-    const update = () => setDark(query.matches);
-    query?.addEventListener("change", update);
-    return () => query?.removeEventListener("change", update);
-  }, [query]);
-  return dark;
-}
+const SURFACE = { light: "#ffffff", dark: "#111111" };
 
 function timeAxis(summary: OpsSummary) {
   const hourly = summary.bucket === "hour";
@@ -156,7 +151,7 @@ export function OpsDashboard({ api }: { api: Api }) {
   const [moreFailures, setMoreFailures] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const dark = usePrefersDark();
+  const dark = useDark();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -194,35 +189,46 @@ export function OpsDashboard({ api }: { api: Api }) {
   }
 
   return (
-    <div className="ops">
-      <div className="ops-head">
-        <h2>Operations</h2>
-        <div className="segmented" role="group" aria-label="Time window">
+    <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-4 py-8 sm:px-6">
+      <header className="flex flex-wrap items-end gap-x-6 gap-y-3">
+        <div className="mr-auto">
+          <h1 className="text-2xl font-semibold tracking-tight">Operations</h1>
+          <p className="text-muted-foreground text-sm" aria-live="polite">
+            {summary
+              ? `Updated ${new Date(summary.generated_at).toLocaleTimeString()}`
+              : "Loading…"}
+            {" · refreshes every 30 s"}
+          </p>
+        </div>
+        <div className="bg-muted inline-flex rounded-lg border p-0.5" role="group" aria-label="Time window">
           {WINDOWS.map((w) => (
             <button
               key={w.id}
               type="button"
               aria-pressed={window_ === w.id}
               onClick={() => setWindow(w.id)}
+              className={cn(
+                "rounded-md px-3 py-1 text-sm transition-colors",
+                window_ === w.id
+                  ? "bg-background text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.06)]"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
             >
               {w.label}
             </button>
           ))}
         </div>
-        <p className="muted small ops-updated" aria-live="polite">
-          {summary ? `Updated ${new Date(summary.generated_at).toLocaleTimeString()}` : "Loading…"}
-          {" · refreshes every 30 s"}
-        </p>
-        <button type="button" className="button-quiet" onClick={() => void load()} disabled={loading}>
-          {loading ? "Refreshing…" : "Refresh now"}
-        </button>
-      </div>
+        <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
+          <RefreshCw className={cn(loading && "animate-spin")} />
+          {loading ? "Refreshing…" : "Refresh"}
+        </Button>
+      </header>
       {error && (
-        <p role="alert" className="error">
+        <p role="alert" className="text-danger text-sm">
           {error}
         </p>
       )}
-      {summary && (
+      {summary ? (
         <Panels
           summary={summary}
           dark={dark}
@@ -230,6 +236,14 @@ export function OpsDashboard({ api }: { api: Api }) {
           moreFailures={moreFailures}
           onLoadOlder={loadOlder}
         />
+      ) : (
+        !error && (
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4" aria-hidden>
+            {Array.from({ length: 8 }, (_, i) => (
+              <Skeleton key={i} className="h-24 rounded-xl" />
+            ))}
+          </div>
+        )
       )}
     </div>
   );
@@ -256,13 +270,23 @@ function Panels({
   return (
     <>
       {found.length > 0 && (
-        <ul className="ops-alerts">
+        <ul className="flex flex-col gap-2">
           {found.map((alert) => (
-            <li key={alert.text} className={`ops-alert ${alert.level}`}>
-              <span className="ops-alert-icon" aria-hidden="true">
-                {alert.level === "critical" ? "!" : "▲"}
-              </span>
-              <span className="visually-hidden">{alert.level}: </span>
+            <li
+              key={alert.text}
+              className={cn(
+                "flex items-center gap-2.5 rounded-lg border px-4 py-2.5 text-sm",
+                alert.level === "critical"
+                  ? "border-danger-line bg-danger-soft"
+                  : "border-warning-line bg-warning-soft",
+              )}
+            >
+              {alert.level === "critical" ? (
+                <AlertCircle className="text-danger size-4 shrink-0" aria-hidden />
+              ) : (
+                <TriangleAlert className="text-warning size-4 shrink-0" aria-hidden />
+              )}
+              <span className="sr-only">{alert.level}: </span>
               {alert.text}
             </li>
           ))}
@@ -270,7 +294,7 @@ function Panels({
       )}
 
       <Section title="Right now">
-        <div className="tiles">
+        <div className={TILES}>
           <Tile label="Queued jobs" value={formatCount(now.queued)} />
           <Tile label="Running jobs" value={formatCount(now.running)} />
           <Tile label="Oldest wait" value={formatDuration(now.oldest_queued_seconds)} />
@@ -288,14 +312,16 @@ function Panels({
       </Section>
 
       <Section title={`Answers, last ${windowLabel}`}>
-        <div className="ops-hero">
-          <div>
-            <p className="hero-figure">{formatPercent(runs.answer_rate)}</p>
-            <p className="muted">
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+          <div className="bg-card flex flex-col justify-center rounded-xl border p-6">
+            <p className="text-5xl font-semibold tracking-tight tabular-nums">
+              {formatPercent(runs.answer_rate)}
+            </p>
+            <p className="text-muted-foreground mt-2 text-sm">
               of {formatCount(finished)} finished runs were answered
             </p>
           </div>
-          <div className="tiles">
+          <div className={TILES}>
             <Tile label="Runs" value={formatCount(runs.total)} />
             <Tile label="Abstained" value={formatPercent(runs.abstain_rate)} />
             <Tile label="Retried" value={formatCount(runs.retried)} />
@@ -314,14 +340,15 @@ function Panels({
         {runs.total === 0 ? (
           <Empty>No runs in this window.</Empty>
         ) : (
-          <div className="ops-split">
+          <div className="grid gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
             <ChartBox spec={outcomeChart(summary, dark)} />
-            <table className="ops-table">
-              <caption className="visually-hidden">Runs by outcome</caption>
+            <div className="self-start overflow-x-auto rounded-xl border">
+            <table className={TABLE}>
+              <caption className="sr-only">Runs by outcome</caption>
               <thead>
                 <tr>
                   <th scope="col">Outcome</th>
-                  <th scope="col" className="num">
+                  <th scope="col" className={NUM}>
                     Runs
                   </th>
                 </tr>
@@ -332,7 +359,7 @@ function Panels({
                   .map(([outcome, count]) => (
                     <tr key={outcome}>
                       <td>{OUTCOME_LABELS[outcome] ?? outcome}</td>
-                      <td className="num">{formatCount(count)}</td>
+                      <td className={NUM}>{formatCount(count)}</td>
                     </tr>
                   ))}
               </tbody>
@@ -343,16 +370,17 @@ function Panels({
                       .map((g) => `${g.group} ${g.count}`)
                       .join(", ")}
                   </td>
-                  <td className="num">{formatCount(runs.total)}</td>
+                  <td className={NUM}>{formatCount(runs.total)}</td>
                 </tr>
               </tfoot>
             </table>
+            </div>
           </div>
         )}
       </Section>
 
       <Section title="Speed">
-        <div className="tiles">
+        <div className={TILES}>
           <Tile label="Queue wait, median" value={formatDuration(latency.queue_wait_p50)} />
           <Tile label="Queue wait, 95th percentile" value={formatDuration(latency.queue_wait_p95)} />
           <Tile label="Run time, median" value={formatDuration(latency.run_p50)} />
@@ -365,35 +393,35 @@ function Panels({
         {summary.models.length === 0 ? (
           <Empty>No model calls in this window.</Empty>
         ) : (
-          <div className="table-scroll">
-            <table className="ops-table">
+          <div className="overflow-x-auto rounded-xl border">
+            <table className={TABLE}>
               <thead>
                 <tr>
                   <th scope="col">Model</th>
-                  <th scope="col" className="num">Calls</th>
-                  <th scope="col" className="num">Failed</th>
-                  <th scope="col" className="num">Median</th>
-                  <th scope="col" className="num">95th pct.</th>
-                  <th scope="col" className="num">Tokens in / out</th>
-                  <th scope="col" className="num">Cached</th>
-                  <th scope="col" className="num">Cost</th>
+                  <th scope="col" className={NUM}>Calls</th>
+                  <th scope="col" className={NUM}>Failed</th>
+                  <th scope="col" className={NUM}>Median</th>
+                  <th scope="col" className={NUM}>95th pct.</th>
+                  <th scope="col" className={NUM}>Tokens in / out</th>
+                  <th scope="col" className={NUM}>Cached</th>
+                  <th scope="col" className={NUM}>Cost</th>
                 </tr>
               </thead>
               <tbody>
                 {summary.models.map((m) => (
                   <tr key={`${m.provider}/${m.model}`}>
                     <td>
-                      <code>{m.model}</code> <span className="muted small">{m.provider}</span>
+                      <code>{m.model}</code> <span className="text-muted-foreground text-xs">{m.provider}</span>
                     </td>
-                    <td className="num">{formatCount(m.calls)}</td>
-                    <td className="num">{formatCount(m.errors)}</td>
-                    <td className="num">{formatDuration(m.latency_p50)}</td>
-                    <td className="num">{formatDuration(m.latency_p95)}</td>
-                    <td className="num">
+                    <td className={NUM}>{formatCount(m.calls)}</td>
+                    <td className={NUM}>{formatCount(m.errors)}</td>
+                    <td className={NUM}>{formatDuration(m.latency_p50)}</td>
+                    <td className={NUM}>{formatDuration(m.latency_p95)}</td>
+                    <td className={NUM}>
                       {formatCount(m.input_tokens)} / {formatCount(m.output_tokens)}
                     </td>
-                    <td className="num">{formatPercent(m.cached_share)}</td>
-                    <td className="num">{formatUsd(m.cost_usd)}</td>
+                    <td className={NUM}>{formatPercent(m.cached_share)}</td>
+                    <td className={NUM}>{formatUsd(m.cost_usd)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -402,8 +430,8 @@ function Panels({
         )}
         {model_errors.total > 0 && (
           <>
-            <h4 className="ops-subhead">Failed calls by kind</h4>
-            <p className="muted small">
+            <h4 className="mb-2 text-sm font-medium">Failed calls by kind</h4>
+            <p className="text-muted-foreground mb-2 text-sm">
               {Object.entries(model_errors.by_kind)
                 .map(([kind, n]) => `${kind.replaceAll("_", " ")}: ${n}`)
                 .join(" · ")}
@@ -414,7 +442,7 @@ function Panels({
       </Section>
 
       <Section title="Cost">
-        <div className="tiles">
+        <div className={TILES}>
           <Tile label="Spend" value={formatUsd(cost.total_usd)} />
           <Tile label="Average answered run" value={formatUsd(cost.per_answered_run_usd)} />
           <Tile label="Default daily budget" value={formatUsd(summary.daily_budget_default_usd)} />
@@ -422,38 +450,40 @@ function Panels({
         {cost.series.length > 0 && (
           <ChartBox spec={barChart(summary, cost.series, "cost_usd", "Spend (USD)", "$.4f")} />
         )}
-        <div className="ops-split even">
+        <div className="grid gap-3 lg:grid-cols-2">
           <div>
-            <h4 className="ops-subhead">Top workspaces</h4>
+            <h4 className="mb-2 text-sm font-medium">Top workspaces</h4>
             {cost.by_workspace.length === 0 ? (
               <Empty>No spending in this window.</Empty>
             ) : (
-              <table className="ops-table">
+              <div className="overflow-x-auto rounded-xl border">
+              <table className={TABLE}>
                 <thead>
                   <tr>
                     <th scope="col">Workspace</th>
-                    <th scope="col" className="num">Runs</th>
-                    <th scope="col" className="num">Spend</th>
+                    <th scope="col" className={NUM}>Runs</th>
+                    <th scope="col" className={NUM}>Spend</th>
                   </tr>
                 </thead>
                 <tbody>
                   {cost.by_workspace.map((w) => (
                     <tr key={w.workspace_id}>
                       <td>{w.name}</td>
-                      <td className="num">{formatCount(w.runs)}</td>
-                      <td className="num">{formatUsd(w.cost_usd)}</td>
+                      <td className={NUM}>{formatCount(w.runs)}</td>
+                      <td className={NUM}>{formatUsd(w.cost_usd)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </div>
           <div>
-            <h4 className="ops-subhead">Today against the daily budget (UTC)</h4>
+            <h4 className="mb-2 text-sm font-medium">Today against the daily budget (UTC)</h4>
             {cost.today.length === 0 ? (
               <Empty>No spending today.</Empty>
             ) : (
-              <ul className="meters">
+              <ul className="flex flex-col gap-4 rounded-xl border p-4">
                 {cost.today.map((w) => (
                   <Meter key={w.workspace_id} name={w.name} spent={w.spent_usd} budget={w.budget_usd} />
                 ))}
@@ -464,7 +494,7 @@ function Panels({
       </Section>
 
       <Section title="Quality signals">
-        <div className="tiles">
+        <div className={TILES}>
           <Tile
             label="Answers that failed a check"
             value={`${formatCount(quality.verify_failed)} of ${formatCount(quality.verify_checks)}`}
@@ -480,13 +510,13 @@ function Panels({
             tone={quality.ingest_failed > 0 ? "warning" : undefined}
           />
         </div>
-        <p className="muted small">
+        <p className="text-muted-foreground text-sm">
           Eval scores are measured offline; see the evaluation report in the repository.
         </p>
       </Section>
 
       <Section title="Sign-ins">
-        <div className="tiles">
+        <div className={TILES}>
           <Tile
             label="Refused keys, links, and sessions"
             value={formatCount(security.auth_failed)}
@@ -503,8 +533,8 @@ function Panels({
         {failures.length === 0 ? (
           <Empty>Nothing has failed. Failed jobs, retries, and runs that stop without an answer appear here.</Empty>
         ) : (
-          <div className="table-scroll">
-            <table className="ops-table failures">
+          <div className="overflow-x-auto rounded-xl border">
+            <table className={TABLE}>
               <thead>
                 <tr>
                   <th scope="col">When (UTC)</th>
@@ -517,24 +547,30 @@ function Panels({
               <tbody>
                 {failures.map((f) => (
                   <tr key={f.id}>
-                    <td className="nowrap">{f.created_at.slice(0, 16).replace("T", " ")}</td>
+                    <td className="whitespace-nowrap">{f.created_at.slice(0, 16).replace("T", " ")}</td>
                     <td>{f.workspace_name}</td>
                     <td>
-                      {f.kind} <code className="small">{f.id.slice(0, 8)}</code>
-                      <div className="muted small">
+                      {f.kind} <code className="text-xs">{f.id.slice(0, 8)}</code>
+                      <div className="text-muted-foreground text-xs">
                         {f.status === "queued" ? "retrying" : f.status}, attempt {f.attempts}
                       </div>
                     </td>
                     <td>
                       {f.stop_reason && <div>{STOP_LABELS[f.stop_reason] ?? f.stop_reason}</div>}
-                      {f.error && <code className="small error-text">{f.error}</code>}
+                      {f.error && <code className="text-danger text-xs break-words">{f.error}</code>}
                     </td>
                     <td>
                       {f.traces.length === 0 ? (
-                        <span className="muted small">–</span>
+                        <span className="text-muted-foreground">–</span>
                       ) : (
                         f.traces.map((t) => (
-                          <a key={t.attempt} href={t.url} target="_blank" rel="noreferrer noopener">
+                          <a
+                            key={t.attempt}
+                            href={t.url}
+                            target="_blank"
+                            rel="noreferrer noopener"
+                            className="mr-2 underline-offset-4 hover:underline"
+                          >
                             Attempt {t.attempt}
                           </a>
                         ))
@@ -547,20 +583,27 @@ function Panels({
           </div>
         )}
         {moreFailures && (
-          <button type="button" className="button-quiet" onClick={onLoadOlder}>
+          <Button variant="outline" size="sm" className="self-start" onClick={onLoadOlder}>
             Show older failures
-          </button>
+          </Button>
         )}
       </Section>
     </>
   );
 }
 
+const TILES = "grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4";
+const TABLE =
+  "w-full border-collapse text-sm [&_td]:border-t [&_td]:px-3 [&_td]:py-2 [&_td]:align-top [&_th]:bg-muted [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_th]:text-xs [&_th]:font-medium [&_th]:text-muted-foreground [&_tfoot_td]:text-muted-foreground";
+const NUM = "text-right font-mono tabular-nums whitespace-nowrap";
+
 function Section({ title, children }: { title: string; children: ReactNode }) {
   const id = `ops-${title.toLowerCase().replace(/[^a-z]+/g, "-")}`;
   return (
-    <section className="ops-section" aria-labelledby={id}>
-      <h3 id={id}>{title}</h3>
+    <section className="flex flex-col gap-3" aria-labelledby={id}>
+      <h2 id={id} className="text-base font-semibold tracking-tight">
+        {title}
+      </h2>
       {children}
     </section>
   );
@@ -576,18 +619,21 @@ function Tile({
   tone?: "critical" | "warning";
 }) {
   return (
-    <div className={tone ? `tile ${tone}` : "tile"}>
-      <p className="tile-value">
-        {tone && (
-          <span className="tile-mark" aria-hidden="true">
-            {tone === "critical" ? "!" : "▲"}
-          </span>
-        )}
-        {value}
-      </p>
-      <p className="tile-label">
+    <div
+      className={cn(
+        "bg-card flex flex-col gap-1 rounded-xl border p-4",
+        tone === "critical" && "border-danger-line",
+        tone === "warning" && "border-warning-line",
+      )}
+    >
+      <p className="text-muted-foreground text-xs">
         {label}
-        {tone && <span className="visually-hidden"> ({tone})</span>}
+        {tone && <span className="sr-only"> ({tone})</span>}
+      </p>
+      <p className="flex items-center gap-1.5 text-2xl font-semibold tracking-tight tabular-nums">
+        {tone === "critical" && <AlertCircle className="text-danger size-4" aria-hidden />}
+        {tone === "warning" && <TriangleAlert className="text-warning size-4" aria-hidden />}
+        {value}
       </p>
     </div>
   );
@@ -595,25 +641,33 @@ function Tile({
 
 function Meter({ name, spent, budget }: { name: string; spent: number; budget: number }) {
   const share = budget > 0 ? spent / budget : 1;
-  const tone = share >= 1 ? "critical" : share >= 0.8 ? "warning" : "";
+  const tone = share >= 1 ? "critical" : share >= 0.8 ? "warning" : null;
   return (
-    <li className={`meter ${tone}`}>
-      <div className="meter-row">
-        <span>{name}</span>
-        <span className="num">
+    <li className="flex flex-col gap-1.5">
+      <div className="flex items-baseline justify-between gap-3 text-sm">
+        <span className="truncate">{name}</span>
+        <span className="text-muted-foreground flex items-center gap-1 font-mono text-xs tabular-nums">
+          {tone === "critical" && <AlertCircle className="text-danger size-3.5" aria-hidden />}
+          {tone === "warning" && <TriangleAlert className="text-warning size-3.5" aria-hidden />}
           {formatUsd(spent)} of {formatUsd(budget)}
           {tone === "critical" && " · limit reached"}
         </span>
       </div>
       <div
-        className="meter-track"
+        className="bg-secondary h-1.5 overflow-hidden rounded-full"
         role="meter"
         aria-label={`${name}: share of today's budget`}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.min(100, Math.round(share * 100))}
       >
-        <div className="meter-fill" style={{ width: `${Math.min(100, share * 100)}%` }} />
+        <div
+          className={cn(
+            "h-full rounded-full",
+            tone === "critical" ? "bg-danger" : tone === "warning" ? "bg-warning" : "bg-foreground",
+          )}
+          style={{ width: `${Math.min(100, share * 100)}%` }}
+        />
       </div>
     </li>
   );
@@ -621,14 +675,20 @@ function Meter({ name, spent, budget }: { name: string; spent: number; budget: n
 
 function ChartBox({ spec }: { spec: VegaLiteSpec }) {
   return (
-    <Suspense fallback={<p className="muted small">Loading chart…</p>}>
-      <Chart spec={spec} />
-    </Suspense>
+    <div className="bg-card rounded-xl border p-4">
+      <Suspense fallback={<Skeleton className="h-40 w-full" />}>
+        <Chart spec={spec} />
+      </Suspense>
+    </div>
   );
 }
 
 function Empty({ children }: { children: ReactNode }) {
-  return <p className="muted ops-empty">{children}</p>;
+  return (
+    <p className="text-muted-foreground rounded-xl border border-dashed px-4 py-6 text-center text-sm">
+      {children}
+    </p>
+  );
 }
 
 function timeAgo(iso: string): string {

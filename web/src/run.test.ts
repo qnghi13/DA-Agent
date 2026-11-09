@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { formatAnswer, initialTrail, reduceTrail, toolLabel } from "./run";
+import {
+  activity,
+  answerSummary,
+  formatAnswer,
+  initialTrail,
+  reduceTrail,
+  toolLabel,
+} from "./run";
 
 const sse = (id: string | undefined, event: string, data: unknown) => ({
   id,
@@ -82,5 +89,52 @@ describe("toolLabel", () => {
   it("names tools in plain words and falls back to the raw name", () => {
     expect(toolLabel("run_sql")).toBe("Queried the data");
     expect(toolLabel("something_new")).toBe("something_new");
+  });
+});
+
+describe("answerSummary", () => {
+  const result = (stop_reason: string, queries = 0) => ({
+    answer: null,
+    stop_reason,
+    steps: [],
+    iterations: 1,
+    error: null,
+    question_for_user: null,
+    queries: Array.from({ length: queries }, () => ({ sql: "SELECT 1", columns: [], rows: [] })),
+  });
+
+  it("says verified only when the graph answered, and counts the queries", () => {
+    expect(answerSummary("succeeded", result("answered", 3))).toEqual({
+      label: "Verified",
+      tone: "success",
+      detail: "3 queries",
+    });
+    expect(answerSummary("succeeded", result("answered", 1)).detail).toBe("1 query");
+  });
+
+  it("marks clarifications, abstentions, and failed jobs", () => {
+    expect(answerSummary("succeeded", result("needs_clarification")).label).toBe("Needs detail");
+    expect(answerSummary("succeeded", result("unverified", 2))).toEqual({
+      label: "No answer",
+      tone: "warning",
+      detail: "2 queries",
+    });
+    expect(answerSummary("failed", null)).toEqual({ label: "Failed", tone: "danger", detail: null });
+  });
+});
+
+describe("activity", () => {
+  it("names what the agent is doing from the latest step", () => {
+    const start = initialTrail();
+    expect(activity(start)).toBe("Planning");
+    const planned = reduceTrail(start, sse("1", "plan", { steps: ["a"] }));
+    expect(activity(planned)).toBe("Reading the data");
+    const queried = reduceTrail(
+      reduceTrail(planned, sse("2", "tool", { tool: "run_sql", ok: true })),
+      sse("3", "tool", { tool: "run_sql", ok: true }),
+    );
+    expect(activity(queried)).toBe("Querying the data · 2 queries");
+    const checked = reduceTrail(queried, sse("4", "verify", { passed: false, problems: [] }));
+    expect(activity(checked)).toBe("Checking the answer");
   });
 });

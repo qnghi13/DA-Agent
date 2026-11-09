@@ -1,6 +1,30 @@
-import { type FormEvent, type KeyboardEvent, useEffect, useRef, useState } from "react";
-import { type Api, errorMessage } from "./api";
-import { RunCard } from "./RunCard";
+import { ArrowUp, CalendarDays, Database, Loader2, X } from "lucide-react";
+import {
+  type FormEvent,
+  type KeyboardEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import { type Api, type Dataset, errorMessage } from "./api";
+import { EvidenceContent } from "./components/chat/evidence";
+import { type Evidence, RunMessage } from "./components/chat/run-message";
+import { DatasetSummary } from "./components/dataset-summary";
+import { Button } from "./components/ui/button";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "./components/ui/sheet";
+import { useMediaQuery } from "./hooks/use-media-query";
+
+const EXAMPLES = [
+  "What are the totals by month?",
+  "Which items appear most often?",
+  "What date range does the data cover?",
+];
+
+type Panel =
+  | { kind: "run"; evidence: Evidence; trigger: HTMLElement | null }
+  | { kind: "dataset"; trigger: HTMLElement | null };
 
 function today(): string {
   const now = new Date();
@@ -8,7 +32,8 @@ function today(): string {
   return local.toISOString().slice(0, 10);
 }
 
-export function Conversation({ api, datasetId }: { api: Api; datasetId: string }) {
+export function Conversation({ api, dataset }: { api: Api; dataset: Dataset }) {
+  const datasetId = dataset.id;
   // Oldest first, as a conversation reads.
   const [runs, setRuns] = useState<string[] | null>(null);
   const [olderBefore, setOlderBefore] = useState<string | null>(null);
@@ -17,8 +42,11 @@ export function Conversation({ api, datasetId }: { api: Api; datasetId: string }
   const [asOf, setAsOf] = useState(today);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [panel, setPanel] = useState<Panel | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const scrollOnNext = useRef(true);
+  const wide = useMediaQuery("(min-width: 1024px)");
 
   useEffect(() => {
     let cancelled = false;
@@ -43,6 +71,14 @@ export function Conversation({ api, datasetId }: { api: Api; datasetId: string }
     if (runs && scrollOnNext.current) endRef.current?.scrollIntoView?.({ block: "end" });
     scrollOnNext.current = true;
   }, [runs]);
+
+  const panelRef = useRef(panel);
+  panelRef.current = panel;
+  const closePanel = useCallback(() => {
+    const trigger = panelRef.current?.trigger;
+    setPanel(null);
+    trigger?.focus();
+  }, []);
 
   async function loadOlder() {
     if (!olderBefore) return;
@@ -83,64 +119,261 @@ export function Conversation({ api, datasetId }: { api: Api; datasetId: string }
     }
   }
 
-  return (
-    <div className="conversation">
-      {runs === null ? (
-        <p className="muted">Loading questions…</p>
-      ) : runs.length === 0 ? (
-        <div className="empty">
-          <p>Ask a question about this data in your own words.</p>
-          <p className="muted small">
-            For example: what was the revenue in June, which product sold the most, or how many
-            orders were cancelled.
-          </p>
-        </div>
-      ) : (
-        <div className="runs">
-          {olderBefore && (
-            <button
-              type="button"
-              className="button-quiet older"
-              disabled={loadingOlder}
-              onClick={loadOlder}
-            >
-              {loadingOlder ? "Loading…" : "Show earlier questions"}
-            </button>
-          )}
-          {runs.map((id) => (
-            <RunCard key={id} api={api} runId={id} />
-          ))}
-        </div>
-      )}
-      <div ref={endRef} />
+  function pickExample(text: string) {
+    setQuestion(text);
+    inputRef.current?.focus();
+  }
 
-      <form className="ask" onSubmit={ask}>
-        <label className="visually-hidden" htmlFor="question">
-          Your question
-        </label>
-        <textarea
-          id="question"
-          rows={2}
-          maxLength={2000}
-          placeholder="Ask a question about this data"
-          value={question}
-          onChange={(event) => setQuestion(event.target.value)}
-          onKeyDown={onKeyDown}
-        />
-        <div className="ask-row">
-          <label className="as-of">
-            As of
-            <input type="date" value={asOf} onChange={(event) => setAsOf(event.target.value)} />
-          </label>
-          <button type="submit" className="primary" disabled={sending || !question.trim()}>
-            {sending ? "Asking…" : "Ask"}
-          </button>
+  const activeRun = panel?.kind === "run" ? panel.evidence.run.id : null;
+  const panelTitle =
+    panel?.kind === "run" ? panel.evidence.run.question : panel ? dataset.name : "";
+  const panelBody =
+    panel?.kind === "run" ? (
+      <EvidenceContent key={panel.evidence.run.id} api={api} evidence={panel.evidence} />
+    ) : panel ? (
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <DatasetSummary dataset={dataset} />
+      </div>
+    ) : null;
+
+  return (
+    <div className="flex h-full min-h-0">
+      <div className="relative flex min-w-0 flex-1 flex-col">
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4 pt-8 pb-8 sm:px-6">
+            {runs === null ? (
+              <div className="flex flex-col gap-3" aria-label="Loading questions">
+                <div className="bg-muted ml-auto h-10 w-2/3 animate-pulse rounded-2xl" />
+                <div className="bg-muted h-20 w-full animate-pulse rounded-xl" />
+              </div>
+            ) : runs.length === 0 ? (
+              <EmptyState name={dataset.name} onExample={pickExample} />
+            ) : (
+              <>
+                {olderBefore && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-muted-foreground self-center"
+                    disabled={loadingOlder}
+                    onClick={loadOlder}
+                  >
+                    {loadingOlder && <Loader2 className="animate-spin" />}
+                    {loadingOlder ? "Loading…" : "Show earlier questions"}
+                  </Button>
+                )}
+                {runs.map((id) => (
+                  <RunMessage
+                    key={id}
+                    api={api}
+                    runId={id}
+                    active={activeRun === id}
+                    onShowWork={(evidence, trigger) =>
+                      activeRun === id
+                        ? closePanel()
+                        : setPanel({ kind: "run", evidence, trigger })
+                    }
+                  />
+                ))}
+              </>
+            )}
+            <div ref={endRef} />
+          </div>
         </div>
+        <Composer
+          inputRef={inputRef}
+          question={question}
+          asOf={asOf}
+          sending={sending}
+          error={error}
+          onQuestion={setQuestion}
+          onAsOf={setAsOf}
+          onKeyDown={onKeyDown}
+          onSubmit={ask}
+          details={
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground h-8 gap-1.5 px-2 text-xs font-normal"
+              aria-pressed={panel?.kind === "dataset"}
+              onClick={(event) =>
+                panel?.kind === "dataset"
+                  ? closePanel()
+                  : setPanel({ kind: "dataset", trigger: event.currentTarget })
+              }
+            >
+              <Database className="size-3.5" />
+              About this data
+            </Button>
+          }
+        />
+      </div>
+
+      {wide ? (
+        panel && (
+          <DesktopPanel title={panelTitle} onClose={closePanel}>
+            {panelBody}
+          </DesktopPanel>
+        )
+      ) : (
+        <Sheet open={panel !== null} onOpenChange={(open) => !open && closePanel()}>
+          <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-full">
+            <SheetHeader className="border-b pr-12">
+              <SheetTitle className="line-clamp-2 text-base">{panelTitle}</SheetTitle>
+              <SheetDescription className="sr-only">
+                {panel?.kind === "run" ? "How the agent reached this answer" : "About this data"}
+              </SheetDescription>
+            </SheetHeader>
+            {panelBody}
+          </SheetContent>
+        </Sheet>
+      )}
+    </div>
+  );
+}
+
+function DesktopPanel({
+  title,
+  onClose,
+  children,
+}: {
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+}) {
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    headingRef.current?.focus();
+  }, [title]);
+  useEffect(() => {
+    const onKey = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape" && !event.defaultPrevented) onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <aside
+      aria-label="Details"
+      className="bg-background animate-in slide-in-from-right-4 fade-in flex w-[min(560px,45vw)] shrink-0 flex-col border-l duration-200"
+    >
+      <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
+        <h2
+          ref={headingRef}
+          tabIndex={-1}
+          className="min-w-0 flex-1 truncate text-sm font-medium outline-none"
+        >
+          {title}
+        </h2>
+        <Button variant="ghost" size="icon" className="size-8" aria-label="Close" onClick={onClose}>
+          <X />
+        </Button>
+      </header>
+      {children}
+    </aside>
+  );
+}
+
+function EmptyState({ name, onExample }: { name: string; onExample: (text: string) => void }) {
+  return (
+    <div className="flex flex-col items-center gap-6 py-16 text-center">
+      <div className="flex flex-col gap-2">
+        <h2 className="text-2xl font-semibold tracking-tight">Ask {name} anything</h2>
+        <p className="text-muted-foreground mx-auto max-w-md text-[15px] text-balance">
+          Ask in your own words. Every answer comes with the queries behind it, checked against
+          the data.
+        </p>
+      </div>
+      <div className="flex flex-wrap justify-center gap-2">
+        {EXAMPLES.map((example) => (
+          <button
+            key={example}
+            type="button"
+            onClick={() => onExample(example)}
+            className="hover:bg-accent focus-visible:ring-ring/50 rounded-full border px-3.5 py-1.5 text-sm transition-colors outline-none focus-visible:ring-[3px]"
+          >
+            {example}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Composer({
+  inputRef,
+  question,
+  asOf,
+  sending,
+  error,
+  onQuestion,
+  onAsOf,
+  onKeyDown,
+  onSubmit,
+  details,
+}: {
+  details: ReactNode;
+  inputRef: React.RefObject<HTMLTextAreaElement | null>;
+  question: string;
+  asOf: string;
+  sending: boolean;
+  error: string | null;
+  onQuestion: (text: string) => void;
+  onAsOf: (date: string) => void;
+  onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
+  onSubmit: (event: FormEvent) => void;
+}) {
+  return (
+    <div className="bg-background/80 shrink-0 px-4 pb-4 backdrop-blur sm:px-6">
+      <form onSubmit={onSubmit} className="@container mx-auto w-full max-w-3xl">
         {error && (
-          <p role="alert" className="error">
+          <p role="alert" className="text-danger mb-2 text-sm">
             {error}
           </p>
         )}
+        <div className="bg-card focus-within:border-ring/60 focus-within:ring-ring/20 rounded-2xl border shadow-[0_2px_12px_rgba(0,0,0,0.05)] transition-shadow focus-within:ring-[3px]">
+          <label className="sr-only" htmlFor="question">
+            Your question
+          </label>
+          <textarea
+            ref={inputRef}
+            id="question"
+            rows={1}
+            maxLength={2000}
+            placeholder="Ask a question about this data…"
+            value={question}
+            onChange={(event) => onQuestion(event.target.value)}
+            onKeyDown={onKeyDown}
+            className="placeholder:text-muted-foreground block max-h-48 min-h-[52px] w-full resize-none bg-transparent px-4 pt-3.5 pb-1 text-[15px] outline-none field-sizing-content"
+          />
+          <div className="flex items-center gap-2 px-2.5 pb-2.5">
+            <label className="text-muted-foreground hover:bg-accent flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs whitespace-nowrap">
+              <CalendarDays className="size-3.5" aria-hidden />
+              <span>As of</span>
+              <input
+                type="date"
+                value={asOf}
+                onChange={(event) => onAsOf(event.target.value)}
+                className="text-foreground bg-transparent font-mono text-xs outline-none dark:[color-scheme:dark]"
+              />
+            </label>
+            {details}
+            <span className="text-muted-foreground ml-auto hidden text-xs whitespace-nowrap @2xl:inline">
+              Enter to send · Shift+Enter for a new line
+            </span>
+            <Button
+              type="submit"
+              size="icon"
+              className="ml-auto size-8 shrink-0 rounded-full @2xl:ml-0"
+              disabled={sending || !question.trim()}
+              aria-label="Ask"
+            >
+              {sending ? <Loader2 className="animate-spin" /> : <ArrowUp />}
+            </Button>
+          </div>
+        </div>
       </form>
     </div>
   );

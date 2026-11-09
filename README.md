@@ -8,6 +8,19 @@ that produced them.
 > HTTP API, web UI, operator dashboard, and Docker Compose packaging work and are tested. It has not
 > run in production.
 
+![Asking a question: the answer, its chart, and the SQL behind it](docs/images/chat.png)
+
+<table>
+  <tr>
+    <td><img src="docs/images/review-spec.png" alt="Reviewing the proposed spec for an upload" /></td>
+    <td><img src="docs/images/operations.png" alt="The operator dashboard in dark mode" /></td>
+  </tr>
+  <tr>
+    <td>Review how uploaded files will be read before any question</td>
+    <td>The operator dashboard: queue, outcomes, latency, model errors, cost</td>
+  </tr>
+</table>
+
 ## Quick start
 
 Requires Docker Engine 26 or later with the Compose plugin, and a [Groq](https://console.groq.com)
@@ -168,7 +181,9 @@ reference is at `/docs`.
 
 ## Running the web UI
 
-The UI needs Node 22. In development Vite proxies `/v1` to the API, so both share one origin.
+The UI needs Node 22: React, Tailwind CSS, and shadcn/ui components
+([ADR 0027](docs/adr/0027-tailwind-and-shadcn-ui.md)). In development Vite proxies `/v1` to the
+API, so both share one origin.
 Set `DA_AGENT_API_URL` if the API is not on `http://127.0.0.1:8000`.
 
 ```bash

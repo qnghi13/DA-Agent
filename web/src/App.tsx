@@ -1,8 +1,8 @@
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { KeyRound, Loader2 } from "lucide-react";
+import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Api,
   ApiError,
-  createLoginLink,
   errorMessage,
   fetchMe,
   redeemLink,
@@ -10,6 +10,14 @@ import {
   signOut,
 } from "./api";
 import { type Me, type StartError, sessionStarter, viewFor } from "./auth";
+import { AccountMenu } from "./components/account-menu";
+import { Logo } from "./components/logo";
+import { ThemeToggle } from "./components/theme-toggle";
+import { Slash, TopBar } from "./components/top-bar";
+import { Button } from "./components/ui/button";
+import { Input } from "./components/ui/input";
+import { Label } from "./components/ui/label";
+import { Separator } from "./components/ui/separator";
 import { OpsDashboard } from "./OpsDashboard";
 import { Workspace } from "./Workspace";
 
@@ -65,39 +73,67 @@ export function App() {
     }
   }
 
-  return (
-    <div className="shell">
-      <header className="topbar">
-        <h1>DA-Agent</h1>
-        {state.kind === "signed-in" && (
-          <div className="topbar-actions">
-            <span className="muted">
-              {state.me.role === "operator" ? "Operator" : state.me.workspace_name}
-            </span>
-            <InviteButton role={state.me.role} />
-            <button type="button" className="link" onClick={leave}>
-              Sign out
-            </button>
-          </div>
-        )}
-      </header>
-      {state.kind === "loading" && <p className="muted">Loading…</p>}
-      {state.kind === "signed-out" && (
-        <SignIn
-          notice={state.notice}
-          onSignedIn={(me) => setState({ kind: "signed-in", me })}
+  const actions =
+    state.kind === "signed-in" ? (
+      <>
+        <ThemeToggle />
+        <AccountMenu me={state.me} onSignOut={leave} />
+      </>
+    ) : (
+      <ThemeToggle />
+    );
+
+  if (state.kind === "loading") {
+    return (
+      <div className="grid h-dvh place-items-center">
+        <Loader2 className="text-muted-foreground size-5 animate-spin" aria-label="Loading" />
+      </div>
+    );
+  }
+  if (state.kind === "signed-out") {
+    return (
+      <SignIn
+        notice={state.notice}
+        actions={actions}
+        onSignedIn={(me) => setState({ kind: "signed-in", me })}
+      />
+    );
+  }
+  if (viewFor(state.me) === "ops") {
+    return (
+      <div className="flex min-h-dvh flex-col">
+        <TopBar
+          left={
+            <>
+              <Logo />
+              <Slash />
+              <span className="truncate text-sm font-medium">Operations</span>
+            </>
+          }
+          right={actions}
         />
-      )}
-      {state.kind === "signed-in" &&
-        (viewFor(state.me) === "ops" ? <OpsDashboard api={api} /> : <Workspace api={api} />)}
-    </div>
-  );
+        <main className="flex-1">
+          <OpsDashboard api={api} />
+        </main>
+      </div>
+    );
+  }
+  return <Workspace api={api} actions={actions} workspaceName={state.me.workspace_name} />;
 }
 
-function SignIn({ notice, onSignedIn }: { notice: string | null; onSignedIn: (me: Me) => void }) {
+function SignIn({
+  notice,
+  actions,
+  onSignedIn,
+}: {
+  notice: string | null;
+  actions: ReactNode;
+  onSignedIn: (me: Me) => void;
+}) {
   const [key, setKey] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
+  const [withKey, setWithKey] = useState(false);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -117,103 +153,72 @@ function SignIn({ notice, onSignedIn }: { notice: string | null; onSignedIn: (me
   }
 
   return (
-    <section className="sign-in" aria-labelledby="sign-in-title">
-      <h2 id="sign-in-title">Sign in</h2>
-      {notice && (
-        <p role="status" className="notice">
-          {notice}
-        </p>
-      )}
-      <p>
-        Open the sign-in link your operator or a teammate sent you. Links work once, for 15
-        minutes.
-      </p>
-      <details>
-        <summary>Sign in with an API key instead</summary>
-        <form className="row-form" onSubmit={submit}>
-          <label htmlFor="api-key">Workspace API key</label>
-          <input
-            id="api-key"
-            type="password"
-            autoComplete="off"
-            placeholder="dak_…"
-            value={key}
-            onChange={(event) => setKey(event.target.value)}
-          />
-          <button type="submit" className="primary" disabled={!key.trim() || checking}>
-            {checking ? "Checking…" : "Sign in"}
-          </button>
-          {error && (
-            <p role="alert" className="error full">
-              {error}
+    <div className="bg-muted/40 relative flex min-h-dvh flex-col items-center justify-center px-4 py-12">
+      <div className="absolute top-3 right-3">{actions}</div>
+      <main className="w-full max-w-sm">
+        <div className="mb-8 flex justify-center">
+          <Logo className="text-lg" />
+        </div>
+        <section
+          className="bg-card rounded-xl border p-6 shadow-[0_1px_2px_rgba(0,0,0,0.04)]"
+          aria-labelledby="sign-in-title"
+        >
+          <h1 id="sign-in-title" className="text-xl font-semibold tracking-tight">
+            Sign in
+          </h1>
+          <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
+            Open the sign-in link your operator or a teammate sent you. Links work once, for 15
+            minutes.
+          </p>
+          {notice && (
+            <p
+              role="status"
+              className="border-warning-line bg-warning-soft text-warning mt-4 rounded-md border px-3 py-2 text-sm"
+            >
+              {notice}
             </p>
           )}
-        </form>
-        <p className="muted small">This browser keeps a session, not the key.</p>
-      </details>
-    </section>
-  );
-}
-
-function InviteButton({ role }: { role: Me["role"] }) {
-  const [link, setLink] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-
-  async function create() {
-    setError(null);
-    setCopied(false);
-    try {
-      setLink((await createLoginLink()).url);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    }
-  }
-
-  async function copy() {
-    if (!link) return;
-    try {
-      await navigator.clipboard.writeText(link);
-      setCopied(true);
-    } catch {
-      setCopied(false);
-    }
-  }
-
-  const label = role === "operator" ? "Invite an operator" : "Invite or add a device";
-  return (
-    <div className="invite">
-      <button type="button" className="link" onClick={create}>
-        {label}
-      </button>
-      {(link || error) && (
-        <div className="invite-panel" role="dialog" aria-label="Sign-in link">
-          {error ? (
-            <>
-              <p className="error">{error}</p>
-              <button type="button" className="link" onClick={() => setError(null)}>
-                Close
-              </button>
-            </>
-          ) : (
-            <>
-              <p className="small">
-                Anyone who opens this link within 15 minutes signs in to{" "}
-                {role === "operator" ? "the operator dashboard" : "this workspace"}. It works once.
-              </p>
-              <input readOnly value={link ?? ""} aria-label="Sign-in link" onFocus={(e) => e.target.select()} />
-              <div className="invite-actions">
-                <button type="button" className="primary" onClick={copy}>
-                  {copied ? "Copied" : "Copy link"}
-                </button>
-                <button type="button" className="link" onClick={() => setLink(null)}>
-                  Close
-                </button>
+          <Separator className="my-5" />
+          {withKey ? (
+            <form className="grid gap-3" onSubmit={submit}>
+              <div className="grid gap-1.5">
+                <Label htmlFor="api-key">Workspace API key</Label>
+                <Input
+                  id="api-key"
+                  type="password"
+                  autoComplete="off"
+                  autoFocus
+                  placeholder="dak_…"
+                  className="font-mono"
+                  value={key}
+                  onChange={(event) => setKey(event.target.value)}
+                />
               </div>
-            </>
+              {error && (
+                <p role="alert" className="text-danger text-sm">
+                  {error}
+                </p>
+              )}
+              <Button type="submit" disabled={!key.trim() || checking}>
+                {checking && <Loader2 className="animate-spin" />}
+                {checking ? "Checking…" : "Sign in"}
+              </Button>
+              <p className="text-muted-foreground text-xs">
+                This browser keeps a session, not the key.
+              </p>
+            </form>
+          ) : (
+            <Button variant="outline" className="w-full" onClick={() => setWithKey(true)}>
+              <KeyRound />
+              Sign in with an API key
+            </Button>
           )}
-        </div>
-      )}
+        </section>
+        <p className="text-muted-foreground mt-6 text-center text-xs text-balance">
+          Ask questions about your spreadsheets, with answers you can trace to the query.
+        </p>
+      </main>
     </div>
   );
 }
+

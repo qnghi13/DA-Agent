@@ -1,7 +1,9 @@
 // Run progress and answers: turning SSE events into the evidence trail, and answers into text.
 // Event shapes come from node_events in src/da_agent/agent/graph.py.
 
+import type { RunResult } from "./api";
 import type { SseEvent } from "./sse";
+import type { Tone } from "./status";
 
 export type TrailStep =
   | { id: string; kind: "plan"; steps: string[] }
@@ -85,6 +87,41 @@ export function reduceTrail(trail: Trail, event: SseEvent): Trail {
 
 function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.map(String) : [];
+}
+
+/** What a running agent is doing now, in a few words, from its latest step. */
+export function activity(trail: Trail): string {
+  const last = trail.steps.at(-1);
+  if (!last) return "Planning";
+  if (last.kind === "verify") return "Checking the answer";
+  const queries = trail.steps.filter((step) => step.kind === "tool" && step.tool === "run_sql");
+  if (last.kind === "tool" && queries.length > 0) {
+    return `Querying the data · ${plural(queries.length, "query", "queries")}`;
+  }
+  return "Reading the data";
+}
+
+/**
+ * The line a finished answer collapses to. "Verified" only when the graph answered, which it does
+ * only after verification passes. Runs carry no duration or cost for members, so it shows neither.
+ */
+export function answerSummary(
+  status: "queued" | "running" | "succeeded" | "failed",
+  result: RunResult | null,
+): { label: string; tone: Tone; detail: string | null } {
+  if (status === "failed" || !result) return { label: "Failed", tone: "danger", detail: null };
+  const detail = result.queries.length
+    ? plural(result.queries.length, "query", "queries")
+    : null;
+  if (result.stop_reason === "answered") return { label: "Verified", tone: "success", detail };
+  if (result.stop_reason === "needs_clarification") {
+    return { label: "Needs detail", tone: "warning", detail };
+  }
+  return { label: "No answer", tone: "warning", detail };
+}
+
+function plural(count: number, one: string, many: string): string {
+  return `${count} ${count === 1 ? one : many}`;
 }
 
 const TOOL_LABELS: Record<string, string> = {

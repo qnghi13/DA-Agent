@@ -1,0 +1,162 @@
+/*
+ * DA-Agent design tokens: Vercel-style monochrome. Colour carries status only: green verified or
+ * ready, blue running, amber needs review, red failed. Names follow shadcn/ui so its components
+ * pick them up unchanged.
+ */
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --radius: 0.5rem;
+  --background: #ffffff;
+  --foreground: #0a0a0a;
+  --card: #ffffff;
+  --card-foreground: #0a0a0a;
+  --popover: #ffffff;
+  --popover-foreground: #0a0a0a;
+  --primary: #0a0a0a;
+  --primary-foreground: #ffffff;
+  --secondary: #f5f5f5;
+  --secondary-foreground: #0a0a0a;
+  --muted: #fafafa;
+  --muted-foreground: #666666;
+  --accent: #f2f2f2;
+  --accent-foreground: #0a0a0a;
+  --destructive: #cb2a2f;
+  --border: #ebebeb;
+  --input: #e3e3e3;
+  --ring: #8f8f8f;
+  --sidebar: #fafafa;
+  --sidebar-foreground: #0a0a0a;
+  --sidebar-border: #ebebeb;
+  --sidebar-accent: #ffffff;
+  /* Status: text colours pass 4.5:1 on their own soft background and on the page. */
+  --success: #107d32;
+  --success-soft: #effaf2;
+  --success-line: #c6ebd1;
+  --info: #0062d1;
+  --info-soft: #f0f6ff;
+  --info-line: #cde1fb;
+  --warning: #9a5000;
+  --warning-soft: #fff7e8;
+  --warning-line: #f6dfb4;
+  --danger: #c4282d;
+  --danger-soft: #fff0f0;
+  --danger-line: #f8cfd0;
+  --chart-ink: #0a0a0a;
+  --chart-axis: #8f8f8f;
+  --chart-grid: #ebebeb;
+  --chart-accent: #0062d1;
+  color-scheme: light;
+}
+
+.dark {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+  --card: #111111;
+  --card-foreground: #ededed;
+  --popover: #111111;
+  --popover-foreground: #ededed;
+  --primary: #ededed;
+  --primary-foreground: #0a0a0a;
+  --secondary: #1a1a1a;
+  --secondary-foreground: #ededed;
+  --muted: #111111;
+  --muted-foreground: #a1a1a1;
+  --accent: #1f1f1f;
+  --accent-foreground: #ededed;
+  --destructive: #ff6166;
+  --border: #262626;
+  --input: #2e2e2e;
+  --ring: #6f6f6f;
+  --sidebar: #0a0a0a;
+  --sidebar-foreground: #ededed;
+  --sidebar-border: #262626;
+  --sidebar-accent: #161616;
+  --success: #4cc26b;
+  --success-soft: #0d2215;
+  --success-line: #1b4428;
+  --info: #52a8ff;
+  --info-soft: #0b1a2e;
+  --info-line: #173a63;
+  --warning: #f5a623;
+  --warning-soft: #251a07;
+  --warning-line: #4d3610;
+  --danger: #ff6166;
+  --danger-soft: #2a1011;
+  --danger-line: #572023;
+  --chart-ink: #ededed;
+  --chart-axis: #8f8f8f;
+  --chart-grid: #262626;
+  --chart-accent: #52a8ff;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", ui-monospace, Menlo, monospace;
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-success-line: var(--success-line);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-info-line: var(--info-line);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-warning-line: var(--warning-line);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-danger-line: var(--danger-line);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-feature-settings: "ss01";
+  }
+  code,
+  pre,
+  kbd {
+    @apply font-mono;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -86,6 +86,8 @@ export const BUSY_STATUSES: readonly DatasetStatus[] = ["uploaded", "building"];
 
 // Extensions the API accepts (src/da_agent/ingestion/raw.py).
 export const UPLOAD_ACCEPT = ".csv,.tsv,.xlsx,.xlsm,.sqlite,.sqlite3,.db,.md,.txt";
+/** The API's defaults (ApiSettings.max_files and max_file_bytes); it enforces them. */
+export const UPLOAD_LIMITS = { files: 50, bytesPerFile: 200 * 1024 * 1024 };
 
 async function send<T>(path: string, init: RequestInit = {}): Promise<T> {
   // The session cookie goes with every same-origin request; the browser adds Origin to POSTs,

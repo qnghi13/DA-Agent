@@ -2,17 +2,19 @@
 
 Loaded into every session, so keep it under 60 lines. Replace stale content instead of appending.
 **Last updated:** 2026-11-09 (Day 21)
-**Phase:** Day 21, finish ([plan §6](plan.md#6-roadmap)).
+**Phase:** Day 22, UI redesign ([plan §6](plan.md#6-roadmap)), added 2026-11-09.
 
 ## Next step
 
-1. Day 21 done so far: `--holdout` option (run, prepare, scorer; sample of 150, 25 per shop,
-   from question ids only), runner fails when no shop opens. **Final runs (graph, 20b):
-   `regression` 93/40/17 +53 $0.378; holdout 90/46/14 +44 $0.304, ran once; do not rerun.**
-   Holdout datasets cost $0.016. Report in `docs/eval/README.md`; README has diagrams (Mermaid)
-   and results; architecture.md matches the code.
-2. Left: demo video (the user records it; Claude can script it), image publishing (CD),
-   first CI run on GitHub, the pre-publication checks below.
+1. Day 21 done (commit 354a2d3 and later): holdout once (+44, 150 questions; dev regression +53),
+   `docs/eval/`, README diagrams, third-party skills untracked. Holdout is spent: never rerun.
+2. Day 22 UI redesign: steps 1–8 done in code (ADR 0027, note 10, `docs/images/`). Checked in
+   Chromium at 1440/390, light/dark against Compose + Vite dev: sign-in (link, key, spent link),
+   invite, sign-out, upload → review → approve → ready, chat live → summary, evidence panel
+   (Esc returns focus, report frame still sandboxed), `/ops`. Chart palettes validated with
+   `dataviz` on #ffffff/#111111. Bundle 140 kB gzip (was 83). Open: `deploy/smoke.sh` on a
+   rebuilt `web` image; `/ops` bar charts with a single bucket fill the width (data, not style).
+3. Left from Day 21: demo video (user), image publishing (CD), first CI run on GitHub.
 ## Baselines (`bootstrap`, biz_123, 30 questions; correct / wrong / abstained, score)
 
 - A −5; B sandbox −11; **B4 dedupe +13**. `eval/reports/baseline-*`; dev answers for patterns only.
