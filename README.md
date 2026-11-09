@@ -48,6 +48,11 @@ and query results go to the model provider. Sandboxes are containers (runc) with
 access, which is not a hard boundary against kernel exploits. See the
 [threat model](docs/threat-model.md).
 
+To run a released version without building, set `DA_AGENT_IMAGE=ghcr.io/qnghi13/da-agent` and
+`DA_AGENT_TAG` (for example `0.1.0`) in `.env`, then `docker compose pull` and
+`docker compose up -d --no-build`. Releases are published from version tags
+([ADR 0028](docs/adr/0028-release-images-to-ghcr.md)).
+
 `deploy/smoke.sh` checks a running stack without calling a model. `docker compose down` stops it;
 add `-v` to delete all data.
 

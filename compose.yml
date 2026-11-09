@@ -1,11 +1,12 @@
 # DA-Agent, self-hosted. Copy .env.example to .env, fill it in, then: docker compose up -d --build
+# Or run released images instead of building: set DA_AGENT_IMAGE and DA_AGENT_TAG (.env.example).
 # The UI is at http://127.0.0.1:8080. Create a workspace key with:
 #   docker compose exec api python -m da_agent.admin create-workspace "My shop"
 # Design: docs/adr/0024-runner-service.md. Only the runner mounts the Docker socket.
 name: da-agent
 
 x-app: &app
-  image: da-agent:compose
+  image: ${DA_AGENT_IMAGE:-da-agent}:${DA_AGENT_TAG:-compose}
   build:
     context: .
     dockerfile: deploy/app.Dockerfile
@@ -35,7 +36,7 @@ services:
 
   # Builds the sandbox image the runner starts, then exits.
   sandbox:
-    image: da-agent-sandbox:compose
+    image: ${DA_AGENT_IMAGE:-da-agent}-sandbox:${DA_AGENT_TAG:-compose}
     build:
       context: .
       dockerfile: sandbox/Dockerfile
@@ -44,7 +45,7 @@ services:
     restart: "no"
 
   runner:
-    image: da-agent-runner:compose
+    image: ${DA_AGENT_IMAGE:-da-agent}-runner:${DA_AGENT_TAG:-compose}
     build:
       context: .
       dockerfile: deploy/app.Dockerfile
@@ -55,7 +56,7 @@ services:
     environment:
       DA_AGENT_DATA_DIR: /data
       DA_AGENT_DATA_VOLUME: da-agent-data
-      DA_AGENT_SANDBOX_IMAGE: da-agent-sandbox:compose
+      DA_AGENT_SANDBOX_IMAGE: ${DA_AGENT_IMAGE:-da-agent}-sandbox:${DA_AGENT_TAG:-compose}
       DA_AGENT_SANDBOX_USER: "10001:10001"
       DA_AGENT_RUNNER_TOKEN: ${DA_AGENT_RUNNER_TOKEN:?set DA_AGENT_RUNNER_TOKEN in .env}
     volumes:
@@ -116,7 +117,7 @@ services:
         condition: service_healthy
 
   web:
-    image: da-agent-web:compose
+    image: ${DA_AGENT_IMAGE:-da-agent}-web:${DA_AGENT_TAG:-compose}
     build: web
     restart: unless-stopped
     ports:

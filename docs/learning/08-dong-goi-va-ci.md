@@ -87,3 +87,15 @@ theo lịch, có ngân sách.
 **Secret trong Compose để ở đâu?**
 Trong `.env` không commit, chỉ truyền đúng biến cho đúng service: Runner không nhận key của model, API
 không nhận key của model. `${VAR:?message}` làm Compose dừng với thông báo rõ ràng khi thiếu secret.
+
+**CD ở dự án không có server thì là gì?**
+Là phát hành thứ người khác chạy được ngay. Đẩy tag `v0.1.0` thì workflow release chạy lại toàn bộ
+CI, build bốn image và đẩy lên GHCR, rồi kéo đúng các image vừa đẩy về chạy smoke test
+([ADR 0028](../adr/0028-release-images-to-ghcr.md)). Kiểm tra image "như đã phát hành" chứ không
+phải "như đã build", vì lỗi tên image hoặc thiếu file chỉ lộ ra ở bước kéo về.
+
+**Giảm rủi ro chuỗi cung ứng trong pipeline phát hành thế nào?**
+Ít thành phần bên thứ ba chạm vào token nhất có thể: ở đây chỉ dùng Docker CLI có sẵn trên runner,
+token `GITHUB_TOKEN` chỉ có quyền `packages: write` trong đúng job publish, action còn lại được pin
+theo SHA. Mỗi image kèm provenance (SLSA) và SBOM để biết nó được build từ commit nào, có gói gì.
+Bước tiếp theo nếu cần là ký image bằng cosign và kiểm tra chữ ký khi kéo về.

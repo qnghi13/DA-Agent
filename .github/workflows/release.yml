@@ -1,0 +1,105 @@
+# Publishes the four images to GHCR when a version tag is pushed (ADR 0028):
+#   git tag v0.1.0 && git push origin v0.1.0
+# CI runs first; the last job pulls the published images and runs the Compose smoke test on them.
+# Only Docker's own CLI is used, so no third-party action sees the registry token.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: da-agent
+            context: .
+            file: deploy/app.Dockerfile
+            target: app
+          - name: da-agent-runner
+            context: .
+            file: deploy/app.Dockerfile
+            target: runner
+          - name: da-agent-sandbox
+            context: .
+            file: sandbox/Dockerfile
+            target: ""
+          - name: da-agent-web
+            context: web
+            file: web/Dockerfile
+            target: ""
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - name: Sign in to GHCR
+        run: echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # The default builder cannot attach provenance or an SBOM; a container builder can.
+      - run: docker buildx create --use --driver docker-container
+      - name: Build and push
+        env:
+          NAME: ${{ matrix.name }}
+          CONTEXT: ${{ matrix.context }}
+          FILE: ${{ matrix.file }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/$NAME"
+          version="${GITHUB_REF_NAME#v}"
+          tags=(--tag "$image:$version")
+          # Pre-releases such as v0.2.0-rc.1 never move latest.
+          [[ "$version" == *-* ]] || tags+=(--tag "$image:latest")
+          docker buildx build --push --platform linux/amd64 \
+            --provenance=mode=max --sbom=true \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.version=$version" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            ${TARGET:+--target "$TARGET"} --file "$FILE" "${tags[@]}" "$CONTEXT"
+
+  verify:
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      # New GHCR packages are private until made public, so pull with the job's token.
+      - name: Sign in to GHCR
+        run: echo "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Secrets and image names for this run only
+        run: |
+          {
+            echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)"
+            echo "DA_AGENT_RUNNER_TOKEN=$(openssl rand -hex 32)"
+            echo "GROQ_API_KEY=not-used-by-the-smoke-test"
+            echo "DA_AGENT_IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/da-agent"
+            echo "DA_AGENT_TAG=${GITHUB_REF_NAME#v}"
+          } > .env
+      - run: docker compose pull
+      - run: docker compose up -d --no-build --wait
+      - run: deploy/smoke.sh
+      - if: failure()
+        run: docker compose logs --no-color
+      - if: always()
+        run: docker compose down -v

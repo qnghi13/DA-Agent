@@ -1,20 +1,23 @@
 # Progress
 
 Loaded into every session, so keep it under 60 lines. Replace stale content instead of appending.
-**Last updated:** 2026-11-09 (Day 21)
-**Phase:** Day 22, UI redesign ([plan §6](plan.md#6-roadmap)), added 2026-11-09.
+**Last updated:** 2026-11-10 (Day 22 committed, 3249037)
+**Phase:** finishing: CI and release on GitHub, demo video ([plan §6](plan.md#6-roadmap)).
 
 ## Next step
 
-1. Day 21 done (commit 354a2d3 and later): holdout once (+44, 150 questions; dev regression +53),
-   `docs/eval/`, README diagrams, third-party skills untracked. Holdout is spent: never rerun.
-2. Day 22 UI redesign: steps 1–8 done in code (ADR 0027, note 10, `docs/images/`). Checked in
-   Chromium at 1440/390, light/dark against Compose + Vite dev: sign-in (link, key, spent link),
-   invite, sign-out, upload → review → approve → ready, chat live → summary, evidence panel
-   (Esc returns focus, report frame still sandboxed), `/ops`. Chart palettes validated with
-   `dataviz` on #ffffff/#111111. Bundle 140 kB gzip (was 83). Open: `deploy/smoke.sh` on a
-   rebuilt `web` image; `/ops` bar charts with a single bucket fill the width (data, not style).
-3. Left from Day 21: demo video (user), image publishing (CD), first CI run on GitHub.
+1. Days 21–22 done: holdout once (+44; never rerun), `docs/eval/`, README diagrams; UI redesign
+   (ADR 0027, note 10, `docs/images/`), smoke passes on the rebuilt `web` image. `/ops` bar charts
+   with one bucket fill the width (data, not style).
+2. CD (ADR 0028): tag `vX.Y.Z` → `release.yml` runs CI, pushes 4 images to GHCR with provenance
+   and SBOM, then smoke-tests the pulled images. `compose.yml` reads `DA_AGENT_IMAGE`/`_TAG`;
+   checked locally with GHCR-named images (smoke ok). Not yet run on GitHub.
+3. User: push `main` (first CI run on GitHub), then tag `v0.1.0`; make the GHCR packages public
+   once; demo video.
+4. Later (optimisation, after finishing): run 97d7bc1f asked about a product not in the data
+   ("trà đá"); the plan guessed `product_id='P06'` (Bánh flan) from the per-column value lists, no
+   join by name, and verify passed (the number came from a query). Options: verify check that
+   filter literals come from the question or a query result; prompt rule; then `bootstrap`.
 ## Baselines (`bootstrap`, biz_123, 30 questions; correct / wrong / abstained, score)
 
 - A −5; B sandbox −11; **B4 dedupe +13**. `eval/reports/baseline-*`; dev answers for patterns only.

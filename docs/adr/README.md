@@ -32,3 +32,4 @@ decision, add a new ADR and mark the old one as superseded.
 | [0025](0025-browser-sessions-and-login-links.md) | Browsers sign in with one-time links and keep a cookie session; keys stay for scripts | Accepted |
 | [0026](0026-operator-dashboard.md) | An operator dashboard in the web UI, built on Postgres aggregates | Accepted |
 | [0027](0027-tailwind-and-shadcn-ui.md) | Tailwind CSS and shadcn/ui for the web UI | Accepted |
+| [0028](0028-release-images-to-ghcr.md) | Version tags publish the images to GHCR, checked by a smoke test on the published images | Accepted |
