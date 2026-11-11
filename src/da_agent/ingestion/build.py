@@ -15,7 +15,7 @@ import duckdb
 from pydantic import BaseModel, Field
 
 from da_agent.ingestion.raw import slug
-from da_agent.ingestion.report import IngestReport, TableReport
+from da_agent.ingestion.report import IngestReport, RowShape, TableReport
 from da_agent.ingestion.spec import (
     META_COLUMNS,
     SOURCE_NAME,
@@ -33,6 +33,7 @@ from da_agent.ingestion.sqltext import (
     q,
     shape_sql,
     signature_sql,
+    subtotal_rows_sql,
 )
 
 CLEAN_DATABASE = "dataset.duckdb"
@@ -57,6 +58,11 @@ VI_TEXT_DATE = r"^(\d{1,2})\s+(thg|tháng)\s*(\d{1,2}),?\s+(\d{4})$"
 # A rare shape counts as subtotals when at least this share of its rows, and at least two, equal
 # the sum of the rows above them.
 SUBTOTAL_SHARE = 0.5
+# Rows of such a shape that equal the sum of at least this many record values above them are
+# proven subtotals, and code excludes them whatever the spec's rules say (ADR 0029). One value is
+# not enough: a sale may repeat the amount of the sale before it.
+PROVEN_SUBTOTAL_MIN_ROWS, PROVEN_SUBTOTAL_ROUNDS = 2, 3
+PROVEN_SUBTOTAL = "Proven subtotal: equals the sum of the rows above (code)"
 # An identifier column, such as an order or slip id, is filled in at least half of the kept rows,
 # nearly unique there, and mostly not a number. Rows that carry one are records.
 ID_FILLED, ID_DISTINCT, ID_NUMERIC, ID_MIN_ROWS = 0.5, 0.9, 0.5, 20
@@ -112,6 +118,9 @@ class TableBuild(BaseModel):
     hidden: list[str] = Field(default_factory=list)
     excluded: list[ExcludedRule] = Field(default_factory=list)
     subtotal_checks: list[SubtotalCheck] = Field(default_factory=list)
+    proven_subtotals: int = Field(
+        default=0, description="Rows code excluded as proven subtotals, beyond the spec's rules."
+    )
     duplicate_rows: int = Field(default=0, description="Rows that repeat an earlier row exactly.")
     duplicate_key: list[str] = Field(
         default_factory=list,
@@ -311,6 +320,7 @@ def _build_table(
         f"CREATE TEMP TABLE {q(marked)} AS SELECT *, CAST(_row AS BIGINT) AS __row, "
         f"{_exclusion_reason(table.exclude_rows)} AS __excluded FROM raw.{q(table.source)}"
     )
+    proven = _exclude_proven_subtotals(connection, marked, table.source, raw_columns, raw_report)
     visible = [s for s in raw_columns if s not in hidden]
     values = ", ".join(f"{lit(s)}, {q(s)}" for s in visible)
     raw_values = f"CAST(json_object({values}) AS VARCHAR)" if visible else "'{}'"
@@ -342,7 +352,11 @@ def _build_table(
         f"FROM {q(stage)} ORDER BY _source, __row"
     )
     report = TableBuild(
-        name=table.name, source=table.source, description=table.description, hidden=hidden
+        name=table.name,
+        source=table.source,
+        description=table.description,
+        hidden=hidden,
+        proven_subtotals=proven,
     )
     report.raw_rows = _scalar(connection, f"SELECT count(*) FROM {q(marked)}")
     common = _common_filled_count(connection, marked, raw_columns)
@@ -362,9 +376,7 @@ def _build_table(
             if count > rule.with_identifier:
                 rule.with_identifier, rule.identifier = count, column
         report.excluded.append(rule)
-    for shape in raw_report.rare_shapes:
-        if shape.sums_above < 2 or shape.sums_above < SUBTOTAL_SHARE * shape.rows:
-            continue
+    for shape in _subtotal_shapes(raw_report):
         kept = (
             f"SELECT count(*) FROM {q(marked)} WHERE __excluded IS NULL "
             f"AND {shape_sql(raw_columns, shape.columns)}"
@@ -392,6 +404,49 @@ def _build_table(
     connection.execute(f"DROP TABLE {q(stage)}")
     connection.execute(f"DROP TABLE {q(marked)}")
     return report
+
+
+def _subtotal_shapes(raw_report: TableReport) -> list[RowShape]:
+    """Rare row shapes whose rows mostly equal the sum of the rows above them."""
+    return [
+        shape
+        for shape in raw_report.rare_shapes
+        if shape.sums_above >= 2 and shape.sums_above >= SUBTOTAL_SHARE * shape.rows
+    ]
+
+
+def _exclude_proven_subtotals(
+    connection: duckdb.DuckDBPyConnection,
+    marked: str,
+    source: str,
+    raw_columns: list[str],
+    raw_report: TableReport,
+) -> int:
+    """Mark the rows of subtotal shapes that each equal the sum of the records above them. Rows a
+    spec rule already excludes keep that rule's reason. Returns how many rows code marked."""
+    every = [shape.columns for shape in raw_report.rare_shapes]
+    open_count = f"SELECT count(*) FROM {q(marked)} WHERE __excluded IS NULL"
+    start = _scalar(connection, open_count)
+    # Each round proves one level of totals: days, then months over the days, then years. A group
+    # ends at any row of the shape (a day's total, whichever rule removed its neighbours), or only
+    # at rows still in the table (a month's total over days already removed).
+    for _ in range(PROVEN_SUBTOTAL_ROUNDS):
+        before = _scalar(connection, open_count)
+        for shape, open_rows in itertools.product(
+            _subtotal_shapes(raw_report), ("true", "__excluded IS NULL")
+        ):
+            proof = subtotal_rows_sql(
+                q(marked), raw_columns, shape.columns, every, PROVEN_SUBTOTAL_MIN_ROWS,
+                open_rows=open_rows,
+            )  # fmt: skip
+            connection.execute(
+                f"UPDATE {q(marked)} SET __excluded = {lit(PROVEN_SUBTOTAL)} FROM ({proof}) AS p "
+                f"WHERE {q(marked)}._source = p._source AND {q(marked)}.__row = p.r "
+                f"AND {q(marked)}.__excluded IS NULL"
+            )
+        if _scalar(connection, open_count) == before:
+            break
+    return start - _scalar(connection, open_count)
 
 
 def _duplicate_rows(connection: duckdb.DuckDBPyConnection, table: str, columns: list[str]) -> int:

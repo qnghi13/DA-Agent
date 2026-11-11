@@ -147,3 +147,38 @@ def test_the_pinned_deepseek_model_carries_its_price() -> None:
     )[0]
     assert route.price.input_per_million > route.price.cached_input_per_million > 0
     assert route.price.output_per_million > 0
+
+
+def _vllm_request_seen(env: dict[str, str]) -> dict:
+    seen: dict = {}
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen["url"] = str(request.url)
+        seen["body"] = json.loads(request.content)
+        return httpx2.Response(500, json={"error": {"message": "x"}})
+
+    client = httpx2.Client(transport=httpx2.MockTransport(handler))
+    route = build_routes("vllm:Qwen/Qwen3-14B", env, http_client=client)[0]
+    with pytest.raises(TransientLLMError):
+        route.adapter.complete(LLMRequest(messages=[Message(role="user", content="q")]), "m")
+    return seen
+
+
+def test_vllm_is_local_free_and_needs_no_key() -> None:
+    route = build_routes("vllm:Qwen/Qwen3-14B", {})[0]
+    assert route.adapter.provider == "vllm"
+    assert route.price.input_per_million == 0
+    assert route.adapter.timeout_seconds == build_routes("ollama:q", {})[0].adapter.timeout_seconds
+
+
+def test_vllm_sends_a_fixed_seed_so_a_rerun_gives_the_same_answers() -> None:
+    """The challenge re-runs the image and the two scores must agree."""
+    seen = _vllm_request_seen({})
+    assert seen["url"].startswith("http://localhost:8000/v1/")
+    assert seen["body"]["seed"] == 0
+
+
+def test_vllm_url_and_seed_come_from_the_environment() -> None:
+    seen = _vllm_request_seen({"VLLM_BASE_URL": "http://gpu:9000/v1", "VLLM_SEED": "7"})
+    assert seen["url"].startswith("http://gpu:9000/v1/")
+    assert seen["body"]["seed"] == 7

@@ -82,6 +82,17 @@ def select_shops(splits_path: Path, shops: list[str] | None, *, holdout: bool = 
     return chosen
 
 
+def shops_in(data_dir: Path, splits_path: Path) -> list[str]:
+    """Every shop directory of a split, such as a test split, whose shops the splits file does not
+    list. Training holdout shops are still refused."""
+    shops = sorted(p.name for p in (data_dir / "data").iterdir() if p.is_dir())
+    holdout = set(json.loads(splits_path.read_text(encoding="utf-8"))["holdout_shops"])
+    refused = sorted(set(shops) & holdout)
+    if refused:
+        raise ValueError(f"refusing holdout shops: {refused}")
+    return shops
+
+
 def file_conventions(data_dir: Path) -> str:
     """Rulebook section 8, which documents how the shop files are written. It acts as the user's
     description of the data. Other sections are about questions and answers, not files."""
@@ -121,12 +132,18 @@ def main() -> int:
     parser.add_argument("--splits", type=Path, default=DEFAULT_SPLITS)
     parser.add_argument("--shops", nargs="*")
     parser.add_argument("--holdout", action="store_true", help="prepare holdout shops instead")
+    parser.add_argument(
+        "--all-shops", action="store_true", help="every shop in <data-dir>/data, for a test split"
+    )
     parser.add_argument("--image", default="da-agent-sandbox:dev")
     parser.add_argument("--max-cost", type=float, required=True)
     parser.add_argument("--max-tokens-per-shop", type=int, default=150_000)
     args = parser.parse_args()
 
-    shops = select_shops(args.splits, args.shops, holdout=args.holdout)
+    if args.all_shops:
+        shops = [s for s in shops_in(args.data_dir, args.splits) if s in (args.shops or [s])]
+    else:
+        shops = select_shops(args.splits, args.shops, holdout=args.holdout)
     root = args.output_dir.resolve()
     runner = make_runner(root, args.image)
     ledger = CostLedger(root / "ledger.jsonl")

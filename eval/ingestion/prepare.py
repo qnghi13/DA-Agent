@@ -28,7 +28,9 @@ from da_agent.runner.runner import Runner, RunnerConfig
 def copy_upload(source: Path, target: Path, extra_files: list[Path] | None = None) -> None:
     """Copy an upload and any extra files into it, readable by the sandbox user."""
     shutil.rmtree(target, ignore_errors=True)
-    shutil.copytree(source, target, symlinks=False)
+    # Windows writes a "<file>:Zone.Identifier" marker next to downloaded files; it is not data.
+    ignore = shutil.ignore_patterns("*:Zone.Identifier")
+    shutil.copytree(source, target, symlinks=False, ignore=ignore)
     for extra in extra_files or []:
         shutil.copyfile(extra, target / extra.name)
     for path in [target, *target.rglob("*")]:
@@ -118,6 +120,9 @@ def prepare_uploads(
             row["remaining_problems"] = parse_problems(build.report)
             row["hidden_columns"] = sum(len(t.hidden) for t in build.report.tables)
             row["excluded_rows"] = sum(e.rows for t in build.report.tables for e in t.excluded)
+            row["proven_subtotals"] = {
+                t.name: t.proven_subtotals for t in build.report.tables if t.proven_subtotals
+            }
             row["dropped_rules"] = prepared.dropped_rules
             row["deduplicated"] = prepared.deduplicated
             row["unproven_repeats"] = {

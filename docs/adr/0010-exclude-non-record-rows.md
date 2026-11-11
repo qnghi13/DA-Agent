@@ -1,6 +1,6 @@
 # 0010: Declarative rules exclude subtotal and note rows
 
-**Status:** Accepted, 2026-11-06
+**Status:** Accepted, 2026-11-06. Narrowed by ADR 0029: code also excludes subtotals it can prove.
 
 **Context:** Sales sheets often hold rows that are not records: daily subtotals ("Tổng ngày 01/03"),
 monthly totals, and notes ("Ghi chú: số liệu ghi tay"). Left in, they double count every `SUM`.

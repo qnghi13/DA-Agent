@@ -11,6 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from da_agent.ingestion.raw import slug
 from da_agent.ingestion.report import IngestReport
 
 Identifier = str
@@ -149,6 +150,15 @@ def _first_error(error: ValidationError) -> str:
     return f"{where}: {detail['msg']}"
 
 
+def as_identifier(name: str) -> str:
+    """The name itself when it is an identifier, else its ASCII slug ("Số phiếu" -> so_phieu)."""
+    if SOURCE_NAME.fullmatch(name):
+        return name
+    plain = slug(name)
+    plain = plain if plain[:1].isalpha() else f"c_{plain}"
+    return plain[:63]
+
+
 def parse_spec_lenient(data: object) -> tuple[DatasetSpec, list[str]]:
     """Keep every valid table, column, and relationship, and list what was dropped and why.
 
@@ -182,6 +192,9 @@ def parse_spec_lenient(data: object) -> tuple[DatasetSpec, list[str]]:
                         **raw_column,
                         "date_formats": [f for f in formats if f in DATE_FORMAT_NAMES],
                     }
+            if isinstance(raw_column, dict) and isinstance(raw_column.get("name"), str):
+                # Models often copy the raw name ("Tổng tiền") as the clean name; fix it here.
+                raw_column = {**raw_column, "name": as_identifier(raw_column["name"])}
             try:
                 columns.append(ColumnSpec.model_validate(raw_column))
             except ValidationError as error:
@@ -291,8 +304,10 @@ def sanitize_spec(spec: DatasetSpec, report: IngestReport) -> tuple[DatasetSpec,
                 )
             names.add(name)
             columns.append(column.model_copy(update={"name": name, "date_formats": formats}))
-        # Models often name a column by its clean name here; map it back to the raw column.
-        by_clean = {c.name: c.source for c in table.columns}
+        # Models often name a column by its clean name here; map it back to the raw column. An
+        # undeclared column's clean name is its slug, as the build names it.
+        by_clean = {slug(c): c for c in sorted(raw[source])}
+        by_clean.update({c.name: c.source for c in table.columns})
         raw_name = functools.partial(_raw_column, raw_columns=raw[source], by_clean=by_clean)
         fill_down = [raw_name(c) for c in table.fill_down if raw_name(c) in raw[source]]
         for missing in sorted({c for c in table.fill_down if raw_name(c) not in raw[source]}):

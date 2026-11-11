@@ -468,6 +468,41 @@ def test_prepare_refuses_holdout_and_unknown_shops(splits: Path) -> None:
         select_shops(splits, ["biz_999"])
 
 
+def test_prepare_takes_every_shop_of_another_split(splits: Path, tmp_path: Path) -> None:
+    """A test split has its own shops, which the training splits file does not list."""
+    from eval.datamate.prepare import shops_in
+
+    for shop in ("dev_002", "dev_001"):
+        (tmp_path / "data" / shop).mkdir(parents=True)
+    (tmp_path / "data" / "notes.txt").write_text("not a shop", encoding="utf-8")
+
+    assert shops_in(tmp_path, splits) == ["dev_001", "dev_002"]
+
+
+def test_prepare_never_takes_training_holdout_shops_from_a_directory(
+    splits: Path, tmp_path: Path
+) -> None:
+    from eval.datamate.prepare import shops_in
+
+    holdout = json.loads(splits.read_text(encoding="utf-8"))["holdout_shops"]
+    (tmp_path / "data" / holdout[0]).mkdir(parents=True)
+    with pytest.raises(ValueError, match="holdout"):
+        shops_in(tmp_path, splits)
+
+
+def test_uploads_leave_out_windows_download_markers(tmp_path: Path) -> None:
+    from eval.ingestion.prepare import copy_upload
+
+    source = tmp_path / "shop"
+    source.mkdir()
+    (source / "Sales.xlsx").write_bytes(b"x")
+    (source / "Sales.xlsx:Zone.Identifier").write_text("[ZoneTransfer]", encoding="utf-8")
+
+    copy_upload(source, tmp_path / "upload")
+
+    assert sorted(p.name for p in (tmp_path / "upload").iterdir()) == ["Sales.xlsx"]
+
+
 def test_prepare_describes_shops_with_the_rulebook_file_conventions(tmp_path: Path) -> None:
     from eval.datamate.prepare import file_conventions
 

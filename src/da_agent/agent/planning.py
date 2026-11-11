@@ -9,6 +9,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from da_agent.agent.loop_types import Document
+from da_agent.agent.periods import periods_note
 from da_agent.agent.prompts import render_document
 from da_agent.llm.types import ToolSpec
 
@@ -71,12 +72,13 @@ def plan_user_prompt(
 ) -> str:
     parts = [
         f"Today's date: {as_of}",
+        periods_note(as_of),
         f"Question:\n{question}",
         "Dataset tables:\n" + json.dumps(tables, ensure_ascii=False),
     ]
     if clarifications:
         parts.append("The user clarified:\n" + "\n".join(f"- {c}" for c in clarifications))
-    return "\n\n".join(parts)
+    return "\n\n".join(part for part in parts if part)
 
 
 def parse_plan(arguments: dict[str, Any]) -> Plan | None:

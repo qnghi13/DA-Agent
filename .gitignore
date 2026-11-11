@@ -1,5 +1,6 @@
 # Competition data, never published through git
 /train/
+/public_test/
 
 # Secrets
 .env

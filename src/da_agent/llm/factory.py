@@ -74,7 +74,20 @@ def _build_adapter(
             timeout=LOCAL_TIMEOUT_SECONDS,
             http_client=http_client,
         )
-    raise ValueError(f"unknown provider {provider!r}, expected groq, openrouter, gemini, or ollama")
+    if provider == "vllm":
+        # A fixed seed makes sampling repeatable, so a re-run of the same image gives the same
+        # answers. The server must also run one fixed configuration (batch-invariant if needed).
+        return OpenAICompatibleAdapter(
+            provider="vllm",
+            base_url=env.get("VLLM_BASE_URL", "http://localhost:8000/v1"),
+            api_key=env.get("VLLM_API_KEY", "EMPTY"),
+            timeout=LOCAL_TIMEOUT_SECONDS,
+            http_client=http_client,
+            extra_body={"seed": int(env.get("VLLM_SEED", "0"))},
+        )
+    raise ValueError(
+        f"unknown provider {provider!r}, expected groq, openrouter, gemini, ollama, or vllm"
+    )
 
 
 def build_routes(

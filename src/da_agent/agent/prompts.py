@@ -4,7 +4,9 @@ import html
 import re
 
 from da_agent.agent.loop_types import Document
+from da_agent.agent.periods import periods_note
 from da_agent.agent.rules import split_sections
+from da_agent.agent.vietnamese import expand_question
 
 # A document tag inside document text, which could close the frame and pose as instructions.
 FRAME_TAG = re.compile(r"<(/?\s*document)", re.IGNORECASE)
@@ -95,4 +97,17 @@ def build_system_prompt(documents: list[Document], *, schema_given: bool = False
 
 
 def build_user_prompt(question: str, as_of: str) -> str:
-    return f"Today's date: {as_of}\n\nQuestion:\n{question}"
+    parts = [f"Today's date: {as_of}", periods_note(as_of), f"Question:\n{question}"]
+    parts.append(expansion_note(question))
+    return "\n\n".join(part for part in parts if part)
+
+
+def expansion_note(question: str) -> str:
+    """The question with shorthand expanded by code, or nothing when there was none."""
+    expanded = expand_question(question)
+    if expanded == question:
+        return ""
+    return (
+        "The question with Vietnamese shorthand and typing slips expanded by code (it may be "
+        f"wrong; the original question wins if they disagree):\n{expanded}"
+    )

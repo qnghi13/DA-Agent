@@ -467,13 +467,52 @@ def test_kept_rows_that_sum_the_rows_above_are_reported(tmp_path: Path, out: Pat
 
     result = build(raw / RAW_DATABASE, spec, report, out)
 
+    # The daily totals are proven first, then the monthly total over the whole month.
     [check] = result.tables[0].subtotal_checks
     assert (check.columns, check.rows, check.sums_above, check.kept) == (
         ["Sản phẩm", "Tiền"],
         3,
         2,
-        3,
+        0,
     )
+
+
+def test_rows_proven_to_sum_the_rows_above_leave_the_table(tmp_path: Path, out: Path) -> None:
+    """A narrow model rule can miss subtotal rows; code removes the ones it can prove (ADR 0029)."""
+    raw, report = daily_sales_upload(tmp_path)
+    spec = DatasetSpec(tables=[TableSpec(source="t", name="t")])
+
+    result = build(raw / RAW_DATABASE, spec, report, out)
+
+    assert result.tables[0].proven_subtotals == 3
+    assert rows(out, "SELECT sum(CAST(tien AS INTEGER)) FROM t") == [(125_000,)]
+    excluded = rows(out, "SELECT _row FROM _excluded ORDER BY _row")
+    assert excluded == [(52,), (83,), (84,)]
+
+
+def test_a_total_over_subtotals_a_rule_removed_is_proven(tmp_path: Path, out: Path) -> None:
+    """With the daily totals gone, the monthly total equals the sum of the month's records."""
+    raw, report = daily_sales_upload(tmp_path)
+    rule = RowRule(when=[RowCondition(column="Sản phẩm", op="starts_with", value="tổng ngày")])
+    spec = DatasetSpec(tables=[TableSpec(source="t", name="t", exclude_rows=[rule])])
+
+    result = build(raw / RAW_DATABASE, spec, report, out)
+
+    assert result.tables[0].proven_subtotals == 1
+    assert rows(out, "SELECT sum(CAST(tien AS INTEGER)) FROM t") == [(125_000,)]
+
+
+def test_a_row_equal_to_one_record_above_is_not_proven(tmp_path: Path, out: Path) -> None:
+    """One record and a row with the same amount may both be sales, so the proof needs two."""
+    block = ["D,Trà,"] * 25 + ["D,Trà,1000", ",,1000"]
+    upload = "Mã,Sản phẩm,Tiền\n" + "\n".join(block * 3) + "\n"
+    raw, report = raw_upload(tmp_path, {"t.csv": upload})
+    spec = DatasetSpec(tables=[TableSpec(source="t", name="t")])
+
+    result = build(raw / RAW_DATABASE, spec, report, out)
+
+    assert result.tables[0].proven_subtotals == 0
+    assert rows(out, "SELECT count(*) FROM _excluded") == [(0,)]
 
 
 def test_excluded_subtotals_are_not_reported_as_kept(tmp_path: Path, out: Path) -> None:
@@ -657,3 +696,28 @@ def test_date_columns_report_the_range_they_cover(tmp_path: Path, out: Path) -> 
     assert (d.min_value, d.max_value) == ("2025-01-05", "2025-03-02")
     assert (at.min_value, at.max_value) == ("2025-03-02 10:00:00", "2026-06-28 21:15:00")
     assert (s.min_value, s.max_value) == (None, None)
+
+
+def test_subtotals_a_narrow_rule_missed_are_proven_by_their_own_day(
+    tmp_path: Path, out: Path
+) -> None:
+    """A rule that removes some daily totals must not stretch the other days' groups."""
+    lines = ["Mã,Sản phẩm,Tiền,Nợ"]
+    for day in range(1, 7):
+        lines += [f"D{day}{n},Trà,1000,0" for n in range(30)]
+        debt = "0" if day % 2 else "500"
+        lines += [f"tổng {day:02d}/05,,30000,{debt}"]
+    lines += ["Cộng tháng 05,,180000,1500"]
+    raw, report = raw_upload(tmp_path, {"t.csv": "\n".join(lines) + "\n"})
+    narrow = RowRule(
+        when=[
+            RowCondition(column="Mã", op="starts_with", value="tổng"),
+            RowCondition(column="Nợ", op="equals", value="0"),
+        ]
+    )
+    spec = DatasetSpec(tables=[TableSpec(source="t", name="t", exclude_rows=[narrow])])
+
+    result = build(raw / RAW_DATABASE, spec, report, out)
+
+    assert result.tables[0].proven_subtotals == 4
+    assert rows(out, "SELECT count(*), sum(CAST(tien AS INTEGER)) FROM t") == [(180, 180_000)]

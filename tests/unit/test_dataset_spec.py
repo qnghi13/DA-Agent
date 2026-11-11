@@ -341,3 +341,45 @@ def test_sanitize_keeps_source_names() -> None:
     clean, _ = sanitize_spec(spec, raw)
 
     assert clean.tables[0].columns[0].name == "MaKH"
+
+
+@pytest.mark.parametrize(
+    ("name", "fixed"),
+    [("Tổng tiền phiếu", "tong_tien_phieu"), ("Số phiếu", "so_phieu"), ("1st day", "c_1st_day")],
+)
+def test_a_clean_name_written_as_raw_text_is_made_an_identifier(name: str, fixed: str) -> None:
+    """Code can fix this for certain, so it costs neither the column nor a repair round."""
+    from da_agent.ingestion.spec import parse_spec_lenient
+
+    column = {"source": name, "name": name}
+    data = {"tables": [{"source": "don", "name": "orders", "columns": [column]}]}
+
+    spec, problems = parse_spec_lenient(data)
+
+    assert [(c.source, c.name) for c in spec.tables[0].columns] == [(name, fixed)]
+    assert problems == []
+
+
+def test_rules_may_name_columns_the_spec_does_not_declare_by_their_default_clean_name() -> None:
+    """Undeclared columns get slug names, and models write those names in fill_down and rules."""
+    from da_agent.ingestion.spec import RowCondition, RowRule, sanitize_spec
+
+    spec = DatasetSpec(
+        tables=[
+            TableSpec(
+                source="don",
+                name="orders",
+                fill_down=["ma_don", "ngay"],
+                exclude_rows=[
+                    RowRule(when=[RowCondition(column="ma_don", op="starts_with", value="tổng")])
+                ],
+            )
+        ]
+    )
+
+    clean, problems = sanitize_spec(spec, report())
+
+    assert problems == []
+    assert clean.tables[0].fill_down == ["Mã đơn", "Ngày"]
+    assert clean.tables[0].exclude_rows[0].when[0].column == "Mã đơn"
+    assert check_spec(clean, report()) == []

@@ -76,13 +76,29 @@ def sums_above_sql(table: str, columns: list[str], shape: list[str], rare: list[
     """SQL counting rows of `shape` whose value in one of its number columns is non-zero and
     equals the sum of that column over the record rows above it, back to the previous row of the
     same shape in the same source. Rows of any rare shape do not count as records."""
-    is_shape = shape_sql(columns, shape)
+    return f"SELECT count(*) FROM ({subtotal_rows_sql(table, columns, shape, rare)})"
+
+
+def subtotal_rows_sql(
+    table: str,
+    columns: list[str],
+    shape: list[str],
+    rare: list[list[str]],
+    min_rows: int = 1,
+    open_rows: str = "true",
+) -> str:
+    """SQL selecting `_source` and `r` (the row) of the rows sums_above_sql counts, where the sum
+    covers at least `min_rows` record values. Only rows of the shape that also meet `open_rows`
+    (SQL on the table) are candidates and end a group, so a total over subtotals that are already
+    removed sums the records of every group it covers."""
+    is_shape = f"({shape_sql(columns, shape)}) AND ({open_rows})"
     is_rare = " OR ".join(f"({shape_sql(columns, other)})" for other in rare) or "false"
     numbers = shape[:MAX_SUM_COLUMNS]
     values = ", ".join(f"{number_sql(q(c))} AS v{i}" for i, c in enumerate(numbers))
-    sums = ", ".join(f"sum(v{i}) AS s{i}" for i in range(len(numbers)))
+    sums = ", ".join(f"sum(v{i}) AS s{i}, count(v{i}) AS c{i}" for i in range(len(numbers)))
     match = " OR ".join(
-        f"(g.v{i} IS NOT NULL AND g.v{i} <> 0 AND abs(g.v{i} - s.s{i}) < 0.5)"
+        f"(g.v{i} IS NOT NULL AND g.v{i} <> 0 AND abs(g.v{i} - s.s{i}) < 0.5 "
+        f"AND s.c{i} >= {int(min_rows)})"
         for i in range(len(numbers))
     )
     return (
@@ -91,7 +107,7 @@ def sums_above_sql(table: str, columns: list[str], shape: list[str], rare: list[
         "g AS (SELECT *, coalesce(sum(CAST(is_shape AS INTEGER)) OVER (PARTITION BY _source "
         "ORDER BY r ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS grp FROM t), "
         f"s AS (SELECT _source, grp, {sums} FROM g WHERE NOT is_rare GROUP BY _source, grp) "
-        f"SELECT count(*) FROM g JOIN s ON g._source = s._source AND g.grp = s.grp "
+        f"SELECT g._source, g.r FROM g JOIN s ON g._source = s._source AND g.grp = s.grp "
         f"WHERE g.is_shape AND ({match})"
     )
 
