@@ -49,6 +49,16 @@ from da_agent.storage.jobs import Job, JobQueue
 from da_agent.storage.keys import KEY_PATTERN, authenticate
 from da_agent.storage.ledger import daily_budget, spent_today
 from da_agent.storage.limits import RateLimiter
+from da_agent.storage.memory import (
+    MAX_SQL,
+    MAX_TEXT,
+    ConversationStore,
+    MemoryEntry,
+    MemoryNotFoundError,
+    MemoryStateError,
+    MemoryStore,
+    memory_snapshot,
+)
 from da_agent.storage.sessions import (
     LINK_TTL,
     MAX_AGE,
@@ -104,6 +114,26 @@ class RunRequest(BaseModel):
     as_of: dt.date | None = Field(
         default=None, description="The date the question is asked on. Defaults to today (UTC)."
     )
+    conversation_id: str | None = Field(
+        default=None,
+        description="A conversation of the same dataset; the run reads its earlier turns.",
+    )
+
+
+class MemoryRequest(BaseModel):
+    kind: Literal["correction", "alias", "example"]
+    text: str = Field(min_length=1, max_length=MAX_TEXT)
+    sql: str | None = Field(default=None, max_length=MAX_SQL, description="Required for examples.")
+    source_run_id: str | None = Field(default=None, description="The run this note corrects.")
+
+
+class MemoryEditRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=MAX_TEXT)
+    sql: str | None = Field(default=None, max_length=MAX_SQL)
+
+
+class ConversationRequest(BaseModel):
+    dataset_id: str
 
 
 def _not_found() -> HTTPException:
@@ -524,18 +554,141 @@ def create_run(body: RunRequest, conn: Db, caller: Caller, settings: Settings) -
         raise _not_found()
     if record.status != "ready":
         raise HTTPException(status_code=409, detail=f"the dataset is {record.status}, not ready")
+    conversation = None
+    if body.conversation_id is not None:
+        found = ConversationStore(conn).get(caller.workspace_id, _uuid(body.conversation_id))
+        if found is None or found["dataset_id"] != record.id:
+            raise _not_found()
+        conversation = str(found["id"])
     _may_start_job(conn, caller, settings)
     as_of = (body.as_of or dt.datetime.now(dt.UTC).date()).isoformat()
-    payload = {
+    payload: dict[str, Any] = {
         "dataset_id": str(record.id),
         "question": body.question,
         "as_of": as_of,
         "charts": True,
     }
+    if conversation is not None:
+        payload["conversation_id"] = conversation
     with conn.transaction():
+        # The notes the run reads are fixed now, so a resume reads the same ones (ADR 0030).
+        payload |= memory_snapshot(conn, caller.workspace_id, record.id)
         run_id = JobQueue(conn).enqueue(caller.workspace_id, "run", payload)
         log(conn, caller, "run.create", str(run_id), dataset_id=str(record.id))
     return {"id": str(run_id), "status": "queued"}
+
+
+# Conversations and memory (ADR 0030)
+
+
+def _author(caller: Member) -> str:
+    if caller.key_id is not None:
+        return f"key:{caller.key_id}"
+    return f"session:{caller.session_id}"
+
+
+def _memory_view(entry: MemoryEntry) -> dict[str, Any]:
+    return {
+        "id": str(entry.id),
+        "kind": entry.kind,
+        "text": entry.text,
+        "sql": entry.sql,
+        "status": entry.status,
+        "author": entry.author,
+        "source_run_id": str(entry.source_run_id) if entry.source_run_id else None,
+        "superseded_by": str(entry.superseded_by) if entry.superseded_by else None,
+    }
+
+
+@router.post("/conversations", status_code=201)
+def create_conversation(body: ConversationRequest, conn: Db, caller: Caller) -> dict[str, Any]:
+    """Start a conversation about one dataset. Runs that name it read its earlier turns."""
+    try:
+        conversation_id = ConversationStore(conn).create(
+            caller.workspace_id, _uuid(body.dataset_id)
+        )
+    except MemoryNotFoundError as error:
+        raise _not_found() from error
+    log(conn, caller, "conversation.create", str(conversation_id), dataset_id=body.dataset_id)
+    return {"id": str(conversation_id)}
+
+
+@router.get("/datasets/{dataset_id}/memory")
+def list_memory(dataset_id: str, conn: Db, caller: Caller) -> dict[str, Any]:
+    """Every note of the dataset, for review: proposed, approved, rejected, and replaced."""
+    key = _uuid(dataset_id)
+    if DatasetStore(conn).get(key, caller.workspace_id) is None:
+        raise _not_found()
+    entries = MemoryStore(conn).entries(caller.workspace_id, key)
+    return {"memory": [_memory_view(entry) for entry in entries]}
+
+
+@router.post("/datasets/{dataset_id}/memory", status_code=201)
+def write_memory(dataset_id: str, body: MemoryRequest, conn: Db, caller: Caller) -> dict[str, Any]:
+    """A note the caller writes is approved at once, and later runs of the dataset read it."""
+    source = None
+    if body.source_run_id is not None:
+        source = run_job(body.source_run_id, conn, caller).id
+    try:
+        entry_id = MemoryStore(conn).write(
+            caller.workspace_id, _uuid(dataset_id), body.kind, body.text, sql=body.sql,
+            author=_author(caller), source_run_id=source,
+        )  # fmt: skip
+    except MemoryNotFoundError as error:
+        raise _not_found() from error
+    except MemoryStateError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    log(conn, caller, "memory.create", str(entry_id), dataset_id=dataset_id, kind=body.kind)
+    return {"id": str(entry_id), "status": "approved"}
+
+
+def _change_memory(conn: psycopg.Connection, caller: Member, action: str, memory_id: str) -> None:
+    store, key = MemoryStore(conn), _uuid(memory_id)
+    change = {"approve": store.approve, "reject": store.reject, "delete": store.delete}[action]
+    try:
+        change(caller.workspace_id, key)
+    except MemoryNotFoundError as error:
+        raise _not_found() from error
+    except MemoryStateError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    log(conn, caller, f"memory.{action}", memory_id)
+
+
+@router.post("/memory/{memory_id}/approve")
+def approve_memory(memory_id: str, conn: Db, caller: Caller) -> dict[str, Any]:
+    """Approve a suggested note, so later runs read it."""
+    _change_memory(conn, caller, "approve", memory_id)
+    return {"id": memory_id, "status": "approved"}
+
+
+@router.post("/memory/{memory_id}/reject")
+def reject_memory(memory_id: str, conn: Db, caller: Caller) -> dict[str, Any]:
+    _change_memory(conn, caller, "reject", memory_id)
+    return {"id": memory_id, "status": "rejected"}
+
+
+@router.patch("/memory/{memory_id}")
+def edit_memory(
+    memory_id: str, body: MemoryEditRequest, conn: Db, caller: Caller
+) -> dict[str, Any]:
+    """Replace a note with an approved one; the old one stays in the history."""
+    try:
+        new_id = MemoryStore(conn).edit(
+            caller.workspace_id, _uuid(memory_id), body.text, sql=body.sql,
+            author=_author(caller),
+        )  # fmt: skip
+    except MemoryNotFoundError as error:
+        raise _not_found() from error
+    except MemoryStateError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    log(conn, caller, "memory.edit", memory_id, replaced_by=str(new_id))
+    return {"id": str(new_id), "replaces": memory_id, "status": "approved"}
+
+
+@router.delete("/memory/{memory_id}", status_code=204)
+def delete_memory(memory_id: str, conn: Db, caller: Caller) -> Response:
+    _change_memory(conn, caller, "delete", memory_id)
+    return Response(status_code=204)
 
 
 def run_job(run_id: str, conn: psycopg.Connection, caller: Member) -> Job:

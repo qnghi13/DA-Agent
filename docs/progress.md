@@ -1,7 +1,7 @@
 # Progress
 
 Loaded into every session, so keep it under 60 lines. Replace stale content instead of appending.
-**Last updated:** 2026-11-11 (optimisation for the Zalo challenge started, uncommitted)
+**Last updated:** 2026-11-12 (memory backend, ADR 0030)
 **Phase:** optimisation. Challenge rules: ≤15B params in total, offline Docker, 2×5090, 6 h,
 re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for the submission.
 
@@ -26,7 +26,7 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
   uncommitted folder (user, 2026-11-11), ignored via `.git/info/exclude`. Test size: from user.
 
 ## Next step
-
+0. Memory (ADR 0030, uncommitted): backend done; next web UI for notes, then learning note 11.
 1. v0.1.0 released (ADR 0028); holdout ran once (+44, never rerun). Open: run 97d7bc1f guessed
    a `product_id` absent from the data; option: verify that filter literals come from a query.
 

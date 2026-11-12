@@ -221,7 +221,12 @@ phase and cut for time.
 ### Memory and RAG
 
 - **Short-term:** thread state in checkpoints.
-- **Long-term, per dataset:** the approved spec, rules, and user corrections, each with provenance.
+- **Conversation:** the last three finished turns of a conversation, read from saved results into
+  a document; each run keeps its own thread ([ADR 0030](adr/0030-conversation-and-dataset-memory.md)).
+- **Long-term, per dataset:** the approved spec and rules, plus `dataset_memories`: corrections,
+  aliases, and verified examples that people write or approve. A run reads the approved ids the
+  API recorded in its payload, as a document after the dataset's own; past ten, on demand through
+  `search_rules`. The graph never writes memory, and eval runs use none.
 - **RAG:** dataset docs and rules. Rules that shape every answer stay in the prompt. Topic sections
   are listed by title and fetched with `search_rules`, by title or keywords
   ([ADR 0008](adr/0008-rules-on-demand.md)). Embedding retrieval was cut: about ten

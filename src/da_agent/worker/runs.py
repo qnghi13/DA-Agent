@@ -30,6 +30,8 @@ from da_agent.worker.worker import RetryableJobError
 
 # Returns the dataset and its documents, only if the dataset belongs to the workspace.
 DatasetResolver = Callable[[UUID, str], tuple[Dataset, list[Document]]]
+# Returns the run's memory as documents: the notes in its snapshot and its earlier turns.
+MemoryResolver = Callable[[Job], list[Document]]
 
 
 class RunHandler:
@@ -42,6 +44,7 @@ class RunHandler:
         schema: str | None = None,
         limits: AgentLimits | None = None,
         budgets: WorkspaceBudgets | None = None,
+        memory: MemoryResolver | None = None,
     ) -> None:
         self.llm = llm
         self.datasets = datasets
@@ -50,6 +53,8 @@ class RunHandler:
         self.limits = limits or AgentLimits()
         # When set, each run's money limit is what its workspace has left today (ADR 0022).
         self.budgets = budgets
+        # Memory goes after the dataset's documents (ADR 0030); without it, runs have none.
+        self.memory = memory
 
     def _checkpoint_connection(self) -> psycopg.Connection[DictRow]:
         conninfo = make_conninfo(self.checkpoint_url, options=search_path_option(self.schema))
@@ -64,6 +69,8 @@ class RunHandler:
         if self.budgets is not None:
             limits = replace(limits, budget=self.budgets.for_job(job))
         dataset, documents = self.datasets(job.workspace_id, payload["dataset_id"])
+        if self.memory is not None:
+            documents = [*documents, *self.memory(job)]
         with (
             self._checkpoint_connection() as conn,
             connect(self.checkpoint_url, schema=self.schema) as events_conn,

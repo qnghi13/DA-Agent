@@ -24,6 +24,7 @@ from da_agent.storage.ledger import PostgresCostLedger
 from da_agent.telemetry.tracing import configure_tracing
 from da_agent.worker.datasets import BuildHandler, DatasetOpener, IngestHandler
 from da_agent.worker.limits import WorkspaceBudgets
+from da_agent.worker.memory import MemoryLoader
 from da_agent.worker.runs import RunHandler
 from da_agent.worker.worker import Worker, WorkerConfig
 
@@ -70,6 +71,7 @@ def build_worker(
             checkpoint_url=settings.database_url,
             schema=settings.schema,
             budgets=budgets,
+            memory=MemoryLoader(**database),
         ),
         "ingest": IngestHandler(**database, **roots, llm=llm, budgets=budgets),
         "build": BuildHandler(**database, **roots),

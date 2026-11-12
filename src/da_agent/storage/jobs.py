@@ -62,11 +62,16 @@ class JobQueue:
         *,
         max_attempts: int = 3,
     ) -> UUID:
+        # A run in a conversation is also linked by column, so its turns are found by index.
+        conversation = payload.get("conversation_id")
         cursor = self._conn.execute(
-            "INSERT INTO jobs (workspace_id, kind, payload, max_attempts) "
-            "VALUES (%s, %s, %s, %s) RETURNING id",
-            (workspace_id, kind, Jsonb(payload), max_attempts),
-        )
+            "INSERT INTO jobs (workspace_id, kind, payload, max_attempts, conversation_id) "
+            "VALUES (%s, %s, %s, %s, %s) RETURNING id",
+            (
+                workspace_id, kind, Jsonb(payload), max_attempts,
+                UUID(str(conversation)) if conversation else None,
+            ),
+        )  # fmt: skip
         return returned_id(cursor)
 
     def claim(self, worker_id: str, *, lease_seconds: float) -> Job | None:

@@ -323,3 +323,25 @@ def test_without_tracing_no_trace_is_recorded(
     assert worker.run_once()
 
     assert job(conn, job_id, workspace).trace_ids == []
+
+
+def test_a_run_job_gives_the_model_its_memory_after_the_dataset_documents(
+    schema: str, conn: psycopg.Connection, workspace: UUID, dataset: SqliteDataset
+) -> None:
+    job_id = enqueue_run(conn, workspace)
+    adapter = ScriptedAdapter([plan(), sql(), submit("number", 350)])
+    handler = run_handler(adapter, dataset, schema)
+    seen: list[UUID] = []
+
+    def memory(claimed: Job) -> list[Document]:
+        seen.append(claimed.id)
+        return [Document("notes", "Revenue excludes cancelled orders.")]
+
+    handler.memory = memory
+    assert Worker(config(schema, "w1"), {"run": handler}).run_once()
+
+    assert seen == [job_id]
+    system = adapter.requests[0].messages[0].content or ""
+    assert system.index("Revenue is the sum of totals.") < system.index(
+        "Revenue excludes cancelled orders."
+    )
