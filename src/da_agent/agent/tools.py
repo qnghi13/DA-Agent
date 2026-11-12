@@ -140,9 +140,10 @@ def describe_tables(dataset: Dataset) -> list[dict[str, Any]]:
     return [_describe_table(table) for table in dataset.describe()]
 
 
-def _error(tool: str, message: str, sql: str | None = None) -> tuple[str, ToolStep]:
+def _error(tool: str, kind: str, message: str, sql: str | None = None) -> tuple[str, ToolStep]:
+    """A failed step. kind is a fixed word (see ToolStep.error_kind), safe to count anywhere."""
     return json.dumps({"error": message}, ensure_ascii=False), ToolStep(
-        tool=tool, ok=False, sql=sql, error=message
+        tool=tool, ok=False, sql=sql, error=message, error_kind=kind
     )
 
 
@@ -168,14 +169,16 @@ def execute_tool(
         trace.get_current_span().record_exception(error)
         message = f"the tool failed unexpectedly ({type(error).__name__}); try again once"
         sql = call.arguments.get("sql") if call.name in ("run_sql", MAKE_CHART) else None
-        return _error(call.name, message, sql=sql if isinstance(sql, str) else None)
+        return _error(call.name, "crash", message, sql=sql if isinstance(sql, str) else None)
 
 
 def _execute(
     call: ToolCall, dataset: Dataset, rules: RuleIndex | None, charts_left: int | None
 ) -> tuple[str, ToolStep]:
     if call.arguments_error:
-        return _error(call.name, f"could not read the tool arguments: {call.arguments_error}")
+        return _error(
+            call.name, "arguments", f"could not read the tool arguments: {call.arguments_error}"
+        )
     if call.name == "describe_dataset":
         tables = describe_tables(dataset)
         return json.dumps({"tables": tables}, ensure_ascii=False), ToolStep(tool=call.name, ok=True)
@@ -186,17 +189,19 @@ def _execute(
     if call.name == MAKE_CHART and charts_left is not None:
         return _make_chart(dataset, call.arguments, charts_left)
     known = [spec.name for spec in tool_specs(rules, charts=charts_left is not None)]
-    return _error(call.name, f"unknown tool {call.name!r}, available tools: {known}")
+    return _error(
+        call.name, "unknown_tool", f"unknown tool {call.name!r}, available tools: {known}"
+    )
 
 
 def _run_sql_on(dataset: Dataset, arguments: dict[str, Any]) -> tuple[str, ToolStep]:
     sql = arguments.get("sql")
     if not isinstance(sql, str):
-        return _error("run_sql", "sql is required and must be a string")
+        return _error("run_sql", "arguments", "sql is required and must be a string")
     try:
         result = dataset.query(sql)
     except QueryError as error:
-        return _error("run_sql", str(error), sql=sql)
+        return _error("run_sql", error.kind, str(error), sql=sql)
     payload = {"columns": result.columns, "rows": result.rows, "truncated": result.truncated}
     return json.dumps(payload, ensure_ascii=False, default=str), ToolStep(
         tool="run_sql", ok=True, sql=sql, row_count=len(result.rows)
@@ -206,11 +211,11 @@ def _run_sql_on(dataset: Dataset, arguments: dict[str, Any]) -> tuple[str, ToolS
 def _search_rules(rules: RuleIndex, arguments: dict[str, Any]) -> tuple[str, ToolStep]:
     query = arguments.get("query")
     if not isinstance(query, str) or not query.strip():
-        return _error(SEARCH_RULES, "query is required and must be a non-empty string")
+        return _error(SEARCH_RULES, "arguments", "query is required and must be a non-empty string")
     found = rules.search(query)
     if not found:
         message = f"no section matches {query!r}. Sections: {rules.titles()}"
-        return _error(SEARCH_RULES, message)
+        return _error(SEARCH_RULES, "no_match", message)
     text = "\n\n".join(section.text for section in found)[:MAX_RULE_CHARS]
     payload = {"sections": [section.title for section in found], "text": text}
     return json.dumps(payload, ensure_ascii=False), ToolStep(tool=SEARCH_RULES, ok=True)
@@ -221,14 +226,16 @@ def _make_chart(
 ) -> tuple[str, ToolStep]:
     sql = arguments.get("sql")
     if not isinstance(sql, str):
-        return _error(MAKE_CHART, "sql is required and must be a string")
+        return _error(MAKE_CHART, "arguments", "sql is required and must be a string")
     if charts_left <= 0:
-        return _error(MAKE_CHART, f"a run draws at most {MAX_CHARTS} charts", sql=sql)
+        return _error(MAKE_CHART, "chart", f"a run draws at most {MAX_CHARTS} charts", sql=sql)
     try:
         result = dataset.query(sql)
         spec = chart_spec(arguments, result)
-    except (QueryError, ChartError) as error:
-        return _error(MAKE_CHART, str(error), sql=sql)
+    except QueryError as error:
+        return _error(MAKE_CHART, error.kind, str(error), sql=sql)
+    except ChartError as error:
+        return _error(MAKE_CHART, "chart", str(error), sql=sql)
     rows = len(spec["data"]["values"])
     # The model gets no rows back, so it cannot cite numbers that run_sql did not return.
     payload = {"status": "drawn", "mark": spec["mark"]["type"], "rows": rows}

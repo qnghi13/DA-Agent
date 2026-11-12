@@ -35,3 +35,4 @@ decision, add a new ADR and mark the old one as superseded.
 | [0028](0028-release-images-to-ghcr.md) | Version tags publish the images to GHCR, checked by a smoke test on the published images | Accepted |
 | [0029](0029-code-excludes-proven-subtotals.md) | Code excludes subtotal rows it can prove, beyond the model's rules | Accepted |
 | [0030](0030-conversation-and-dataset-memory.md) | Conversation and dataset memory in Postgres, written only by people | Accepted |
+| [0031](0031-guard-signals-by-kind.md) | Guard signals are counted by kind in traces, events, eval rows, and the dashboard | Accepted |

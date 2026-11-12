@@ -787,3 +787,30 @@ def test_all_questions_refuses_training_holdout_shops(data_dir: Path, splits: Pa
 
     with pytest.raises(ValueError, match="holdout"):
         all_questions(data_dir, splits)
+
+
+def test_results_and_metrics_count_guard_signals_by_kind(data_dir: Path, tmp_path: Path) -> None:
+    def tool(name: str, arguments: dict) -> LLMResponse:
+        call = ToolCall(id=f"c_{name}", name=name, arguments=arguments)
+        return LLMResponse(tool_calls=[call], usage=Usage(input_tokens=40, output_tokens=10))
+
+    script = [
+        tool("submit_plan", {"steps": ["count"]}),
+        tool("run_sql", {"sql": "DELETE FROM khach_hang"}),
+        tool("run_sql", {"sql": "SELECT count(*) AS n FROM khach_hang"}),
+        answer(12345),
+        answer(1),
+    ]
+    llm, ledger, _ = make_llm(script)
+    questions = read_jsonl(data_dir / "questions.jsonl")[:1]
+
+    metrics = run_questions(
+        questions, data_dir, llm, ledger, RunConfig(tmp_path / "out", agent="graph")
+    )
+
+    [row] = read_jsonl(tmp_path / "out" / "results.jsonl")
+    assert row["error_kinds"] == ["rejected"]
+    assert row["verify_log"] == ["tracing", "passed"]
+    assert metrics["tool_error_kinds"] == {"rejected": 1}
+    assert metrics["verify_kinds"] == {"tracing": 1}
+    assert (metrics["runs_repaired"], metrics["runs_saved_by_repair"]) == (1, 1)

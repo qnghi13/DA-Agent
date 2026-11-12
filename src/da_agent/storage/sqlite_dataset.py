@@ -10,15 +10,23 @@ import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from da_agent.security.sql_guard import FORBIDDEN_FUNCTIONS, SqlRejectedError, validate_select
 
 PROGRESS_EVERY_OPERATIONS = 1000
 
 
+# Which layer stopped a query: the SQL guard, the time limit, a resource limit, or the engine.
+QueryErrorKind = Literal["rejected", "timeout", "limit", "engine"]
+
+
 class QueryError(ValueError):
-    """A query failed. The message is safe to show to the model."""
+    """A query failed. The message is safe to show to the model; kind is safe to count."""
+
+    def __init__(self, message: str, kind: QueryErrorKind = "engine") -> None:
+        super().__init__(message)
+        self.kind: QueryErrorKind = kind
 
 
 @dataclass(frozen=True)
@@ -147,7 +155,7 @@ class SqliteDataset:
         try:
             checked = validate_select(sql)
         except SqlRejectedError as error:
-            raise QueryError(str(error)) from error
+            raise QueryError(str(error), "rejected") from error
         return self._execute_unchecked(checked)
 
     def _execute_unchecked(self, sql: str) -> QueryResult:
@@ -157,11 +165,14 @@ class SqliteDataset:
             fetched = cursor.fetchmany(self._max_rows + 1)
         except sqlite3.OperationalError as error:
             if "interrupted" in str(error):
-                raise QueryError(f"query stopped: over the {self._timeout}s time limit") from error
+                raise QueryError(
+                    f"query stopped: over the {self._timeout}s time limit", "timeout"
+                ) from error
             if "not authorized" in str(error) or "prohibited" in str(error):
                 raise QueryError(
                     f"{error}: the query uses something not allowed or a hidden column. "
-                    "Name only the columns from describe_dataset instead of using *."
+                    "Name only the columns from describe_dataset instead of using *.",
+                    "rejected",
                 ) from error
             raise QueryError(str(error)) from error
         except sqlite3.Error as error:

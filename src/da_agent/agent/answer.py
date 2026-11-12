@@ -30,6 +30,10 @@ class ToolStep:
     sql: str | None = None
     row_count: int | None = None
     error: str | None = None
+    # A fixed word for why the step failed, safe to count in traces and dashboards: "rejected"
+    # (SQL guard), "timeout", "limit", "engine", "arguments", "crash", "chart", "no_match",
+    # "unknown_tool", or "answer_format".
+    error_kind: str | None = None
     # The Vega-Lite spec a successful make_chart built from its query.
     chart: dict[str, Any] | None = None
 
@@ -55,6 +59,8 @@ class AgentResult:
     question_for_user: str | None = None
     # What each successful run_sql returned, in order. Numbers in the answer trace to these.
     queries: list[QueryRecord] = field(default_factory=list)
+    # Each verify pass adds the problem kinds it found, or "passed" (see verify.Problem).
+    verify_log: list[str] = field(default_factory=list)
 
     @property
     def charts(self) -> list[dict[str, Any]]:
@@ -141,4 +147,5 @@ def result_from_json(data: dict[str, Any]) -> AgentResult:
         error=data.get("error"),
         question_for_user=data.get("question_for_user"),
         queries=[QueryRecord(**query) for query in data.get("queries", [])],
+        verify_log=list(data.get("verify_log", [])),
     )

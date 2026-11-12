@@ -268,6 +268,30 @@ def _quality_panel(conn: psycopg.Connection, params: dict[str, Any]) -> dict[str
         """,
         params,
     )
+    # Guard signals by kind (ADR 0026, extended): fixed words written by code, never user text.
+    # Events from before kinds existed count as "unknown".
+    tool_kinds = _rows(
+        conn,
+        "SELECT coalesce(data ->> 'error_kind', 'unknown') AS kind, count(*) AS n "
+        "FROM run_events WHERE type = 'tool' AND data ->> 'ok' = 'false' "
+        "AND created_at >= now() - %(span)s GROUP BY 1",
+        params,
+    )
+    verify_kinds = _rows(
+        conn,
+        "SELECT kind, count(*) AS n FROM run_events, "
+        "jsonb_array_elements_text(coalesce(data -> 'checks', '[]'::jsonb)) AS kind "
+        "WHERE type = 'verify' AND created_at >= now() - %(span)s GROUP BY 1",
+        params,
+    )
+    # A run verify sent back that still ended with an answer.
+    saved = _one(
+        conn,
+        f"SELECT count(DISTINCT e.job_id) AS n FROM run_events e JOIN jobs j ON j.id = e.job_id "
+        f"WHERE e.type = 'verify' AND e.data ->> 'passed' = 'false' "
+        f"AND e.created_at >= now() - %(span)s AND {JOB_OUTCOME} = 'answered'",
+        params,
+    )["n"]
     ingest = _one(
         conn,
         "SELECT count(*) AS ingest_jobs, count(*) FILTER (WHERE status = 'failed') "
@@ -275,7 +299,13 @@ def _quality_panel(conn: psycopg.Connection, params: dict[str, Any]) -> dict[str
         "AND created_at >= now() - %(span)s",
         params,
     )
-    return {**events, **ingest}
+    return {
+        **events,
+        **ingest,
+        "tool_error_kinds": {row["kind"]: row["n"] for row in tool_kinds},
+        "verify_kinds": {row["kind"]: row["n"] for row in verify_kinds},
+        "runs_saved": saved,
+    }
 
 
 def _security_panel(conn: psycopg.Connection, params: dict[str, Any]) -> dict[str, Any]:

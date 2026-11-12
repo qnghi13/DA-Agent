@@ -355,6 +355,16 @@ def _show(value: float) -> str:
     return str(int(value)) if value.is_integer() else repr(value)
 
 
+@dataclass(frozen=True)
+class Problem:
+    """One failed check. kind is a fixed word, safe to count in traces and dashboards: "evidence",
+    "tracing", "inputs", "period", and, from data_checks in the graph, "fanout" and "unreadable".
+    message is for the model and may quote the user's data."""
+
+    kind: str
+    message: str
+
+
 def check_answer(
     answer: AgentAnswer,
     messages: list[Message],
@@ -362,10 +372,26 @@ def check_answer(
     ranges: DateRanges | None = None,
     dialect: str = "duckdb",
 ) -> list[str]:
-    """Problems with a proposed answer, written for the model. Empty when it passes. ranges holds
-    the period each date column covers, by lower-case name; without it periods are not checked."""
+    """Problems with a proposed answer, written for the model. Empty when it passes."""
+    return [p.message for p in answer_problems(answer, messages, queries_ok, ranges, dialect)]
+
+
+def answer_problems(
+    answer: AgentAnswer,
+    messages: list[Message],
+    queries_ok: int,
+    ranges: DateRanges | None = None,
+    dialect: str = "duckdb",
+) -> list[Problem]:
+    """check_answer with each problem's kind. ranges holds the period each date column covers, by
+    lower-case name; without it periods are not checked."""
     if queries_ok == 0:
-        return ["no query succeeded, so the answer has no evidence; run the queries it needs"]
+        return [
+            Problem(
+                "evidence",
+                "no query succeeded, so the answer has no evidence; run the queries it needs",
+            )
+        ]
     numbers = result_numbers(messages)
     untraced = [
         value
@@ -375,17 +401,23 @@ def check_answer(
     if untraced:
         shown = ", ".join(_show(value) for value in untraced[:5])
         return [
-            f"the numbers {shown} do not appear in any query result; compute each number in SQL "
-            "and answer with the value the query returns"
+            Problem(
+                "tracing",
+                f"the numbers {shown} do not appear in any query result; compute each number in "
+                "SQL and answer with the value the query returns",
+            )
         ]
     invented = _invented_inputs(answer, messages, dialect)
     if invented:
         shown = ", ".join(_show(value) for value in invented[:5])
         return [
-            f"the query behind the answer computes from {shown}, which no query on the data "
-            "returned; take every input from a query result, or compute the answer from the "
-            "tables in one query"
+            Problem(
+                "inputs",
+                f"the query behind the answer computes from {shown}, which no query on the data "
+                "returned; take every input from a query result, or compute the answer from the "
+                "tables in one query",
+            )
         ]
     if answer.kind != "unanswerable" and ranges:
-        return _period_problems(answer, messages, ranges, dialect)
+        return [Problem("period", m) for m in _period_problems(answer, messages, ranges, dialect)]
     return []

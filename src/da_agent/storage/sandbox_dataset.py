@@ -11,7 +11,13 @@ from typing import Protocol
 from da_agent.ingestion.build import BuildReport, ColumnBuild
 from da_agent.runner.runner import SqlResult, SqlRun
 from da_agent.security.sql_guard import SqlRejectedError, validate_select
-from da_agent.storage.sqlite_dataset import Column, QueryError, QueryResult, TableInfo
+from da_agent.storage.sqlite_dataset import (
+    Column,
+    QueryError,
+    QueryErrorKind,
+    QueryResult,
+    TableInfo,
+)
 
 BUILD_REPORT = "build_report.json"
 SQL_TYPES = {
@@ -81,10 +87,14 @@ class SandboxDataset:
         try:
             checked = validate_select(sql, dialect="duckdb")
         except SqlRejectedError as error:
-            raise QueryError(str(error)) from error
+            raise QueryError(str(error), "rejected") from error
         result = self._runner.query(
             SqlRun(dataset_id=self._dataset_id, sql=checked, max_rows=self._max_rows)
         )
         if result.status != "ok":
-            raise QueryError(result.error or f"query failed: {result.status}")
+            kind: QueryErrorKind = (
+                "timeout" if result.status == "timeout" else "limit" if result.status == "killed"
+                else "engine"
+            )  # fmt: skip
+            raise QueryError(result.error or f"query failed: {result.status}", kind)
         return QueryResult(result.columns, result.rows, result.truncated)

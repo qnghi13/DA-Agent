@@ -119,3 +119,16 @@ def test_describe_counts_values_that_could_not_be_read() -> None:
     [table] = dataset.describe()
 
     assert [c.unparsed for c in table.columns] == [0, 0, 3, 0]
+
+
+def test_query_errors_say_which_layer_stopped_the_query() -> None:
+    def kind(status: str, sql: str = "SELECT 1") -> str:
+        dataset = SandboxDataset(FakeRunner(SqlResult(status=status, error="x")), "shop_1", REPORT)
+        with pytest.raises(QueryError) as caught:
+            dataset.query(sql)
+        return caught.value.kind
+
+    assert kind("ok", "SELECT * FROM read_csv('/etc/passwd')") == "rejected"
+    assert kind("timeout") == "timeout"
+    assert kind("killed") == "limit"
+    assert kind("error") == "engine"

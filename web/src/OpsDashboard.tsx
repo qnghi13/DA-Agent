@@ -499,7 +499,10 @@ function Panels({
             label="Answers that failed a check"
             value={`${formatCount(quality.verify_failed)} of ${formatCount(quality.verify_checks)}`}
           />
-          <Tile label="Runs that needed a repair" value={formatCount(quality.runs_repaired)} />
+          <Tile
+            label="Runs repaired, then answered"
+            value={`${formatCount(quality.runs_saved)} of ${formatCount(quality.runs_repaired)}`}
+          />
           <Tile
             label="Tool calls that failed"
             value={`${formatCount(quality.tool_errors)} of ${formatCount(quality.tool_calls)}`}
@@ -510,6 +513,8 @@ function Panels({
             tone={quality.ingest_failed > 0 ? "warning" : undefined}
           />
         </div>
+        <KindLine title="Failed checks by kind" counts={quality.verify_kinds} />
+        <KindLine title="Failed tool calls by kind" counts={quality.tool_error_kinds} />
         <p className="text-muted-foreground text-sm">
           Eval scores are measured offline; see the evaluation report in the repository.
         </p>
@@ -694,4 +699,19 @@ function Empty({ children }: { children: ReactNode }) {
 function timeAgo(iso: string): string {
   const seconds = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
   return seconds < 5 ? "just now" : `${formatDuration(seconds)} ago`;
+}
+
+
+/** Counts by a fixed kind, such as "rejected: 2 · timeout: 1". Nothing when there are none. */
+function KindLine({ title, counts }: { title: string; counts: Record<string, number> }) {
+  const entries = Object.entries(counts).sort(([, a], [, b]) => b - a);
+  if (entries.length === 0) return null;
+  return (
+    <div>
+      <h4 className="mb-1 text-sm font-medium">{title}</h4>
+      <p className="text-muted-foreground text-sm">
+        {entries.map(([kind, n]) => `${kind.replaceAll("_", " ")}: ${formatCount(n)}`).join(" · ")}
+      </p>
+    </div>
+  );
 }

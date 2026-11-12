@@ -68,6 +68,9 @@ export interface OpsSummary {
     tool_errors: number;
     ingest_jobs: number;
     ingest_failed: number;
+    tool_error_kinds: Record<string, number>;
+    verify_kinds: Record<string, number>;
+    runs_saved: number;
   };
   security: { auth_failed: number; sign_ins: number; series: { bucket: string; count: number }[] };
 }

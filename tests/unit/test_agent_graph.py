@@ -798,3 +798,119 @@ def test_a_failing_event_sink_does_not_stop_the_run(dataset: SqliteDataset) -> N
     )  # fmt: skip
 
     assert result.stop_reason == "answered"
+
+
+# Guardrail signals: kinds only, so traces, events, and the dashboard can count them.
+
+
+def test_a_failed_query_records_which_guard_stopped_it(dataset: SqliteDataset) -> None:
+    script = [plan(), sql("DELETE FROM orders"), sql("SELECT nope FROM orders"), sql()]
+    script.append(submit("number", 350))
+
+    result, _ = run(dataset, script)
+
+    kinds = [(s.ok, s.error_kind) for s in result.steps if s.tool == "run_sql"]
+    assert kinds == [(False, "rejected"), (False, "engine"), (True, None)]
+
+
+def test_malformed_arguments_and_a_crash_have_their_own_kinds(dataset: SqliteDataset) -> None:
+    flaky = FlakyDataset(dataset, crashes=1)
+    script = [plan(), call("run_sql", {}), sql(), sql(), submit("number", 350)]
+
+    result, _ = run(flaky, script)  # type: ignore[arg-type]
+
+    assert [s.error_kind for s in result.steps if not s.ok] == ["arguments", "crash"]
+
+
+def test_the_verify_log_names_each_problem_kind_then_the_pass(dataset: SqliteDataset) -> None:
+    script = [plan(), sql(), submit("number", 999), sql(), submit("number", 350)]
+
+    result, _ = run(dataset, script)
+
+    assert result.verify_log == ["tracing", "passed"]
+
+
+def test_an_answer_without_evidence_is_logged_as_such(dataset: SqliteDataset) -> None:
+    result, _ = run(dataset, [plan(), submit("number", 350)], max_repairs=0)
+
+    assert result.verify_log == ["evidence"]
+
+
+def test_a_fanout_repair_is_logged(tmp_path: Path) -> None:
+    path = tmp_path / "lines.sqlite"
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        "CREATE TABLE orders (id INTEGER, total INTEGER);"
+        "INSERT INTO orders VALUES (1, 100), (2, 250);"
+        "CREATE TABLE lines (order_id INTEGER, amount INTEGER);"
+        "INSERT INTO lines VALUES (1, 40), (1, 60), (2, 250);"
+    )
+    connection.commit()
+    connection.close()
+    inflated = "SELECT sum(o.total) AS t FROM orders o JOIN lines l ON o.id = l.order_id"
+    script = [plan(), sql(inflated), submit("number", 450), sql(), submit("number", 350)]
+
+    result, _ = run(SqliteDataset(path), script)
+
+    assert result.verify_log == ["fanout", "passed"]
+
+
+def test_events_carry_guard_kinds_but_no_problem_text(dataset: SqliteDataset) -> None:
+    script = [
+        plan(),
+        sql("DELETE FROM orders"),
+        sql(),
+        submit("number", 999),
+        submit("number", 350),
+    ]
+
+    _, events = run_with_events(dataset, script)
+
+    tools = [e for e in events if e["type"] == "tool"]
+    assert [t["error_kind"] for t in tools] == ["rejected", None, None, None]
+    verdicts = [e for e in events if e["type"] == "verify"]
+    assert [v["checks"] for v in verdicts] == [["tracing"], []]
+
+
+def test_spans_carry_guard_kinds(dataset: SqliteDataset) -> None:
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    script = [
+        plan(),
+        sql("DELETE FROM orders"),
+        sql(),
+        submit("number", 999),
+        submit("number", 350),
+    ]
+    adapter = ScriptedAdapter(script)
+    client = LLMClient([Route(adapter, "m")], CostLedger(), sleep=lambda _: None, max_retries=0)
+
+    run_graph(
+        "Total revenue?", as_of="2026-06-28", dataset=dataset, documents=[], llm=client,
+        run_id="r1", tracer=provider.get_tracer("t"),
+    )  # fmt: skip
+
+    spans = exporter.get_finished_spans()
+    tool_kinds = [
+        s.attributes.get("da_agent.tool.error_kind") for s in spans if s.name == "tool.run_sql"
+    ]
+    assert tool_kinds == ["rejected", None]
+    verify = [s.attributes.get("da_agent.verify.kinds") for s in spans if s.name == "node.verify"]
+    assert [tuple(k) if k is not None else None for k in verify] == [("tracing",), None]
+
+
+def test_guard_signals_survive_a_job_row_and_old_rows_still_load(dataset: SqliteDataset) -> None:
+    from da_agent.agent.answer import result_from_json, result_to_json
+
+    result, _ = run(dataset, [plan(), sql("DELETE FROM orders"), sql(), submit("number", 350)])
+
+    again = result_from_json(result_to_json(result))
+    assert again.verify_log == ["passed"]
+    assert again.steps[0].error_kind == "rejected"
+    old = result_from_json({"stop_reason": "answered", "steps": [{"tool": "run_sql", "ok": True}]})
+    assert old.verify_log == [] and old.steps[0].error_kind is None

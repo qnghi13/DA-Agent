@@ -182,6 +182,26 @@ def test_quality_and_ingestion_signals(conn: psycopg.Connection, shop: UUID) -> 
     assert "the numbers" not in str(quality)
 
 
+def test_quality_counts_guard_signals_by_kind(conn: psycopg.Connection, shop: UUID) -> None:
+    saved = job(conn, shop, status="succeeded", result=answered())
+    withheld = job(conn, shop, status="succeeded", result=stopped("unverified"))
+    events = RunEvents(conn)
+    for run, checks in ((saved, ["tracing"]), (withheld, ["period"]), (withheld, ["period"])):
+        events.append(run, shop, {"type": "verify", "passed": False, "problems": ["42"],
+                                  "checks": checks})  # fmt: skip
+    events.append(saved, shop, {"type": "verify", "passed": True, "problems": [], "checks": []})
+    for kind in ("rejected", "rejected", "timeout", None):
+        events.append(saved, shop, {"type": "tool", "tool": "run_sql", "ok": False,
+                                    "error": "secret column", "error_kind": kind})  # fmt: skip
+
+    quality = summary(conn, "24h")["quality"]
+
+    assert quality["verify_kinds"] == {"tracing": 1, "period": 2}
+    assert quality["tool_error_kinds"] == {"rejected": 2, "timeout": 1, "unknown": 1}
+    assert (quality["runs_repaired"], quality["runs_saved"]) == (2, 1)
+    assert "secret" not in str(quality) and "42" not in str(quality)
+
+
 def test_security_counts_failed_sign_ins(conn: psycopg.Connection, shop: UUID) -> None:
     for _ in range(3):
         audit.record(conn, "auth.failed", detail={"path": "/v1/datasets"})

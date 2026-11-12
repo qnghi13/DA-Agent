@@ -55,7 +55,8 @@ from da_agent.agent.rules import RuleIndex
 from da_agent.agent.tools import SUBMIT_ANSWER, Dataset, describe_tables, execute_tool, tool_specs
 from da_agent.agent.verify import (
     DateRanges,
-    check_answer,
+    Problem,
+    answer_problems,
     date_ranges,
     evidence_queries,
     query_records,
@@ -94,6 +95,9 @@ class AgentState(TypedDict, total=False):
     verified: bool
     # The problems verify found in the last answer, for progress events.
     verify_problems: list[str]
+    # Each verify pass adds the problem kinds it found, or "passed". Kinds only, so traces,
+    # events, and eval rows can count them without carrying the user's data.
+    verify_log: Annotated[list[str], operator.add]
     answer: dict[str, Any] | None
     stop_reason: str | None
     error: str | None
@@ -252,7 +256,9 @@ def tools_node(state: AgentState, runtime: Runtime[AgentContext]) -> dict[str, A
                     content, step = '{"status": "received"}', ToolStep(tool=call.name, ok=True)
                 except InvalidAnswerError as error:
                     content = json.dumps({"error": str(error)}, ensure_ascii=False)
-                    step = ToolStep(tool=call.name, ok=False, error=str(error))
+                    step = ToolStep(
+                        tool=call.name, ok=False, error=str(error), error_kind="answer_format"
+                    )
             else:
                 content, step = execute_tool(
                     call,
@@ -263,6 +269,8 @@ def tools_node(state: AgentState, runtime: Runtime[AgentContext]) -> dict[str, A
             if step.sql:
                 span.set_attribute("da_agent.sql", step.sql)
             span.set_attribute("da_agent.tool_ok", step.ok)
+            if step.error_kind:
+                span.set_attribute("da_agent.tool.error_kind", step.error_kind)
         steps.append(asdict(step))
         replies.append(
             Message(
@@ -290,37 +298,47 @@ def verify_node(state: AgentState, runtime: Runtime[AgentContext]) -> dict[str, 
     messages = [Message.model_validate(m) for m in state.get("messages", [])]
     queries_ok = sum(1 for s in state.get("steps", []) if s["tool"] == "run_sql" and s["ok"])
     context = runtime.context
-    problems = check_answer(answer, messages, queries_ok, context.ranges, context.dialect)
+    found = answer_problems(answer, messages, queries_ok, context.ranges, context.dialect)
     span = trace.get_current_span()
-    if not problems and answer.kind != "unanswerable":
+    if not found and answer.kind != "unanswerable":
         # Probes run read-only queries in the sandbox, so they come after the free checks.
         evidence = evidence_queries(answer, messages)
-        problems = fanout_problems(evidence, context.dataset, context.dialect)
-        if not problems:
+        found = [
+            Problem("fanout", m)
+            for m in fanout_problems(evidence, context.dataset, context.dialect)
+        ]
+        if not found:
             # The model cannot repair values the build could not read, so this one only stops.
             unreadable = unreadable_problems(evidence, context.dataset, context.dialect)
             span.set_attribute("da_agent.verify.unreadable", bool(unreadable))
             if unreadable:
+                span.set_attribute("da_agent.verify.kinds", ["unreadable"])
                 return {
                     "verified": False,
                     "verify_problems": unreadable,
+                    "verify_log": ["unreadable"],
                     **_stop("unreadable_values", "; ".join(unreadable)),
                 }
+    problems = [p.message for p in found]
+    kinds = sorted({p.kind for p in found})
     span.set_attribute("da_agent.verify.problems", len(problems))
     if not problems:
-        return {"verified": True, "verify_problems": []}
+        return {"verified": True, "verify_problems": [], "verify_log": ["passed"]}
+    span.set_attribute("da_agent.verify.kinds", kinds)
     repairs = state.get("repairs", 0)
     turns_left = limits.max_iterations - state.get("iterations", 0)
     if repairs >= limits.max_repairs or turns_left < 2:
         return {
             "verified": False,
             "verify_problems": problems,
+            "verify_log": kinds,
             **_stop("unverified", "; ".join(problems)),
         }
     notice = REPAIR_NOTICE.format(problems="; ".join(problems))
     return {
         "verified": False,
         "verify_problems": problems,
+        "verify_log": kinds,
         "repairs": repairs + 1,
         "proposed": None,
         "messages": [Message(role="user", content=notice).model_dump()],
@@ -418,12 +436,15 @@ def node_events(node: str, update: dict[str, Any]) -> list[dict[str, Any]]:
                 "row_count": step.get("row_count"),
                 "error": step.get("error"),
                 "chart": step.get("chart") is not None,
+                "error_kind": step.get("error_kind"),
             }
             for step in update.get("steps", [])
         ]
     if node == "verify":
         passed = bool(update.get("verified"))
-        return [{"type": "verify", "passed": passed, "problems": update.get("verify_problems", [])}]
+        checks = [kind for kind in update.get("verify_log", []) if kind != "passed"]
+        problems = update.get("verify_problems", [])
+        return [{"type": "verify", "passed": passed, "problems": problems, "checks": checks}]
     if node in ("answer", "abstain"):
         return [{"type": "done", "stop_reason": update.get("stop_reason")}]
     return []
@@ -454,6 +475,7 @@ def _result(values: dict[str, Any], question_for_user: str | None = None) -> Age
         error=values.get("error"),
         question_for_user=question_for_user,
         queries=query_records([Message.model_validate(m) for m in values.get("messages", [])]),
+        verify_log=list(values.get("verify_log", [])),
     )
 
 

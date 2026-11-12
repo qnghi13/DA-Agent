@@ -51,12 +51,16 @@ def _run_tool(
                 content, step = '{"status": "recorded"}', ToolStep(tool=call.name, ok=True)
             except InvalidAnswerError as error:
                 content = json.dumps({"error": str(error)}, ensure_ascii=False)
-                step = ToolStep(tool=call.name, ok=False, error=str(error))
+                step = ToolStep(
+                    tool=call.name, ok=False, error=str(error), error_kind="answer_format"
+                )
         else:
             content, step = execute_tool(call, dataset, rules)
         if step.sql:
             span.set_attribute("da_agent.sql", step.sql)
         span.set_attribute("da_agent.tool_ok", step.ok)
+        if step.error_kind:
+            span.set_attribute("da_agent.tool.error_kind", step.error_kind)
         return content, step, answer
 
 

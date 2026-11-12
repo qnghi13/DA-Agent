@@ -158,6 +158,22 @@ def _build_metrics(
         "cost_usd": sum(row["cost_usd"] for row in results),
         "mean_latency_seconds": sum(latencies) / len(latencies) if latencies else 0,
         "failed_tools": sum(row["failed_tools"] for row in results),
+        **_guard_metrics(results),
+    }
+
+
+def _guard_metrics(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Guard signals by kind. A run is repaired when verify sent its answer back, and saved when
+    a later pass in the same run then let an answer through."""
+    logs = [row.get("verify_log", []) for row in results]
+    repaired = [log for log in logs if any(entry != "passed" for entry in log)]
+    return {
+        "tool_error_kinds": dict(
+            Counter(kind for row in results for kind in row.get("error_kinds", []))
+        ),
+        "verify_kinds": dict(Counter(e for log in logs for e in log if e != "passed")),
+        "runs_repaired": len(repaired),
+        "runs_saved_by_repair": sum(1 for log in repaired if log[-1] == "passed"),
     }
 
 
@@ -320,6 +336,8 @@ class _Run:
             "latency_seconds": latency,
             "failed_tools": sum(not step.ok for step in result.steps),
             "sql": [step.sql for step in result.steps if step.sql],
+            "error_kinds": [step.error_kind for step in result.steps if not step.ok],
+            "verify_log": result.verify_log,
             "errors": [
                 (step.error or "")[:MAX_ERROR_CHARS] for step in result.steps if not step.ok
             ],
