@@ -4,6 +4,9 @@ uv run --env-file .env python -m eval.datamate.run --data-dir train --set bootst
     --routes groq:MODEL,gemini:MODEL --output-dir eval/reports/first --max-total-tokens 200000 \
     --datasets-dir eval/reports/datasets-dev
 
+With a local model server, --workers runs several questions at the same time (docs/eval/gpu.md).
+--all-questions runs every question of another split, such as public_test, without scoring.
+
 With --datasets-dir, every shop is a prepared clean dataset and SQL runs in the sandbox (ADR 0011).
 --agent graph runs the LangGraph workflow (ADR 0013); --checkpoint-url keeps its checkpoints in
 Postgres, so a killed run continues each unfinished question where it stopped.
@@ -16,9 +19,11 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from collections import Counter
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
@@ -60,6 +65,8 @@ class RunConfig:
     # Offer make_chart and write an HTML report per question to output_dir/reports. Changes the
     # tools the model sees, so a run with reports is not comparable with the baselines.
     reports: bool = False
+    # Questions that run at the same time. Above one needs prepared datasets.
+    workers: int = 1
 
 
 def thread_id(output_dir: Path, question_id: str) -> str:
@@ -96,6 +103,22 @@ def select_questions(
     touched = sorted({row["business_id"] for row in questions} & held_out)
     if touched:
         raise ValueError(f"question set {question_set!r} touches holdout shops: {touched}")
+    return _filter(questions, limit, shops)
+
+
+def all_questions(
+    data_dir: Path,
+    splits_path: Path,
+    limit: int | None = None,
+    shops: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Every question in another split's directory, such as a public test, which the training
+    splits file does not list. Refuses a directory that holds training holdout shops."""
+    held_out = set(json.loads(splits_path.read_text(encoding="utf-8"))["holdout_shops"])
+    questions = load_jsonl(data_dir / "questions.jsonl")
+    touched = sorted({row["business_id"] for row in questions} & held_out)
+    if touched:
+        raise ValueError(f"{data_dir} holds training holdout shops: {touched}")
     return _filter(questions, limit, shops)
 
 
@@ -148,47 +171,105 @@ def run_questions(
     open_shop_fn: Callable[[str], ShopContext] | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
 ) -> dict[str, Any]:
-    """Run questions in order, saving after each one so that a later run can resume.
+    """Run questions, saving after each one so that a later run can resume.
 
     open_shop_fn opens a shop by id. By default it opens the shop's pos.sqlite in this process.
     With the graph agent and a checkpointer, a question cut off by a killed run continues where it
-    stopped."""
+    stopped. With config.workers above one, that many questions run at the same time, which a
+    local model server needs to be used well; limits are checked before each question starts, so
+    questions already running may pass them."""
     if config.reports and config.agent != "graph":
         raise ValueError("reports need the graph agent (--agent graph)")
+    if config.workers > 1 and open_shop_fn is None:
+        raise ValueError("workers above one need prepared datasets (--datasets-dir)")
     opener = open_shop_fn or (lambda shop_id: open_shop(data_dir, shop_id))
     config.output_dir.mkdir(parents=True, exist_ok=True)
-    submission_path = config.output_dir / "submission.jsonl"
-    results_path = config.output_dir / "results.jsonl"
-    results = load_jsonl(results_path) if results_path.exists() else []
-    done = {row["id"] for row in results}
-    budget = RunBudget(max_total_tokens=config.max_tokens_per_question)
-    limits = AgentLimits(max_iterations=config.max_iterations, budget=budget)
+    run = _Run(questions, llm, ledger, config, sleep, opener, checkpointer)
+    started = time.monotonic()
+    if config.workers == 1:
+        run.work()
+    else:
+        with ThreadPoolExecutor(max_workers=config.workers) as pool:
+            for future in [pool.submit(run.work) for _ in range(config.workers)]:
+                future.result()
+    wall_seconds = time.monotonic() - started
 
-    shops: dict[str, ShopContext | None] = {}
-    skipped: list[str] = []
-    failed: dict[str, str] = {}
-    failed_tokens = 0
-    stopped: str | None = None
-    consecutive_failures = 0
+    if run.shops and not any(run.shops.values()):
+        # Every shop failed to open, usually a wrong --datasets-dir. Scoring would report all
+        # abstentions as if the agent had run.
+        raise ValueError(f"no shop could be opened: {sorted(run.shops)}")
+    metrics = _build_metrics(run.results, run.skipped, run.failed, run.failed_tokens, run.stopped)
+    metrics["workers"] = config.workers
+    metrics["wall_seconds"] = wall_seconds
+    (config.output_dir / "metrics.json").write_text(
+        json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    return metrics
 
-    for question in questions:
-        id_, shop_id = question["id"], question["business_id"]
-        if id_ in done:
-            continue
-        if shop_id not in shops:
-            try:
-                shops[shop_id] = opener(shop_id)
-            except UnsupportedShopError:
-                shops[shop_id] = None
-        shop = shops[shop_id]
-        if shop is None:
-            skipped.append(id_)
-            continue
-        used = sum(row["total_tokens"] for row in results) + failed_tokens
-        if config.max_total_tokens is not None and used >= config.max_total_tokens:
-            stopped = "total_token_limit"
-            break
 
+class _Run:
+    """The state one run shares between its workers, guarded by one lock."""
+
+    def __init__(
+        self,
+        questions: list[dict[str, Any]],
+        llm: LLMClient,
+        ledger: CostLedger,
+        config: RunConfig,
+        sleep: Callable[[float], None],
+        opener: Callable[[str], ShopContext],
+        checkpointer: BaseCheckpointSaver | None,
+    ) -> None:
+        self.llm, self.ledger, self.config = llm, ledger, config
+        self.sleep, self.opener, self.checkpointer = sleep, opener, checkpointer
+        self.submission_path = config.output_dir / "submission.jsonl"
+        self.results_path = config.output_dir / "results.jsonl"
+        self.results: list[dict[str, Any]] = (
+            load_jsonl(self.results_path) if self.results_path.exists() else []
+        )
+        done = {row["id"] for row in self.results}
+        self.pending = iter([q for q in questions if q["id"] not in done])
+        budget = RunBudget(max_total_tokens=config.max_tokens_per_question)
+        self.limits = AgentLimits(max_iterations=config.max_iterations, budget=budget)
+        self.shops: dict[str, ShopContext | None] = {}
+        self.skipped: list[str] = []
+        self.failed: dict[str, str] = {}
+        self.failed_tokens = 0
+        self.stopped: str | None = None
+        self.consecutive_failures = 0
+        self.lock = threading.Lock()
+
+    def work(self) -> None:
+        while (task := self._next()) is not None:
+            self._run_one(*task)
+
+    def _next(self) -> tuple[dict[str, Any], ShopContext] | None:
+        """The next question to run and its shop, or None when the run is over or stopped."""
+        with self.lock:
+            while self.stopped is None:
+                question = next(self.pending, None)
+                if question is None:
+                    return None
+                shop_id = question["business_id"]
+                if shop_id not in self.shops:
+                    try:
+                        self.shops[shop_id] = self.opener(shop_id)
+                    except UnsupportedShopError:
+                        self.shops[shop_id] = None
+                shop = self.shops[shop_id]
+                if shop is None:
+                    self.skipped.append(question["id"])
+                    continue
+                used = sum(row["total_tokens"] for row in self.results) + self.failed_tokens
+                limit = self.config.max_total_tokens
+                if limit is not None and used >= limit:
+                    self.stopped = "total_token_limit"
+                    return None
+                return question, shop
+            return None
+
+    def _run_one(self, question: dict[str, Any], shop: ShopContext) -> None:
+        id_, config = question["id"], self.config
         started = time.monotonic()
         if config.agent == "graph":
             result = run_graph(
@@ -196,10 +277,10 @@ def run_questions(
                 as_of=question["as_of_date"],
                 dataset=shop.dataset,
                 documents=shop.documents,
-                llm=llm,
+                llm=self.llm,
                 run_id=id_,
-                limits=limits,
-                checkpointer=checkpointer,
+                limits=self.limits,
+                checkpointer=self.checkpointer,
                 thread_id=thread_id(config.output_dir, id_),
                 charts=config.reports,
             )
@@ -209,27 +290,26 @@ def run_questions(
                 as_of=question["as_of_date"],
                 dataset=shop.dataset,
                 documents=shop.documents,
-                llm=llm,
+                llm=self.llm,
                 run_id=id_,
-                limits=limits,
+                limits=self.limits,
             )
         latency = time.monotonic() - started
+        totals = self.ledger.totals(id_)
 
         # A provider failure says nothing about the question, so keep it open for a later run.
         if result.stop_reason == "llm_error":
-            failed[id_] = (result.error or "unknown provider error")[:MAX_ERROR_CHARS]
-            failed_tokens += ledger.totals(id_).total_tokens
-            consecutive_failures += 1
-            if consecutive_failures >= config.max_consecutive_failures:
-                stopped = "provider_failures"
-                break
-            continue
-        consecutive_failures = 0
+            with self.lock:
+                self.failed[id_] = (result.error or "unknown provider error")[:MAX_ERROR_CHARS]
+                self.failed_tokens += totals.total_tokens
+                self.consecutive_failures += 1
+                if self.consecutive_failures >= config.max_consecutive_failures:
+                    self.stopped = self.stopped or "provider_failures"
+            return
 
-        totals = ledger.totals(id_)
         row = {
             "id": id_,
-            "shop": shop_id,
+            "shop": question["business_id"],
             "stop_reason": result.stop_reason,
             "iterations": result.iterations,
             "llm_calls": totals.calls,
@@ -251,21 +331,13 @@ def run_questions(
                 result, question=question["question"], as_of=question["as_of_date"]
             )
             (reports_dir / f"{id_}.html").write_text(page, encoding="utf-8")
-        _append_jsonl(submission_path, to_submission(id_, result))
-        _append_jsonl(results_path, row)
-        results.append(row)
+        with self.lock:
+            self.consecutive_failures = 0
+            _append_jsonl(self.submission_path, to_submission(id_, result))
+            _append_jsonl(self.results_path, row)
+            self.results.append(row)
         if config.delay_seconds:
-            sleep(config.delay_seconds)
-
-    if shops and not any(shops.values()):
-        # Every shop failed to open, usually a wrong --datasets-dir. Scoring would report all
-        # abstentions as if the agent had run.
-        raise ValueError(f"no shop could be opened: {sorted(shops)}")
-    metrics = _build_metrics(results, skipped, failed, failed_tokens, stopped)
-    (config.output_dir / "metrics.json").write_text(
-        json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    return metrics
+            self.sleep(config.delay_seconds)
 
 
 def score_run(
@@ -311,7 +383,13 @@ def score_run(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run the agent over a DataMate question set.")
     parser.add_argument("--data-dir", type=Path, required=True)
-    parser.add_argument("--set", dest="question_set", required=True)
+    which = parser.add_mutually_exclusive_group(required=True)
+    which.add_argument("--set", dest="question_set")
+    which.add_argument(
+        "--all-questions",
+        action="store_true",
+        help="every question of another split, such as public_test; no scoring",
+    )
     parser.add_argument(
         "--routes", required=True, help="groq:MODEL,gemini:MODEL, in fallback order"
     )
@@ -326,6 +404,9 @@ def main() -> int:
     parser.add_argument("--max-tokens-per-question", type=int, default=60_000)
     parser.add_argument("--max-total-tokens", type=int, required=True)
     parser.add_argument("--delay", type=float, default=0.0, help="seconds between questions")
+    parser.add_argument(
+        "--workers", type=int, default=1, help="questions at the same time; needs --datasets-dir"
+    )
     parser.add_argument("--otlp-endpoint", help="for example http://localhost:6006/v1/traces")
     parser.add_argument("--record-content", action="store_true", help="store prompts in traces")
     parser.add_argument("--no-score", action="store_true")
@@ -354,10 +435,13 @@ def main() -> int:
         ledger = CostLedger(args.output_dir / "ledger.jsonl")
         routes = build_routes(args.routes, os.environ)
         llm = LLMClient(routes, ledger, record_content=args.record_content)
-        questions = select_questions(
-            args.data_dir, args.splits, args.question_set, args.limit, args.shops,
-            holdout=args.holdout,
-        )  # fmt: skip
+        if args.all_questions:
+            questions = all_questions(args.data_dir, args.splits, args.limit, args.shops)
+        else:
+            questions = select_questions(
+                args.data_dir, args.splits, args.question_set, args.limit, args.shops,
+                holdout=args.holdout,
+            )  # fmt: skip
         config = RunConfig(
             output_dir=args.output_dir,
             max_iterations=args.max_iterations,
@@ -366,6 +450,7 @@ def main() -> int:
             delay_seconds=args.delay,
             agent=args.agent,
             reports=args.report,
+            workers=args.workers,
         )
         opener = None
         if args.datasets_dir:
@@ -384,7 +469,8 @@ def main() -> int:
                 checkpointer=saver,
             )  # fmt: skip
         report: dict[str, Any] = {"metrics": metrics}
-        if not args.no_score:
+        # Another split ships no answers, so it cannot be scored here.
+        if not args.no_score and not args.all_questions:
             report["score"] = score_run(
                 args.data_dir / "answers.jsonl", args.output_dir, args.splits, args.question_set,
                 questions_path=args.data_dir / "questions.jsonl",

@@ -81,11 +81,14 @@ class OpenAICompatibleAdapter:
         http_client: httpx2.Client | None = None,
         timeout: float = 60.0,
         extra_body: dict[str, Any] | None = None,
+        min_output_tokens: int = 0,
     ) -> None:
         self.provider = provider
         self.timeout_seconds = timeout
         # Provider-specific request fields, such as OpenRouter's provider routing.
         self._extra_body = dict(extra_body or {})
+        # A floor under each request's output cap, for models whose reasoning counts toward it.
+        self._min_output_tokens = min_output_tokens
         # Retries belong to LLMClient, so the SDK must not add its own.
         self._client = openai.OpenAI(
             base_url=base_url,
@@ -110,7 +113,7 @@ class OpenAICompatibleAdapter:
                 model=model,
                 messages=messages,
                 temperature=request.temperature,
-                max_tokens=request.max_output_tokens,
+                max_tokens=max(request.max_output_tokens, self._min_output_tokens),
                 **options,
             )
         except openai.RateLimitError as error:

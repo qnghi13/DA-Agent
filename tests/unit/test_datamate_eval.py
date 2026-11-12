@@ -673,3 +673,117 @@ def test_reports_need_the_graph_agent(data_dir: Path, tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="graph"):
         run_questions([], data_dir, llm, ledger, RunConfig(tmp_path / "out", reports=True))
+
+
+class ConcurrentAdapter:
+    """Answers each question with its number, and fails unless `parties` calls overlap, which
+    proves the questions run at the same time."""
+
+    provider = "fake"
+
+    def __init__(self, parties: int) -> None:
+        import threading
+
+        self.barrier = threading.Barrier(parties, timeout=5)
+        self.calls = 0
+
+    def complete(self, request: LLMRequest, model: str) -> LLMResponse:
+        self.calls += 1
+        self.barrier.wait()
+        text = " ".join(message.content or "" for message in request.messages)
+        value = 1 if "One?" in text else 2
+        return answer(value)
+
+
+def test_workers_run_questions_at_the_same_time_and_answer_each_once(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    """A local GPU serves many requests at once; one at a time wastes it."""
+    output = tmp_path / "out"
+    adapter = ConcurrentAdapter(parties=2)
+    ledger = CostLedger()
+    llm = LLMClient([Route(adapter, "m")], ledger, sleep=lambda _: None, max_retries=0)
+    questions = read_jsonl(data_dir / "questions.jsonl")[:2]
+
+    metrics = run_questions(
+        questions, data_dir, llm, ledger, RunConfig(output, workers=2),
+        open_shop_fn=lambda shop: open_shop(data_dir, shop),
+    )  # fmt: skip
+
+    rows = sorted(read_jsonl(output / "submission.jsonl"), key=lambda row: row["id"])
+    assert rows == [
+        {"id": "q1", "type": "number", "answer": 1},
+        {"id": "q2", "type": "number", "answer": 2},
+    ]
+    assert metrics["attempted"] == 2
+    assert metrics["total_tokens"] == 100
+    assert metrics["wall_seconds"] >= 0
+
+
+def test_workers_open_each_shop_once(data_dir: Path, tmp_path: Path) -> None:
+    adapter = ConcurrentAdapter(parties=2)
+    ledger = CostLedger()
+    llm = LLMClient([Route(adapter, "m")], ledger, sleep=lambda _: None, max_retries=0)
+    opened: list[str] = []
+
+    def opener(shop: str) -> ShopContext:
+        opened.append(shop)
+        return open_shop(data_dir, shop)
+
+    questions = read_jsonl(data_dir / "questions.jsonl")[:2]
+    run_questions(
+        questions, data_dir, llm, ledger, RunConfig(tmp_path / "out", workers=2),
+        open_shop_fn=opener,
+    )  # fmt: skip
+
+    assert opened == ["biz_1"]
+
+
+def test_workers_need_prepared_datasets(data_dir: Path, tmp_path: Path) -> None:
+    """The in-process SQLite baseline holds one connection, which threads cannot share."""
+    llm, ledger, _ = make_llm([])
+    questions = read_jsonl(data_dir / "questions.jsonl")[:2]
+    with pytest.raises(ValueError, match="workers"):
+        run_questions(questions, data_dir, llm, ledger, RunConfig(tmp_path / "out", workers=2))
+
+
+def test_workers_stop_starting_questions_after_repeated_provider_failures(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    llm, ledger, adapter = make_llm([PermanentLLMError("server down")] * 5)
+    questions = read_jsonl(data_dir / "questions.jsonl")[:2]
+
+    metrics = run_questions(
+        questions, data_dir, llm, ledger,
+        RunConfig(tmp_path / "out", workers=1, max_consecutive_failures=1),
+        open_shop_fn=lambda shop: open_shop(data_dir, shop),
+    )  # fmt: skip
+
+    assert metrics["stopped"] == "provider_failures"
+    assert len(adapter.requests) == 1
+
+
+def test_all_questions_of_another_split_run_without_a_question_set(tmp_path: Path) -> None:
+    """A test split has its own questions, which the training splits file does not list."""
+    from eval.datamate.run import all_questions
+
+    root = tmp_path / "public"
+    root.mkdir()
+    rows = [
+        {"id": "a", "business_id": "dev_001", "question": "?", "as_of_date": "2026-01-01"},
+        {"id": "b", "business_id": "dev_002", "question": "?", "as_of_date": "2026-01-01"},
+    ]
+    (root / "questions.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), "utf-8")
+    splits_path = tmp_path / "splits.json"
+    splits_path.write_text(json.dumps({"holdout_shops": ["biz_9"]}), encoding="utf-8")
+
+    assert [row["id"] for row in all_questions(root, splits_path)] == ["a", "b"]
+    assert [row["id"] for row in all_questions(root, splits_path, shops=["dev_002"])] == ["b"]
+    assert [row["id"] for row in all_questions(root, splits_path, limit=1)] == ["a"]
+
+
+def test_all_questions_refuses_training_holdout_shops(data_dir: Path, splits: Path) -> None:
+    from eval.datamate.run import all_questions
+
+    with pytest.raises(ValueError, match="holdout"):
+        all_questions(data_dir, splits)

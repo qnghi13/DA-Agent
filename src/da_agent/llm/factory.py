@@ -4,7 +4,9 @@ A paid model must have an entry in PRICES, or the cost ledger and money budgets 
 free. Models without an entry, such as local Ollama models, cost zero.
 """
 
+import json
 from collections.abc import Mapping
+from typing import Any
 
 import httpx2
 
@@ -37,6 +39,20 @@ def _openrouter_routing(env: Mapping[str, str]) -> dict[str, object]:
     if pinned:
         routing = {"order": [pinned], "allow_fallbacks": False, **routing}
     return {"provider": routing}
+
+
+def _vllm_extra_body(env: Mapping[str, str]) -> dict[str, Any]:
+    """The seed, then any options in VLLM_EXTRA_BODY, such as chat_template_kwargs to turn a
+    model's thinking off. A fixed seed makes sampling repeatable, so a re-run of the same image
+    gives the same answers; the server must also run one fixed configuration."""
+    body: dict[str, Any] = {"seed": int(env.get("VLLM_SEED", "0"))}
+    raw = env.get("VLLM_EXTRA_BODY")
+    if raw:
+        extra = json.loads(raw)
+        if not isinstance(extra, dict):
+            raise ValueError("VLLM_EXTRA_BODY must be a JSON object")
+        body.update(extra)
+    return body
 
 
 def _require_key(env: Mapping[str, str], name: str) -> str:
@@ -75,15 +91,15 @@ def _build_adapter(
             http_client=http_client,
         )
     if provider == "vllm":
-        # A fixed seed makes sampling repeatable, so a re-run of the same image gives the same
-        # answers. The server must also run one fixed configuration (batch-invariant if needed).
         return OpenAICompatibleAdapter(
             provider="vllm",
             base_url=env.get("VLLM_BASE_URL", "http://localhost:8000/v1"),
             api_key=env.get("VLLM_API_KEY", "EMPTY"),
             timeout=LOCAL_TIMEOUT_SECONDS,
             http_client=http_client,
-            extra_body={"seed": int(env.get("VLLM_SEED", "0"))},
+            extra_body=_vllm_extra_body(env),
+            # Reasoning tokens count toward max_tokens, so thinking models need more room.
+            min_output_tokens=int(env.get("VLLM_MIN_OUTPUT_TOKENS", "0")),
         )
     raise ValueError(
         f"unknown provider {provider!r}, expected groq, openrouter, gemini, ollama, or vllm"

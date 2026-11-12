@@ -182,3 +182,24 @@ def test_vllm_url_and_seed_come_from_the_environment() -> None:
     seen = _vllm_request_seen({"VLLM_BASE_URL": "http://gpu:9000/v1", "VLLM_SEED": "7"})
     assert seen["url"].startswith("http://gpu:9000/v1/")
     assert seen["body"]["seed"] == 7
+
+
+def test_vllm_extra_body_turns_model_options_on_without_code_changes() -> None:
+    """Qwen3 thinks by default; a run can turn it off through the chat template."""
+    seen = _vllm_request_seen(
+        {"VLLM_EXTRA_BODY": '{"chat_template_kwargs": {"enable_thinking": false}}'}
+    )
+    assert seen["body"]["chat_template_kwargs"] == {"enable_thinking": False}
+    assert seen["body"]["seed"] == 0
+
+
+def test_vllm_extra_body_must_be_a_json_object() -> None:
+    with pytest.raises(ValueError, match="VLLM_EXTRA_BODY"):
+        build_routes("vllm:m", {"VLLM_EXTRA_BODY": "[1]"})
+
+
+def test_vllm_min_output_tokens_leaves_room_for_thinking() -> None:
+    """Reasoning tokens count toward max_tokens, so a small cap would cut the answer off."""
+    assert _vllm_request_seen({})["body"]["max_tokens"] == 2048
+    seen = _vllm_request_seen({"VLLM_MIN_OUTPUT_TOKENS": "8192"})
+    assert seen["body"]["max_tokens"] == 8192
