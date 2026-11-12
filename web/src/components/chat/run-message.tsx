@@ -1,4 +1,4 @@
-import { AlertCircle, Check, CircleHelp, Copy, Loader2, PanelRight, X } from "lucide-react";
+import { AlertCircle, BookMarked, Check, CircleHelp, Copy, Loader2, PanelRight, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useReducer, useRef, useState } from "react";
 import { type Api, type Run, errorMessage } from "@/api";
 import { DataTable } from "@/components/data-table";
@@ -31,11 +31,14 @@ export function RunMessage({
   runId,
   active,
   onShowWork,
+  onCorrect,
 }: {
   api: Api;
   runId: string;
   active: boolean;
   onShowWork: (evidence: Evidence, trigger: HTMLElement) => void;
+  /** Opens memory to write a correction linked to this run. */
+  onCorrect?: (run: Run, trigger: HTMLElement) => void;
 }) {
   const [run, setRun] = useState<Run | null>(null);
   const [trail, dispatch] = useReducer(
@@ -86,6 +89,7 @@ export function RunMessage({
           trail={trail}
           active={active}
           onShowWork={(trigger) => onShowWork({ run, trail }, trigger)}
+          onCorrect={onCorrect && ((trigger) => onCorrect(run, trigger))}
         />
       ) : (
         <Progress
@@ -205,11 +209,13 @@ function Answer({
   trail,
   active,
   onShowWork,
+  onCorrect,
 }: {
   run: Run;
   trail: Trail;
   active: boolean;
   onShowWork: (trigger: HTMLElement) => void;
+  onCorrect?: (trigger: HTMLElement) => void;
 }) {
   const result = run.result;
   const summary = answerSummary(run.status, result);
@@ -282,6 +288,17 @@ function Answer({
           <Button variant="ghost" size="sm" onClick={copy}>
             {copied ? <Check /> : <Copy />}
             {copied ? "Copied" : "Copy"}
+          </Button>
+        )}
+        {onCorrect && run.status === "succeeded" && (
+          <Button
+            variant="ghost"
+            size="sm"
+            title="Teach the agent the rule it got wrong; new questions will follow it"
+            onClick={(event) => onCorrect(event.currentTarget)}
+          >
+            <BookMarked />
+            Correct
           </Button>
         )}
       </div>

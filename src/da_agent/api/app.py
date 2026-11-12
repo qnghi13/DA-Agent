@@ -176,6 +176,7 @@ def _run_view(job: Job, trace_ui_url: str | None = None) -> dict[str, Any]:
         "dataset_id": job.payload.get("dataset_id"),
         "question": job.payload.get("question"),
         "as_of": job.payload.get("as_of"),
+        "conversation_id": job.payload.get("conversation_id"),
         "status": job.status,
         "attempts": job.attempts,
         "error": job.last_error,
@@ -721,6 +722,7 @@ def list_runs(
                 "as_of": run.as_of,
                 "status": run.status,
                 "created_at": run.created_at.isoformat(),
+                "conversation_id": str(run.conversation_id) if run.conversation_id else None,
             }
             for run in runs
         ],

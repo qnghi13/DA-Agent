@@ -159,3 +159,23 @@ def test_another_workspace_cannot_read_or_change_memory_or_join_a_conversation(
         ).status_code
         == 404
     )
+
+
+def test_runs_show_which_conversation_they_belong_to(
+    client: TestClient, conn: psycopg.Connection, key: str
+) -> None:
+    dataset_id = ready_dataset(client, conn, key)
+    chat = client.post("/v1/conversations", headers=auth(key), json={"dataset_id": dataset_id})
+    chat_id = chat.json()["id"]
+    alone = client.post(
+        "/v1/runs", headers=auth(key), json={"dataset_id": dataset_id, "question": "One?"}
+    ).json()["id"]
+    inside = client.post(
+        "/v1/runs",
+        headers=auth(key),
+        json={"dataset_id": dataset_id, "question": "Two?", "conversation_id": chat_id},
+    ).json()["id"]
+
+    listed = client.get(f"/v1/runs?dataset_id={dataset_id}", headers=auth(key)).json()["runs"]
+    assert {run["id"]: run["conversation_id"] for run in listed} == {alone: None, inside: chat_id}
+    assert client.get(f"/v1/runs/{inside}", headers=auth(key)).json()["conversation_id"] == chat_id

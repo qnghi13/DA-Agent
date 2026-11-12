@@ -165,12 +165,62 @@ export class Api {
     });
   }
 
-  createRun(datasetId: string, question: string, asOf?: string): Promise<{ id: string }> {
+  /** A run reads the earlier turns of the conversation it names (docs/adr/0030). */
+  createRun(
+    datasetId: string,
+    question: string,
+    asOf?: string,
+    conversationId?: string | null,
+  ): Promise<{ id: string }> {
     return this.request("/v1/runs", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dataset_id: datasetId, question, ...(asOf ? { as_of: asOf } : {}) }),
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        dataset_id: datasetId,
+        question,
+        ...(asOf ? { as_of: asOf } : {}),
+        ...(conversationId ? { conversation_id: conversationId } : {}),
+      }),
     });
+  }
+
+  createConversation(datasetId: string): Promise<{ id: string }> {
+    return this.request("/v1/conversations", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ dataset_id: datasetId }),
+    });
+  }
+
+  /** Every note of a dataset: suggested, approved, rejected, and replaced. */
+  listMemory(datasetId: string): Promise<{ memory: MemoryEntry[] }> {
+    return this.request(`/v1/datasets/${encodeURIComponent(datasetId)}/memory`);
+  }
+
+  /** A note the caller writes is approved at once; later runs read it. */
+  writeMemory(datasetId: string, note: NewMemory): Promise<{ id: string }> {
+    return this.request(`/v1/datasets/${encodeURIComponent(datasetId)}/memory`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(note),
+    });
+  }
+
+  /** Replaces the note with a new approved one; returns the new id. */
+  editMemory(id: string, text: string, sql?: string | null): Promise<{ id: string }> {
+    return this.request(`/v1/memory/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ text, ...(sql ? { sql } : {}) }),
+    });
+  }
+
+  reviewMemory(id: string, decision: "approve" | "reject"): Promise<unknown> {
+    return this.request(`/v1/memory/${encodeURIComponent(id)}/${decision}`, { method: "POST" });
+  }
+
+  deleteMemory(id: string): Promise<void> {
+    return this.request(`/v1/memory/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
 
   /** A dataset's runs, newest first. Pass next_before back as `before` for older ones. */
@@ -236,11 +286,30 @@ export interface RunResult {
 
 export type VegaLiteSpec = Record<string, unknown>;
 
+export interface MemoryEntry {
+  id: string;
+  kind: "correction" | "alias" | "example";
+  text: string;
+  sql: string | null;
+  status: "proposed" | "approved" | "rejected";
+  author: string;
+  source_run_id: string | null;
+  superseded_by: string | null;
+}
+
+export interface NewMemory {
+  kind: MemoryEntry["kind"];
+  text: string;
+  sql?: string;
+  source_run_id?: string;
+}
+
 export interface Run {
   id: string;
   dataset_id: string;
   question: string;
   as_of: string;
+  conversation_id: string | null;
   status: "queued" | "running" | "succeeded" | "failed";
   attempts: number;
   error: string | null;
@@ -255,6 +324,7 @@ export interface RunSummary {
   as_of: string | null;
   status: Run["status"];
   created_at: string;
+  conversation_id: string | null;
 }
 
 export function errorMessage(caught: unknown): string {

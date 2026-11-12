@@ -1,6 +1,6 @@
 # 0030: Conversation and dataset memory in Postgres, written only by people
 
-**Status:** Accepted, 2026-11-12. Backend built the same day; the web UI is not.
+**Status:** Accepted, 2026-11-12. Built 2026-11-12 and 2026-11-13, web UI included.
 
 **Context:** Memory today is the checkpoint of one run: the job id is the graph's thread id
 (ADR 0018), so every question starts from nothing. A follow-up such as "and the month before?" has
@@ -42,8 +42,9 @@ shapes every later run in the workspace, so a wrong or injected entry becomes a 
 - Users approve what the agent suggests, an extra step. Direct corrections skip it, so a user who
   writes a wrong rule affects others until someone edits it; the audit log shows who wrote it.
 - The plan prompt grows by the conversation block and the inline entries; both are bounded.
-- No new service: one migration, a store in `storage/`, API routes, and a UI page to review,
-  edit, and delete entries.
+- No new service: one migration, a store in `storage/`, API routes, and a Memory panel in the
+  chat to write, review, edit, and delete entries. The chat keeps its current conversation per
+  dataset in the browser and marks where each conversation starts.
 
 **Rejected:**
 - One graph thread for the whole conversation: the checkpoint grows with every turn and holds tool

@@ -44,6 +44,7 @@ class RunSummary:
     as_of: str | None
     status: str
     created_at: dt.datetime
+    conversation_id: UUID | None = None
 
 
 class JobQueue:
@@ -171,7 +172,7 @@ class JobQueue:
         with self._conn.cursor(row_factory=class_row(RunSummary)) as cursor:
             return cursor.execute(
                 "SELECT id, payload ->> 'question' AS question, payload ->> 'as_of' AS as_of, "
-                "status, created_at FROM jobs "
+                "status, created_at, conversation_id FROM jobs "
                 "WHERE workspace_id = %s AND kind = 'run' AND payload ->> 'dataset_id' = %s "
                 "AND (%s::timestamptz IS NULL OR created_at < %s::timestamptz) "
                 "ORDER BY created_at DESC, id DESC LIMIT %s",
