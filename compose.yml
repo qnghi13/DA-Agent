@@ -66,6 +66,11 @@ services:
     depends_on:
       sandbox:
         condition: service_completed_successfully
+      # Docker fills an empty named volume from the first container's image, with the app user's
+      # ownership. The API and the Runner share `data`; created together, both copy and one fails
+      # with "mkdir /data/uploads: file exists". Waiting for the API makes it the only copier.
+      api:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8100/healthz')"]
       interval: 3s
