@@ -16,12 +16,13 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
   14/14 built. Spec repairs in code: raw text as a clean name becomes its slug; rules naming an
   undeclared column by its slug map back to it (dev_013 dates 63% -> 100%). ADR 0029: code
   excludes proven subtotals (dev_010 narrow rule: 240 left -> 0; train exclusions still 100%).
-- GPU kit (a24a501): `docs/eval/gpu.md`, `scripts/gpu/serve.sh`, `eval.gpu.preflight`,
-  `run --workers N`. Memory (ADR 0030, 9806563): Groq demo trial 12 runs, $0.0063.
-- Next: rent a GPU; rerun prepare + `regression` with 2–3 ≤15B models. Then a
-  per-shop semantic layer (canonical order status, revenue lines, base-unit qty) in a private,
-  uncommitted folder (user, 2026-11-11), ignored via `.git/info/exclude`. Test size: from user.
-
+- GPU kit (a24a501): runbook, `serve.sh`, preflight, `--workers`. Memory: ADR 0030 (9806563).
+- GPU run 1 (2026-11-13, 1x5090, vLLM 0.33.0, `gemma-4-12B-it` bf16, batch-invariant): preflight
+  ok (tool calls, identical alone vs busy). `regression` on `datasets-dev`, 3 workers: **+56**
+  (99/43/8) vs Groq +53; ~12.7 s/question wall. Failure analysis ($0): 14 right values with the
+  wrong kind (percent as number, date as string): offline kind coercion gives +84, hurts none
+  (Groq +55). Then status variants and line-vs-header revenue (~12, checked by hand SQL), debt
+  4, budget abstains 8 (SQLite functions, made-up columns). Semantic layer: private folder.
 ## Next step
 0. Guard signals by kind (ADR 0031, uncommitted): tool `error_kind`, verify `verify_log`, in
    spans, events, eval rows/metrics, and the quality panel (`runs_saved`). No LLM run yet: the

@@ -10,6 +10,7 @@
 #   hermes   Qwen2.5 and Hermes-format models
 #   mistral  Mistral and Ministral models in the official format
 #   granite4 IBM Granite 4.0
+#   gemma4   Gemma 4 (thinking off unless a request turns it on)
 #
 # Environment (defaults in brackets):
 #   TP [number of visible GPUs]  tensor parallel size; the challenge machine has 2 x RTX 5090
@@ -32,14 +33,25 @@ case "$family" in
     parsers=(--enable-auto-tool-choice --tool-call-parser mistral
       --tokenizer-mode mistral --config-format mistral --load-format mistral) ;;
   granite4) parsers=(--enable-auto-tool-choice --tool-call-parser granite4) ;;
-  *) echo "unknown family: $family (qwen3, hermes, mistral, granite4)" >&2; exit 2 ;;
+  gemma4) parsers=(--enable-auto-tool-choice --tool-call-parser gemma4 --reasoning-parser gemma4) ;;
+  *) echo "unknown family: $family (qwen3, hermes, mistral, granite4, gemma4)" >&2; exit 2 ;;
 esac
 
-venv="${VENV:-$HOME/vllm-venv}"
-if [ ! -x "$venv/bin/vllm" ]; then
-  command -v uv >/dev/null || pip install --quiet uv
-  uv venv --python 3.12 "$venv"
-  VIRTUAL_ENV="$venv" uv pip install "${VLLM_SPEC:-vllm}"
+# A vLLM template already has vllm on PATH; a PyTorch template gets its own venv, whose vLLM
+# brings the PyTorch it needs, so the template's PyTorch version does not matter.
+if [ -z "${VENV:-}" ] && command -v vllm >/dev/null; then
+  vllm_bin="$(command -v vllm)"
+  python_bin="$(dirname "$vllm_bin")/python3"
+  [ -x "$python_bin" ] || python_bin="python3"
+else
+  venv="${VENV:-$HOME/vllm-venv}"
+  if [ ! -x "$venv/bin/vllm" ]; then
+    command -v uv >/dev/null || pip install --quiet uv
+    uv venv --python 3.12 "$venv"
+    VIRTUAL_ENV="$venv" uv pip install "${VLLM_SPEC:-vllm}"
+  fi
+  vllm_bin="$venv/bin/vllm"
+  python_bin="$venv/bin/python"
 fi
 
 gpus="$(nvidia-smi --list-gpus | wc -l)"
@@ -49,7 +61,7 @@ mkdir -p "$log_dir"
 {
   echo "date: $(date -u +%FT%TZ)"
   echo "model: $model ($family)"
-  echo "vllm: $("$venv/bin/python" -c 'import vllm; print(vllm.__version__)')"
+  echo "vllm: $("$python_bin" -c 'import vllm; print(vllm.__version__)')"
   nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
 } | tee "$log_dir/server-info.txt"
 
@@ -59,7 +71,7 @@ if [ -n "${QUANTIZATION:-}" ]; then quantization=(--quantization "$QUANTIZATION"
 # --generation-config vllm ignores the model's sampling defaults, so the request's temperature
 # and seed alone decide sampling.
 # shellcheck disable=SC2086
-VLLM_BATCH_INVARIANT="${BATCH_INVARIANT:-1}" exec "$venv/bin/vllm" serve "$model" \
+VLLM_BATCH_INVARIANT="${BATCH_INVARIANT:-1}" exec "$vllm_bin" serve "$model" \
   --host 127.0.0.1 --port "${PORT:-8000}" \
   --tensor-parallel-size "${TP:-$gpus}" \
   --max-model-len "${MAX_MODEL_LEN:-32768}" \

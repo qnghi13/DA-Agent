@@ -111,13 +111,14 @@ def prepare_shops(
     max_cost: float,
     max_tokens_per_shop: int,
     specs: dict[str, DatasetSpec] | None = None,
+    workers: int = 1,
 ) -> list[dict[str, Any]]:
     return prepare_uploads(
         {shop: data_dir / "data" / shop for shop in shops},
         output_dir, runner, llm, ledger,
         description=file_conventions(data_dir),
         max_cost=max_cost, max_tokens_per_upload=max_tokens_per_shop,
-        extra_files=[data_dir / CALENDAR], specs=specs,
+        extra_files=[data_dir / CALENDAR], specs=specs, workers=workers,
     )  # fmt: skip
 
 
@@ -138,6 +139,7 @@ def main() -> int:
     parser.add_argument("--image", default="da-agent-sandbox:dev")
     parser.add_argument("--max-cost", type=float, required=True)
     parser.add_argument("--max-tokens-per-shop", type=int, default=150_000)
+    parser.add_argument("--workers", type=int, default=1, help="shops at the same time")
     args = parser.parse_args()
 
     if args.all_shops:
@@ -152,6 +154,7 @@ def main() -> int:
     summary = prepare_shops(
         shops, args.data_dir, root, runner, llm, ledger,
         max_cost=args.max_cost, max_tokens_per_shop=args.max_tokens_per_shop, specs=specs,
+        workers=args.workers,
     )  # fmt: skip
     write_summary(root, summary, ledger)
     return 0

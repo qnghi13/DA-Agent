@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -62,75 +63,100 @@ def prepare_uploads(
     max_tokens_per_upload: int,
     extra_files: list[Path] | None = None,
     specs: dict[str, DatasetSpec] | None = None,
+    workers: int = 1,
 ) -> list[dict[str, Any]]:
     """Prepare each named upload into output_dir/datasets/<name>, and summarise each run.
 
-    Uploads with a saved spec in `specs` are rebuilt with it and no model call."""
+    Uploads with a saved spec in `specs` are rebuilt with it and no model call. With workers above
+    one, that many uploads are prepared at the same time, for a local model server; the money
+    limit is checked as each upload starts, so uploads already running may pass it. The summary
+    keeps the order of `sources`."""
     uploads = runner.config.uploads_root
     if uploads is None:
         raise ValueError("the runner needs an uploads root")
-    summary: list[dict[str, Any]] = []
     for name, source in sources.items():
         if source.resolve() != (uploads / name).resolve():
             copy_upload(source, uploads / name, extra_files)
-        if specs is not None and name in specs:
-            prepared = rebuild_dataset(name, runner, specs[name])
-        elif llm is None:
-            summary.append({"shop": name, "status": "skipped_no_spec"})
-            continue
-        elif ledger.totals().cost_usd >= max_cost:
-            summary.append({"shop": name, "status": "skipped_cost_limit"})
-            continue
-        else:
-            prepared = prepare_dataset(
-                name,
-                runner,
-                llm,
-                run_id=name,
-                description=description,
-                budget=RunBudget(max_total_tokens=max_tokens_per_upload),
+
+    def prepare_one(name: str) -> dict[str, Any]:
+        return _prepare_one(
+            name, output_dir, runner, llm, ledger, description=description, max_cost=max_cost,
+            max_tokens_per_upload=max_tokens_per_upload, specs=specs,
+        )  # fmt: skip
+
+    if workers == 1:
+        return [prepare_one(name) for name in sources]
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(prepare_one, sources))
+
+
+def _prepare_one(
+    name: str,
+    output_dir: Path,
+    runner: Runner,
+    llm: LLMClient | None,
+    ledger: CostLedger,
+    *,
+    description: str,
+    max_cost: float,
+    max_tokens_per_upload: int,
+    specs: dict[str, DatasetSpec] | None,
+) -> dict[str, Any]:
+    if specs is not None and name in specs:
+        prepared = rebuild_dataset(name, runner, specs[name])
+    elif llm is None:
+        return {"shop": name, "status": "skipped_no_spec"}
+    elif ledger.totals().cost_usd >= max_cost:
+        return {"shop": name, "status": "skipped_cost_limit"}
+    else:
+        prepared = prepare_dataset(
+            name,
+            runner,
+            llm,
+            run_id=name,
+            description=description,
+            budget=RunBudget(max_total_tokens=max_tokens_per_upload),
+        )
+    totals = ledger.totals(name)
+    row: dict[str, Any] = {
+        "shop": name,
+        "status": prepared.status,
+        "llm_calls": totals.calls,
+        "tokens": totals.total_tokens,
+        "cost_usd": round(totals.cost_usd, 5),
+        "ingest_seconds": round(prepared.ingest.duration_seconds, 1),
+    }
+    if prepared.proposal is not None:
+        row["attempts"] = prepared.proposal.attempts
+        row["problems"] = prepared.proposal.problems
+        row["error"] = prepared.proposal.error
+    build = prepared.build
+    if build is not None and build.report is not None and build.output_dir is not None:
+        target = output_dir / "datasets" / name
+        shutil.rmtree(target, ignore_errors=True)
+        shutil.move(str(build.output_dir), target)
+        if prepared.spec is not None:
+            (target / "spec.json").write_text(
+                prepared.spec.model_dump_json(indent=1), encoding="utf-8"
             )
-        totals = ledger.totals(name)
-        row: dict[str, Any] = {
-            "shop": name,
-            "status": prepared.status,
-            "llm_calls": totals.calls,
-            "tokens": totals.total_tokens,
-            "cost_usd": round(totals.cost_usd, 5),
-            "ingest_seconds": round(prepared.ingest.duration_seconds, 1),
+        columns = [c for t in build.report.tables for c in t.columns]
+        typed = [c for c in columns if c.type != "text"]
+        row["tables"] = len(build.report.tables)
+        row["typed_columns"] = len(typed)
+        row["min_parse_rate"] = round(min((c.parse_rate for c in typed), default=1.0), 4)
+        row["remaining_problems"] = parse_problems(build.report)
+        row["hidden_columns"] = sum(len(t.hidden) for t in build.report.tables)
+        row["excluded_rows"] = sum(e.rows for t in build.report.tables for e in t.excluded)
+        row["proven_subtotals"] = {
+            t.name: t.proven_subtotals for t in build.report.tables if t.proven_subtotals
         }
-        if prepared.proposal is not None:
-            row["attempts"] = prepared.proposal.attempts
-            row["problems"] = prepared.proposal.problems
-            row["error"] = prepared.proposal.error
-        build = prepared.build
-        if build is not None and build.report is not None and build.output_dir is not None:
-            target = output_dir / "datasets" / name
-            shutil.rmtree(target, ignore_errors=True)
-            shutil.move(str(build.output_dir), target)
-            if prepared.spec is not None:
-                (target / "spec.json").write_text(
-                    prepared.spec.model_dump_json(indent=1), encoding="utf-8"
-                )
-            columns = [c for t in build.report.tables for c in t.columns]
-            typed = [c for c in columns if c.type != "text"]
-            row["tables"] = len(build.report.tables)
-            row["typed_columns"] = len(typed)
-            row["min_parse_rate"] = round(min((c.parse_rate for c in typed), default=1.0), 4)
-            row["remaining_problems"] = parse_problems(build.report)
-            row["hidden_columns"] = sum(len(t.hidden) for t in build.report.tables)
-            row["excluded_rows"] = sum(e.rows for t in build.report.tables for e in t.excluded)
-            row["proven_subtotals"] = {
-                t.name: t.proven_subtotals for t in build.report.tables if t.proven_subtotals
-            }
-            row["dropped_rules"] = prepared.dropped_rules
-            row["deduplicated"] = prepared.deduplicated
-            row["unproven_repeats"] = {
-                t.name: t.duplicate_rows for t in build.report.tables if t.duplicate_rows
-            }
-        summary.append(row)
-        print(json.dumps(row, ensure_ascii=False), flush=True)
-    return summary
+        row["dropped_rules"] = prepared.dropped_rules
+        row["deduplicated"] = prepared.deduplicated
+        row["unproven_repeats"] = {
+            t.name: t.duplicate_rows for t in build.report.tables if t.duplicate_rows
+        }
+    print(json.dumps(row, ensure_ascii=False), flush=True)
+    return row
 
 
 def write_summary(root: Path, summary: list[dict[str, Any]], ledger: CostLedger) -> None:
