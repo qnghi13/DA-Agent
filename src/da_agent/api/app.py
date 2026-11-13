@@ -8,13 +8,14 @@ found", so ids from another workspace reveal nothing. See docs/adr/0020.
 import datetime as dt
 import json
 import math
+import os
 import shutil
 import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, BinaryIO, Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -31,7 +32,6 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import (
-    FileResponse,
     HTMLResponse,
     JSONResponse,
     Response,
@@ -349,13 +349,18 @@ def operator(caller: Who) -> Principal:
     return caller
 
 
-def _may_start_job(conn: psycopg.Connection, caller: Member, settings: ApiSettings) -> None:
-    """New jobs have their own rate per workspace, and stop when the day's model budget is spent."""
+def _may_start_job(
+    conn: psycopg.Connection, caller: Member, settings: ApiSettings, *, calls_model: bool = True
+) -> None:
+    """New jobs have their own rate per workspace, and jobs that call a model stop when the day's
+    model budget is spent."""
     wait = RateLimiter(conn).hit(
         f"jobs:{caller.workspace_id}", limit=settings.jobs_per_minute, window_seconds=60
     )
     if wait is not None:
         raise _too_many(wait, "too many new jobs for this workspace")
+    if not calls_model:
+        return
     limit = daily_budget(conn, caller.workspace_id, settings.daily_budget_usd)
     if spent_today(conn, caller.workspace_id) >= limit:
         midnight = dt.datetime.combine(
@@ -791,7 +796,8 @@ def create_export(
     dataset_id = _uuid(str(job.payload.get("dataset_id", "")))
     if dataset_changed_since_run(conn, caller.workspace_id, job.id, dataset_id):
         raise HTTPException(status_code=409, detail=CHANGED_DATASET)
-    _may_start_job(conn, caller, settings)
+    # An export runs a stored query in the sandbox and calls no model.
+    _may_start_job(conn, caller, settings, calls_model=False)
     payload = {"run_id": str(job.id), "query_index": index, "dataset_id": str(dataset_id)}
     with conn.transaction():
         export_id = JobQueue(conn).enqueue(caller.workspace_id, "export", payload)
@@ -821,20 +827,38 @@ def get_export(export_id: str, conn: Db, caller: Caller) -> dict[str, Any]:
 
 
 @router.get("/exports/{export_id}/file")
-def download_export(export_id: str, conn: Db, caller: Caller, settings: Settings) -> FileResponse:
+def download_export(
+    export_id: str, conn: Db, caller: Caller, settings: Settings
+) -> StreamingResponse:
     job = export_job(export_id, conn, caller)
     if job.status != "succeeded" or job.result is None:
         raise HTTPException(status_code=409, detail=f"the export is {job.status}")
     path = export_file(settings.exports_dir, job.id)
     if is_expired(path, now=time.time()):
         raise HTTPException(status_code=404, detail=EXPIRED_EXPORT)
+    # Open before answering: the worker may purge the file at any moment, and an open file
+    # still reads in full after it is deleted.
+    try:
+        file = path.open("rb")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=EXPIRED_EXPORT) from None
     log(conn, caller, "export.download", str(job.id))
-    return FileResponse(
-        path,
+    filename = str(job.result.get("filename") or f"{job.id}.csv")
+    return StreamingResponse(
+        _read_and_close(file),
         media_type="text/csv; charset=utf-8",
-        filename=str(job.result.get("filename") or f"{job.id}.csv"),
-        headers={"X-Content-Type-Options": "nosniff"},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(os.fstat(file.fileno()).st_size),
+            "X-Content-Type-Options": "nosniff",
+        },
     )
+
+
+def _read_and_close(file: BinaryIO, chunk_bytes: int = 1 << 20) -> Iterator[bytes]:
+    with file:
+        while chunk := file.read(chunk_bytes):
+            yield chunk
 
 
 FINISHED = ("succeeded", "failed")

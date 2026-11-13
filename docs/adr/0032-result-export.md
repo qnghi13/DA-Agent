@@ -28,8 +28,8 @@ job that writes a file.
   as background. `make_chart` refuses truncated results, so a chart holds every row it plots.
 
 **Consequences:**
-- The API still holds no runner token and never runs SQL. Exports share the job queue's limits,
-  audit (`export.create`, `export.download`), retries, and traces (`job.export`).
+- The API still holds no runner token and never runs SQL. Exports share the job queue's rate
+  (not the daily model budget: they call no model), audit (`export.create`, `export.download`), retries, and traces (`job.export`).
 - A download waits a few seconds for a sandbox to start.
 - Exports are copies of user data on the shared volume for up to a day.
 

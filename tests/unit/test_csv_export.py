@@ -137,3 +137,14 @@ def test_formula_column_names_are_escaped(tmp_path: Path) -> None:
 
     assert _rows(out)[0] == ["'=HYPERLINK(1)", "'@n"]
     assert report.columns == ["=HYPERLINK(1)", "@n"]
+
+
+def test_binary_cells_are_written_as_hex(tmp_path: Path) -> None:
+    database = _database(
+        tmp_path, "CREATE TABLE t (b BLOB)", "INSERT INTO t VALUES ('\\xDE\\xAD'::BLOB)"
+    )
+    out = tmp_path / "result.csv"
+
+    write_csv(database, "SELECT b FROM t", out)
+
+    assert _rows(out)[1] == ["dead"]

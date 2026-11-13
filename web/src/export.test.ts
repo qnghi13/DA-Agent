@@ -41,12 +41,28 @@ describe("waitForExport", () => {
     await expect(waitForExport(get, "e1", { sleep: noSleep })).resolves.toEqual(failed);
   });
 
-  it("gives up after the timeout", async () => {
-    const { get } = sequence([job("running")]);
+  it("keeps waiting while the export is queued behind other jobs", async () => {
+    const done = job("succeeded", { rows: 2, filename: "a.csv" });
+    const { get, asked } = sequence([...Array(400).fill(job("queued")), done]);
 
-    await expect(
-      waitForExport(get, "e1", { sleep: noSleep, intervalMs: 1000, timeoutMs: 3000 }),
-    ).rejects.toThrow("the export is taking too long");
+    await expect(waitForExport(get, "e1", { sleep: noSleep, intervalMs: 1000 })).resolves.toEqual(
+      done,
+    );
+    expect(asked).toHaveLength(401);
+  });
+
+  it("stops polling when aborted", async () => {
+    const controller = new AbortController();
+    const { get, asked } = sequence([job("running")]);
+    const sleep = () => {
+      controller.abort();
+      return Promise.resolve();
+    };
+
+    await expect(waitForExport(get, "e1", { sleep, signal: controller.signal })).rejects.toThrow(
+      "aborted",
+    );
+    expect(asked).toEqual(["e1"]);
   });
 });
 

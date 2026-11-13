@@ -43,6 +43,9 @@ def _cell(value: Any) -> Any:
         return f"'{value}" if value.startswith(_FORMULA_STARTS) else value
     if isinstance(value, dt.date | dt.datetime | dt.time):
         return value.isoformat()
+    if isinstance(value, bytes | bytearray | memoryview):
+        # Hex holds only 0-9 and a-f, so it never starts a formula and reads the same everywhere.
+        return bytes(value).hex()
     return value
 
 

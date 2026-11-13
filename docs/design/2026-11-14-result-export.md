@@ -68,7 +68,7 @@ The user chose A on 2026-11-14 after comparing with production systems.
 1. The user clicks **Download CSV** on query *n* of a run.
 2. `POST /runs/{run_id}/queries/{n}/export` checks the run belongs to the caller's workspace,
    succeeded, and has a query *n* that succeeded; checks the dataset is still ready; applies the
-   same job limits as a run; enqueues an `export` job with `{run_id, query_index, dataset_id}`;
+   same job rate as a run, but not the daily model budget, since an export calls no model; enqueues an `export` job with `{run_id, query_index, dataset_id}`;
    writes an audit entry. It returns `{id, status}`. The SQL is read from the stored run result by
    the worker, never from the request.
 3. The worker's `export` handler reads the SQL from the run result, checks it again with the SQL
@@ -78,8 +78,10 @@ The user chose A on 2026-11-14 after comparing with production systems.
    has more than the row cap or the file would pass the byte cap; it never writes a cut file.
 5. The worker moves the file to `exports/<job id>.csv` on the shared volume and completes the job
    with `{rows, bytes, filename}`.
-6. The UI follows the job (events or polling, as for runs), then downloads
-   `GET /exports/{job_id}/file`, which checks the workspace and serves the file as an attachment.
+6. The UI polls the job with no deadline of its own (the sandbox timeout and job leases end
+   every job) and stops when the view closes, then downloads `GET /exports/{job_id}/file`, which
+   checks the workspace and serves the file as an attachment. The API opens the file before it
+   answers, so a purge during the download cannot cut it; a file already gone is a 404.
 
 ### Limits
 
@@ -97,7 +99,7 @@ than 1,000,000 rows; add a filter or aggregate".
 ### File format
 
 CSV, UTF-8 with a byte-order mark so Excel shows Vietnamese correctly, comma separator, header
-row, ISO dates, numbers without thousands separators. File name:
+row, ISO dates, numbers without thousands separators, binary values as hex. File name:
 `da-agent-<run id prefix>-query-<n>.csv`.
 
 ### Charts

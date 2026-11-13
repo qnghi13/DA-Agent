@@ -228,3 +228,35 @@ def test_an_expired_export_is_404_not_500(
 
     assert response.status_code == 404
     assert response.json()["detail"] == "the export expired; download it again"
+
+
+def test_an_export_starts_when_the_model_budget_is_spent(
+    client: TestClient, conn: psycopg.Connection, key: str, workspace: UUID
+) -> None:
+    # An export runs a stored query in the sandbox and calls no model, so it costs nothing.
+    run_id = finished_run(client, conn, key)
+    conn.execute("UPDATE workspaces SET daily_budget_usd = 0 WHERE id = %s", (workspace,))
+
+    assert start(client, key, run_id).status_code == 202
+
+
+def test_a_file_purged_after_the_expiry_check_is_404_not_500(
+    client: TestClient,
+    conn: psycopg.Connection,
+    key: str,
+    exports: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, export_id = finished_export(client, conn, key, exports)
+    path = export_file(exports, UUID(export_id))
+
+    def checked_then_purged(target: Path, *, now: float) -> bool:
+        target.unlink()
+        return False
+
+    monkeypatch.setattr("da_agent.api.app.is_expired", checked_then_purged)
+    response = client.get(f"/v1/exports/{export_id}/file", headers=auth(key))
+
+    assert not path.exists()
+    assert response.status_code == 404
+    assert response.json()["detail"] == "the export expired; download it again"

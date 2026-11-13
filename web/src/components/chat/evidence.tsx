@@ -1,5 +1,5 @@
 import { Check, Copy, Download, ExternalLink } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { type Api, type QueryRecord, errorMessage, exportFileUrl } from "@/api";
 import { cell, DataTable } from "@/components/data-table";
 import { Button } from "@/components/ui/button";
@@ -183,13 +183,20 @@ function QueryRows({
 function ExportButton({ api, runId, index }: { api: Api; runId: string; index: number }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Polling has no deadline, so it stops when this view goes away.
+  const polling = useRef<AbortController | null>(null);
+  useEffect(() => () => polling.current?.abort(), []);
 
   async function download() {
     setBusy(true);
     setError(null);
+    const controller = new AbortController();
+    polling.current = controller;
     try {
       const { id } = await api.startExport(runId, index);
-      const job = await waitForExport((exportId) => api.getExport(exportId), id);
+      const job = await waitForExport((exportId) => api.getExport(exportId), id, {
+        signal: controller.signal,
+      });
       if (job.status === "failed") {
         setError(job.error ?? "The export failed.");
         return;
@@ -199,9 +206,9 @@ function ExportButton({ api, runId, index }: { api: Api; runId: string; index: n
       link.download = job.filename ?? "";
       link.click();
     } catch (caught) {
-      setError(errorMessage(caught));
+      if (!controller.signal.aborted) setError(errorMessage(caught));
     } finally {
-      setBusy(false);
+      if (!controller.signal.aborted) setBusy(false);
     }
   }
 
