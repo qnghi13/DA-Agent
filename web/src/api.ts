@@ -257,6 +257,17 @@ export class Api {
     return this.request(`/v1/ops/failures?${params}`);
   }
 
+  /** Start writing the whole result of one query of a run as CSV. `index` counts from 0. */
+  startExport(runId: string, index: number): Promise<{ id: string; status: string }> {
+    return this.request(`/v1/runs/${encodeURIComponent(runId)}/queries/${index}/export`, {
+      method: "POST",
+    });
+  }
+
+  getExport(id: string): Promise<ExportJob> {
+    return this.request(`/v1/exports/${encodeURIComponent(id)}`);
+  }
+
   /** The standalone HTML report, shown in a sandboxed frame. */
   async getReport(id: string): Promise<string> {
     const response = await fetch(`/v1/runs/${encodeURIComponent(id)}/report`, {
@@ -265,6 +276,21 @@ export class Api {
     if (!response.ok) throw new ApiError(response.status, await errorDetail(response));
     return response.text();
   }
+}
+
+/** An export job (docs/design/2026-11-14-result-export.md). `error` is set when it failed. */
+export interface ExportJob {
+  id: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  rows: number | null;
+  bytes: number | null;
+  filename: string | null;
+  error: string | null;
+}
+
+/** Where a finished export downloads from; the session cookie goes with it. */
+export function exportFileUrl(id: string): string {
+  return `/v1/exports/${encodeURIComponent(id)}/file`;
 }
 
 export interface QueryRecord {

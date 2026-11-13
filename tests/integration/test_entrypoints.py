@@ -101,8 +101,9 @@ def test_the_worker_handles_every_job_kind_with_durable_costs(
 
     worker = build_worker(settings(tmp_path, schema, **env), env)
 
-    assert set(worker.handlers) == {"run", "ingest", "build"}
+    assert set(worker.handlers) == {"run", "ingest", "build", "export"}
     assert (tmp_path / "uploads").is_dir() and (tmp_path / "datasets").is_dir()
+    assert (tmp_path / "exports").is_dir()
     assert type(worker.handlers["run"].llm._ledger).__name__ == "PostgresCostLedger"  # type: ignore[attr-defined]
 
 

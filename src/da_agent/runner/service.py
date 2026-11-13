@@ -12,6 +12,8 @@ from fastapi.responses import JSONResponse
 from da_agent.runner.runner import (
     BuildResult,
     BuildRun,
+    ExportResult,
+    ExportRun,
     IngestResult,
     IngestRun,
     SandboxRunner,
@@ -51,5 +53,9 @@ def create_runner_app(runner: SandboxRunner, token: str) -> FastAPI:
     @app.post("/v1/build", dependencies=auth)
     def build(request: BuildRun) -> BuildResult:
         return runner.build(request)
+
+    @app.post("/v1/export", dependencies=auth)
+    def export(request: ExportRun) -> ExportResult:
+        return runner.export(request)
 
     return app

@@ -91,6 +91,9 @@ flowchart LR
     verify -- "fail, none left" --> abstain
 ```
 
+- **Results leave in full.** A query's whole result downloads as CSV (up to 1,000,000 rows),
+  re-run in a sandbox from the stored query; charts download as PNG or SVG
+  ([ADR 0032](docs/adr/0032-result-export.md)).
 - **Runs survive crashes and stay within budget.** Every model turn is a Postgres checkpoint, so a
   killed worker's run continues without repeating finished steps. Token and money limits apply per
   run and per workspace.

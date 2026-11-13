@@ -1,0 +1,62 @@
+import { describe, expect, it } from "vitest";
+import type { ExportJob } from "./api";
+import { chartFilename, waitForExport } from "./export";
+
+const job = (status: ExportJob["status"], extra: Partial<ExportJob> = {}): ExportJob => ({
+  id: "e1",
+  status,
+  rows: null,
+  bytes: null,
+  filename: null,
+  error: null,
+  ...extra,
+});
+
+function sequence(jobs: ExportJob[]) {
+  const asked: string[] = [];
+  return {
+    asked,
+    get: (id: string) => {
+      asked.push(id);
+      return Promise.resolve(jobs[Math.min(asked.length - 1, jobs.length - 1)]);
+    },
+  };
+}
+
+const noSleep = () => Promise.resolve();
+
+describe("waitForExport", () => {
+  it("resolves when the export succeeds", async () => {
+    const done = job("succeeded", { rows: 2, filename: "a.csv" });
+    const { get, asked } = sequence([job("queued"), job("running"), done]);
+
+    await expect(waitForExport(get, "e1", { sleep: noSleep })).resolves.toEqual(done);
+    expect(asked).toEqual(["e1", "e1", "e1"]);
+  });
+
+  it("resolves with the error when it fails", async () => {
+    const failed = job("failed", { error: "the result has more than 1,000,000 rows" });
+    const { get } = sequence([job("queued"), failed]);
+
+    await expect(waitForExport(get, "e1", { sleep: noSleep })).resolves.toEqual(failed);
+  });
+
+  it("gives up after the timeout", async () => {
+    const { get } = sequence([job("running")]);
+
+    await expect(
+      waitForExport(get, "e1", { sleep: noSleep, intervalMs: 1000, timeoutMs: 3000 }),
+    ).rejects.toThrow("the export is taking too long");
+  });
+});
+
+describe("chartFilename", () => {
+  it("slugs the title, keeping Vietnamese letters readable", () => {
+    expect(chartFilename("Doanh thu tháng 6/2026", "png")).toBe("doanh-thu-thang-6-2026.png");
+  });
+
+  it("falls back to chart", () => {
+    expect(chartFilename(undefined, "svg")).toBe("chart.svg");
+    expect(chartFilename("!!!", "svg")).toBe("chart.svg");
+  });
+});

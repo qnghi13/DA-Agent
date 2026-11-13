@@ -116,6 +116,10 @@ class Settings:
     def datasets_root(self) -> Path:
         return self.data_dir / "datasets"
 
+    @property
+    def exports_root(self) -> Path:
+        return self.data_dir / "exports"
+
     @classmethod
     def from_env(cls, env: Mapping[str, str], *, schema: str | None = None) -> "Settings":
         return cls(

@@ -241,6 +241,9 @@ columns, never writes the spec, and gets back no rows ([ADR 0015](adr/0015-chart
 `make_chart` is offered only when a run asks for charts, and `AgentResult.charts` returns the specs.
 Reports are standalone HTML, and every number links to the query cell that produced it
 ([ADR 0016](adr/0016-html-reports.md)). `AgentResult.queries` holds the rows the model saw.
+A query's whole result downloads as CSV through an `export` job: the worker re-runs the stored SQL
+in a sandbox that writes the file, and the API serves it to the workspace for 24 hours. Charts
+download as PNG or SVG from the browser ([ADR 0032](adr/0032-result-export.md)).
 
 ## Failure handling
 

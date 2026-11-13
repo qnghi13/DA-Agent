@@ -9,6 +9,8 @@ from da_agent.runner.runner import (
     STARTUP_GRACE_SECONDS,
     BuildResult,
     BuildRun,
+    ExportResult,
+    ExportRun,
     IngestResult,
     IngestRun,
     JobResult,
@@ -44,8 +46,11 @@ class RunnerClient:
     def build(self, request: BuildRun) -> BuildResult:
         return self._job("/v1/build", request, BuildResult)
 
+    def export(self, request: ExportRun) -> ExportResult:
+        return self._job("/v1/export", request, ExportResult)
+
     def _job[ResultT: JobResult](
-        self, path: str, request: IngestRun | BuildRun, model: type[ResultT]
+        self, path: str, request: IngestRun | BuildRun | ExportRun, model: type[ResultT]
     ) -> ResultT:
         def failure(message: str) -> ResultT:
             return model(

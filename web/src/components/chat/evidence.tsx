@@ -1,9 +1,10 @@
 import { Check, Copy, Download, ExternalLink } from "lucide-react";
 import { useEffect, useState } from "react";
-import { type Api, type QueryRecord, errorMessage } from "@/api";
+import { type Api, type QueryRecord, errorMessage, exportFileUrl } from "@/api";
 import { cell, DataTable } from "@/components/data-table";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { waitForExport } from "@/export";
 import { StepLine, type Evidence } from "./run-message";
 
 const PREVIEW_ROWS = 20;
@@ -63,7 +64,9 @@ export function EvidenceContent({ api, evidence }: { api: Api; evidence: Evidenc
           </TabsContent>
           <TabsContent value="data" className="flex flex-col gap-5 p-4">
             {queries.length ? (
-              queries.map((query, index) => <QueryRows key={index} index={index} query={query} />)
+              queries.map((query, index) => (
+                <QueryRows key={index} api={api} runId={run.id} index={index} query={query} />
+              ))
             ) : (
               <Empty>No query results.</Empty>
             )}
@@ -137,14 +140,28 @@ function SqlBlock({ index, query }: { index: number; query: QueryRecord }) {
   );
 }
 
-function QueryRows({ index, query }: { index: number; query: QueryRecord }) {
+function QueryRows({
+  api,
+  runId,
+  index,
+  query,
+}: {
+  api: Api;
+  runId: string;
+  index: number;
+  query: QueryRecord;
+}) {
   const shown = query.rows.slice(0, PREVIEW_ROWS);
   return (
     <section className="flex flex-col gap-2">
-      <h3 className="text-muted-foreground text-xs font-medium">
-        Query {index + 1} · {query.rows.length.toLocaleString()} row
-        {query.rows.length === 1 ? "" : "s"}
-      </h3>
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-muted-foreground text-xs font-medium">
+          Query {index + 1} · {query.truncated ? "first " : ""}
+          {query.rows.length.toLocaleString()} row
+          {query.rows.length === 1 ? "" : "s"}
+        </h3>
+        <ExportButton api={api} runId={runId} index={index} />
+      </div>
       {shown.length ? (
         <DataTable columns={query.columns} rows={shown.map((row) => row.map(cell))} />
       ) : (
@@ -156,6 +173,53 @@ function QueryRows({ index, query }: { index: number; query: QueryRecord }) {
         </p>
       )}
     </section>
+  );
+}
+
+/**
+ * Downloads the whole result of one query as CSV. The server runs the stored query again in a
+ * sandbox, so the file holds every row, not the preview (docs/design/2026-11-14-result-export.md).
+ */
+function ExportButton({ api, runId, index }: { api: Api; runId: string; index: number }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function download() {
+    setBusy(true);
+    setError(null);
+    try {
+      const { id } = await api.startExport(runId, index);
+      const job = await waitForExport((exportId) => api.getExport(exportId), id);
+      if (job.status === "failed") {
+        setError(job.error ?? "The export failed.");
+        return;
+      }
+      const link = document.createElement("a");
+      link.href = exportFileUrl(id);
+      link.download = job.filename ?? "";
+      link.click();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-1">
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-7"
+        disabled={busy}
+        onClick={download}
+        aria-label={`Download query ${index + 1} as CSV`}
+      >
+        <Download />
+        {busy ? "Preparing file…" : "Download CSV"}
+      </Button>
+      {error && <p className="text-danger max-w-72 text-right text-xs">{error}</p>}
+    </div>
   );
 }
 

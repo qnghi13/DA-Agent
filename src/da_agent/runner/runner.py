@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from da_agent.ingestion.build import BuildReport
 from da_agent.ingestion.report import IngestReport
 from da_agent.ingestion.spec import DatasetSpec
+from da_agent.storage.csv_export import EXPORT_TIMEOUT_SECONDS, MAX_EXPORT_BYTES, ExportReport
 
 # Containers carry this label, so leftovers can be found and removed.
 SANDBOX_LABEL = "da-agent.sandbox"
@@ -93,6 +94,18 @@ class BuildRun(BaseModel):
     timeout_seconds: int = Field(default=600, ge=1, le=1800)
 
 
+class ExportRun(BaseModel):
+    """Write one query's whole result as CSV: the dataset is mounted read-only at /data and a fresh
+    output directory at /out. See docs/design/2026-11-14-result-export.md."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["export"] = "export"
+    dataset_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+    sql: str = Field(max_length=MAX_SQL_CHARS)
+    timeout_seconds: int = Field(default=EXPORT_TIMEOUT_SECONDS, ge=1, le=EXPORT_TIMEOUT_SECONDS)
+
+
 class JobResult[ReportT: BaseModel](BaseModel):
     status: RunStatus
     exit_code: int | None
@@ -105,6 +118,9 @@ class JobResult[ReportT: BaseModel](BaseModel):
 
 IngestResult = JobResult[IngestReport]
 BuildResult = JobResult[BuildReport]
+ExportResult = JobResult[ExportReport]
+# The CSV cap plus room for the report next to it.
+_MAX_EXPORT_OUTPUT_BYTES = MAX_EXPORT_BYTES + 1_048_576
 
 
 class RunResult(BaseModel):
@@ -122,6 +138,7 @@ class SandboxRunner(Protocol):
     def query(self, request: SqlRun) -> SqlResult: ...
     def ingest(self, request: IngestRun) -> IngestResult: ...
     def build(self, request: BuildRun) -> BuildResult: ...
+    def export(self, request: ExportRun) -> ExportResult: ...
 
 
 @dataclass(frozen=True)
@@ -224,7 +241,7 @@ class Runner:
 
     def build_command(
         self,
-        request: PythonRun | SqlRun | IngestRun | BuildRun,
+        request: PythonRun | SqlRun | IngestRun | BuildRun | ExportRun,
         name: str,
         output_dir: Path | None = None,
     ) -> list[str]:
@@ -235,6 +252,12 @@ class Runner:
             source = self._job_input(request)
             memory = c.ingest_memory_mb
             mounts = [self._mount(source, "/input", True), self._mount(output_dir, "/out", False)]
+        elif isinstance(request, ExportRun):
+            if output_dir is None:
+                raise ValueError("an export needs an output directory")
+            dataset = self._child(c.datasets_root, request.dataset_id, "dataset")
+            memory = c.memory_mb
+            mounts = [self._mount(dataset, "/data", True), self._mount(output_dir, "/out", False)]
         else:
             dataset = self._child(c.datasets_root, request.dataset_id, "dataset")
             memory = c.memory_mb
@@ -368,7 +391,9 @@ class Runner:
             raise ValueError(f"unknown {what} {child_id!r}")
         return path
 
-    def _job_input(self, request: IngestRun | BuildRun) -> Path:
+    def _job_input(self, request: IngestRun | BuildRun | ExportRun) -> Path:
+        if isinstance(request, ExportRun):
+            return self._child(self.config.datasets_root, request.dataset_id, "dataset")
         if isinstance(request, IngestRun):
             return self._child(self.config.uploads_root, request.upload_id, "upload")
         return self._child(self.config.staging_root, request.ingest_id, "ingest output")
@@ -381,8 +406,20 @@ class Runner:
         """Build clean tables from an ingest output in a sandbox."""
         return self._job(request, "build_report.json", BuildReport)
 
+    def export(self, request: ExportRun) -> ExportResult:
+        """Write one query's whole result as CSV in a sandbox. A cap or query error comes back in
+        the report's error, never as sandbox stderr."""
+        return self._job(
+            request, "export_report.json", ExportReport, max_output=_MAX_EXPORT_OUTPUT_BYTES
+        )
+
     def _job[ReportT: BaseModel](
-        self, request: IngestRun | BuildRun, report_name: str, model: type[ReportT]
+        self,
+        request: IngestRun | BuildRun | ExportRun,
+        report_name: str,
+        model: type[ReportT],
+        *,
+        max_output: int | None = None,
     ) -> JobResult[ReportT]:
         self._job_input(request)
         if self.config.staging_root is None:
@@ -425,7 +462,8 @@ class Runner:
         if status != "ok":
             return failure(status, captured.exit_code, stderr)
         try:
-            report = model.model_validate_json(self._read_report(output_dir, report_name))
+            limit = max_output if max_output is not None else self.config.max_ingest_output_bytes
+            report = model.model_validate_json(self._read_report(output_dir, report_name, limit))
         except (OSError, ValueError, ValidationError) as error:
             message = f"{stderr}\nrejected sandbox output: {type(error).__name__}: {error}"[-2000:]
             return failure("error", captured.exit_code, message)
@@ -438,14 +476,14 @@ class Runner:
             duration_seconds=_now() - started,
         )
 
-    def _read_report(self, output_dir: Path, report_name: str) -> bytes:
+    def _read_report(self, output_dir: Path, report_name: str, max_output: int) -> bytes:
         total = 0
         for entry in output_dir.rglob("*"):
             mode = entry.lstat().st_mode
             if stat.S_ISLNK(mode) or not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
                 raise ValueError(f"unexpected file type at {entry.name}")
             total += entry.lstat().st_size
-        if total > self.config.max_ingest_output_bytes:
+        if total > max_output:
             raise ValueError(f"output is {total} bytes, over the limit")
         # O_NOFOLLOW: a link that appeared after the scan makes the open fail, not follow it.
         descriptor = os.open(output_dir / report_name, os.O_RDONLY | os.O_NOFOLLOW)

@@ -30,7 +30,13 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    Response,
+    StreamingResponse,
+)
 from pydantic import BaseModel, Field
 
 from da_agent.agent.answer import result_from_json
@@ -45,6 +51,12 @@ from da_agent.storage.datasets import (
 )
 from da_agent.storage.db import connect
 from da_agent.storage.events import RunEvent, RunEvents
+from da_agent.storage.exports import (
+    CHANGED_DATASET,
+    dataset_changed_since_run,
+    export_file,
+    is_expired,
+)
 from da_agent.storage.jobs import Job, JobQueue
 from da_agent.storage.keys import KEY_PATTERN, authenticate
 from da_agent.storage.ledger import daily_budget, spent_today
@@ -97,6 +109,12 @@ class ApiSettings:
     # Where browsers open the UI (ADR 0025): login links point here, cookie requests that change
     # things must come from this origin, and https makes the cookie Secure.
     public_url: str = "http://127.0.0.1:8080"
+    # Result exports (docs/design/2026-11-14-result-export.md). Unset, they sit beside uploads.
+    exports_root: Path | None = None
+
+    @property
+    def exports_dir(self) -> Path:
+        return self.exports_root or self.uploads_root.parent / "exports"
 
 
 MAX_RUNS_PER_PAGE = 50
@@ -751,6 +769,72 @@ def get_report(run_id: str, conn: Db, caller: Caller) -> HTMLResponse:
         "X-Content-Type-Options": "nosniff",
     }
     return HTMLResponse(page, headers=headers)
+
+
+# Result export (docs/design/2026-11-14-result-export.md): a job per export, indexes not SQL.
+
+EXPIRED_EXPORT = "the export expired; download it again"
+
+
+@router.post("/runs/{run_id}/queries/{index}/export", status_code=202)
+def create_export(
+    run_id: str, index: int, conn: Db, caller: Caller, settings: Settings
+) -> dict[str, Any]:
+    """Write the whole result of one query behind an answer as CSV. The query is named by its
+    index in the run's result; its SQL is read from the stored result, never from the request."""
+    job = run_job(run_id, conn, caller)
+    if job.status != "succeeded" or job.result is None:
+        raise HTTPException(status_code=409, detail=f"the run is {job.status}")
+    queries = job.result.get("queries") or []
+    if not 0 <= index < len(queries):
+        raise _not_found()
+    dataset_id = _uuid(str(job.payload.get("dataset_id", "")))
+    if dataset_changed_since_run(conn, caller.workspace_id, job.id, dataset_id):
+        raise HTTPException(status_code=409, detail=CHANGED_DATASET)
+    _may_start_job(conn, caller, settings)
+    payload = {"run_id": str(job.id), "query_index": index, "dataset_id": str(dataset_id)}
+    with conn.transaction():
+        export_id = JobQueue(conn).enqueue(caller.workspace_id, "export", payload)
+        log(conn, caller, "export.create", str(export_id), run_id=str(job.id), query_index=index)
+    return {"id": str(export_id), "status": "queued"}
+
+
+def export_job(export_id: str, conn: psycopg.Connection, caller: Member) -> Job:
+    job = JobQueue(conn).get(_uuid(export_id), caller.workspace_id)
+    if job is None or job.kind != "export":
+        raise _not_found()
+    return job
+
+
+@router.get("/exports/{export_id}")
+def get_export(export_id: str, conn: Db, caller: Caller) -> dict[str, Any]:
+    job = export_job(export_id, conn, caller)
+    result = job.result or {}
+    return {
+        "id": str(job.id),
+        "status": job.status,
+        "rows": result.get("rows"),
+        "bytes": result.get("bytes"),
+        "filename": result.get("filename"),
+        "error": job.last_error if job.status == "failed" else None,
+    }
+
+
+@router.get("/exports/{export_id}/file")
+def download_export(export_id: str, conn: Db, caller: Caller, settings: Settings) -> FileResponse:
+    job = export_job(export_id, conn, caller)
+    if job.status != "succeeded" or job.result is None:
+        raise HTTPException(status_code=409, detail=f"the export is {job.status}")
+    path = export_file(settings.exports_dir, job.id)
+    if is_expired(path, now=time.time()):
+        raise HTTPException(status_code=404, detail=EXPIRED_EXPORT)
+    log(conn, caller, "export.download", str(job.id))
+    return FileResponse(
+        path,
+        media_type="text/csv; charset=utf-8",
+        filename=str(job.result.get("filename") or f"{job.id}.csv"),
+        headers={"X-Content-Type-Options": "nosniff"},
+    )
 
 
 FINISHED = ("succeeded", "failed")

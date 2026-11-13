@@ -10,12 +10,15 @@ from da_agent.ingestion.report import IngestReport
 from da_agent.runner.client import RunnerClient
 from da_agent.runner.runner import (
     BuildRun,
+    ExportResult,
+    ExportRun,
     IngestResult,
     IngestRun,
     SqlResult,
     SqlRun,
 )
 from da_agent.runner.service import create_runner_app
+from da_agent.storage.csv_export import ExportReport
 
 TOKEN = "t" * 40
 # The client sets a timeout per request; TestClient ignores it, which is fine here.
@@ -48,6 +51,17 @@ class FakeRunner:
 
     def build(self, request: BuildRun):  # pragma: no cover - same path as ingest
         raise NotImplementedError
+
+    def export(self, request: ExportRun) -> ExportResult:
+        self.requests.append(request)
+        return ExportResult(
+            status="ok",
+            exit_code=0,
+            stderr="",
+            report=ExportReport(rows=1, bytes=4, columns=["n"]),
+            output_dir=self.output_dir or self.staging / "da-sbx-2",
+            duration_seconds=1.0,
+        )
 
 
 @pytest.fixture
@@ -163,3 +177,28 @@ def test_the_service_refuses_to_start_without_a_token(
 
     assert main([]) == 2
     assert "DA_AGENT_RUNNER_TOKEN" in capsys.readouterr().err
+
+
+def test_an_export_goes_through_the_service(
+    http: TestClient, runner: FakeRunner, tmp_path: Path
+) -> None:
+    request = ExportRun(dataset_id="shop_1", sql="SELECT 1")
+
+    result = client(http, tmp_path).export(request)
+
+    assert result.status == "ok"
+    assert result.report == ExportReport(rows=1, bytes=4, columns=["n"])
+    assert result.output_dir == tmp_path / "da-sbx-2"
+    assert runner.requests == [request]
+
+
+@pytest.mark.security
+def test_an_export_output_outside_staging_is_refused(
+    http: TestClient, runner: FakeRunner, tmp_path: Path
+) -> None:
+    runner.output_dir = Path("/etc")
+
+    result = client(http, tmp_path).export(ExportRun(dataset_id="shop_1", sql="SELECT 1"))
+
+    assert result.status == "error"
+    assert result.output_dir is None and result.report is None

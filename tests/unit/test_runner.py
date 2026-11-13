@@ -423,3 +423,95 @@ def test_the_volume_name_cannot_carry_mount_options(tmp_path: Path) -> None:
         RunnerConfig(
             image="i", datasets_root=tmp_path, data_volume="v,target=/x", data_root=tmp_path
         )
+
+
+# Export jobs: the dataset is mounted read-only at /data, and a fresh output directory receives the
+# CSV (docs/design/2026-11-14-result-export.md).
+
+from da_agent.runner.runner import ExportRun  # noqa: E402
+from da_agent.storage.csv_export import MAX_EXPORT_BYTES  # noqa: E402
+
+
+@pytest.fixture
+def export_config(ingest_config: RunnerConfig) -> RunnerConfig:
+    (ingest_config.datasets_root / "shop_1").mkdir()
+    return ingest_config
+
+
+def test_an_export_mounts_the_dataset_read_only_and_a_fresh_out(
+    export_config: RunnerConfig,
+) -> None:
+    out = export_config.staging_root / "job"
+    out.mkdir()
+    request = ExportRun(dataset_id="shop_1", sql="SELECT 1")
+    command = Runner(export_config).build_command(request, "n1", out)
+
+    dataset = (export_config.datasets_root / "shop_1").resolve()
+    mounts = [arg for arg in command if arg.startswith("--mount=")]
+    assert mounts == [
+        f"--mount=type=bind,source={dataset},target=/data,readonly",
+        f"--mount=type=bind,source={out},target=/out",
+    ]
+    assert f"--memory={export_config.memory_mb}m" in command
+    assert set(command) >= ROOT_FLAGS
+
+
+@pytest.mark.parametrize("dataset_id", ["../x", "a/b", ""])
+def test_an_export_cannot_name_a_path(dataset_id: str) -> None:
+    with pytest.raises(ValidationError):
+        ExportRun(dataset_id=dataset_id, sql="SELECT 1")
+
+
+def test_an_export_of_an_unknown_dataset_is_refused(export_config: RunnerConfig) -> None:
+    with pytest.raises(ValueError, match="unknown dataset"):
+        Runner(export_config).export(ExportRun(dataset_id="shop_2", sql="SELECT 1"))
+
+
+def test_an_export_returns_the_report_and_the_csv(export_config: RunnerConfig) -> None:
+    def write(out: Path) -> None:
+        (out / "export_report.json").write_text(
+            '{"rows": 2, "bytes": 9, "columns": ["n"]}', encoding="utf-8"
+        )
+        (out / "result.csv").write_text("n\n1\n2\n", encoding="utf-8")
+
+    runner = Runner(export_config, execute=fake_ingest(write))
+    result = runner.export(ExportRun(dataset_id="shop_1", sql="SELECT 1"))
+
+    assert result.status == "ok"
+    assert result.report is not None and result.report.rows == 2 and result.report.error is None
+    assert result.output_dir is not None and (result.output_dir / "result.csv").exists()
+
+
+def test_an_export_error_comes_back_in_the_report(export_config: RunnerConfig) -> None:
+    def write(out: Path) -> None:
+        (out / "export_report.json").write_text(
+            '{"rows": 0, "bytes": 0, "columns": [], "error": "the result has more than 10 rows"}',
+            encoding="utf-8",
+        )
+
+    runner = Runner(export_config, execute=fake_ingest(write))
+    result = runner.export(ExportRun(dataset_id="shop_1", sql="SELECT 1"))
+
+    assert result.report is not None and result.report.error == "the result has more than 10 rows"
+
+
+def test_an_export_output_over_the_byte_cap_is_rejected(export_config: RunnerConfig) -> None:
+    def write(out: Path) -> None:
+        (out / "export_report.json").write_text(
+            '{"rows": 1, "bytes": 1, "columns": ["n"]}', encoding="utf-8"
+        )
+        with (out / "result.csv").open("wb") as file:
+            file.truncate(MAX_EXPORT_BYTES + 2 * 1_048_576)
+
+    runner = Runner(export_config, execute=fake_ingest(write))
+    result = runner.export(ExportRun(dataset_id="shop_1", sql="SELECT 1"))
+
+    assert result.status == "error"
+    assert result.output_dir is None
+    assert list(export_config.staging_root.iterdir()) == []
+
+
+def test_export_timeouts_are_bounded() -> None:
+    assert ExportRun(dataset_id="a", sql="SELECT 1").timeout_seconds == 120
+    with pytest.raises(ValidationError):
+        ExportRun(dataset_id="a", sql="SELECT 1", timeout_seconds=121)

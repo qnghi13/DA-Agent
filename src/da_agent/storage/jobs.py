@@ -20,7 +20,7 @@ from psycopg.types.json import Jsonb
 
 from da_agent.storage.db import returned_id
 
-JobKind = Literal["ingest", "build", "run"]
+JobKind = Literal["ingest", "build", "run", "export"]
 
 
 @dataclass(frozen=True)

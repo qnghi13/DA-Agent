@@ -1,8 +1,17 @@
+import { Download } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import embed, { type VisualizationSpec } from "vega-embed";
+import embed, { type Result, type VisualizationSpec } from "vega-embed";
 import { expressionInterpreter } from "vega-interpreter";
 import type { Config } from "vega-lite";
 import type { VegaLiteSpec } from "./api";
+import { Button } from "./components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "./components/ui/dropdown-menu";
+import { chartFilename } from "./export";
 import { useDark } from "./hooks/use-dark";
 
 // Categorical slots in the dataviz skill's validated order, checked with its validate_palette.js
@@ -75,6 +84,7 @@ export default function Chart({ spec }: { spec: VegaLiteSpec }) {
   const holder = useRef<HTMLDivElement>(null);
   const dark = useDark();
   const [failed, setFailed] = useState(false);
+  const view = useRef<Result["view"] | null>(null);
 
   useEffect(() => {
     if (!holder.current) return;
@@ -91,7 +101,13 @@ export default function Chart({ spec }: { spec: VegaLiteSpec }) {
     })
       .then((result) => {
         if (cancelled) result.finalize();
-        else finalize = () => result.finalize();
+        else {
+          view.current = result.view;
+          finalize = () => {
+            view.current = null;
+            result.finalize();
+          };
+        }
       })
       .catch(() => setFailed(true));
     return () => {
@@ -101,5 +117,63 @@ export default function Chart({ spec }: { spec: VegaLiteSpec }) {
   }, [spec, dark]);
 
   if (failed) return <p className="text-muted-foreground text-sm">This chart could not be drawn.</p>;
-  return <div className="chart w-full" ref={holder} />;
+  return (
+    <div className="group relative w-full">
+      <div className="chart w-full" ref={holder} />
+      <ChartDownload
+        view={view}
+        title={typeof spec.title === "string" ? spec.title : undefined}
+        surface={(dark ? DARK : LIGHT).surface}
+      />
+    </div>
+  );
+}
+
+/** PNG or SVG of the chart as drawn. The chart holds every row it plots: make_chart refuses a
+ * truncated result (docs/design/2026-11-14-result-export.md). */
+function ChartDownload({
+  view,
+  title,
+  surface,
+}: {
+  view: React.RefObject<Result["view"] | null>;
+  title: string | undefined;
+  surface: string;
+}) {
+  async function save(format: "png" | "svg") {
+    const current = view.current;
+    if (!current) return;
+    // On screen the card is the background; a saved image needs its own, or dark-mode text
+    // disappears on a white slide.
+    const background = current.background();
+    current.background(surface);
+    let url: string;
+    try {
+      url = await current.toImageURL(format, format === "png" ? 2 : 1);
+    } finally {
+      current.background(background);
+    }
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = chartFilename(title, format);
+    link.click();
+  }
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Download chart"
+          className="absolute top-0 right-0 size-7 opacity-60 group-hover:opacity-100 focus-visible:opacity-100"
+        >
+          <Download />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onSelect={() => void save("png")}>Download PNG</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => void save("svg")}>Download SVG</DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }

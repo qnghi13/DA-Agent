@@ -12,7 +12,8 @@ WORKDIR /app
 COPY sandbox/da_sandbox/ /app/da_sandbox/
 COPY src/da_agent/__init__.py /app/da_agent/__init__.py
 COPY src/da_agent/ingestion/ /app/da_agent/ingestion/
-COPY src/da_agent/storage/__init__.py src/da_agent/storage/duckdb_query.py /app/da_agent/storage/
+COPY src/da_agent/storage/__init__.py src/da_agent/storage/duckdb_query.py \
+     src/da_agent/storage/csv_export.py /app/da_agent/storage/
 RUN python -m compileall -q /app && chmod -R a-w /app
 
 USER 65534:65534

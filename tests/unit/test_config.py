@@ -16,6 +16,7 @@ def test_required_settings_and_defaults() -> None:
     assert settings.uploads_root == Path("/srv/data/uploads")
     assert settings.staging_root == Path("/srv/data/staging")
     assert settings.datasets_root == Path("/srv/data/datasets")
+    assert settings.exports_root == Path("/srv/data/exports")
     assert settings.sandbox_image == "da-agent-sandbox:dev"
     assert settings.routes is None
     assert (settings.daily_budget_usd, settings.run_budget_usd) == (5.0, 0.25)

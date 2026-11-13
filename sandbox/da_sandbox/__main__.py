@@ -59,6 +59,24 @@ def run_sql(request: dict) -> int:
     return 0
 
 
+def run_export(request: dict) -> int:
+    """Write the whole result to /out/result.csv. A cap or query error goes into the report, in
+    words for the user, and leaves no CSV."""
+    sys.path.insert(0, APP)
+    import duckdb
+
+    from da_agent.storage.csv_export import ExportLimitError, ExportReport, write_csv
+
+    try:
+        report = write_csv(
+            Path("/data/dataset.duckdb"), str(request["sql"]), Path("/out/result.csv")
+        )
+    except (ExportLimitError, duckdb.Error) as error:
+        report = ExportReport(rows=0, bytes=0, columns=[], error=str(error)[:500])
+    Path("/out/export_report.json").write_text(report.model_dump_json(), encoding="utf-8")
+    return 0
+
+
 def main() -> int:
     request = json.loads(sys.stdin.read())
     # The default SIGALRM action ends the process, and user code cannot catch it as an exception.
@@ -72,6 +90,8 @@ def main() -> int:
         return run_ingest()
     if kind == "build":
         return run_build(request)
+    if kind == "export":
+        return run_export(request)
     print(f"unknown request kind {kind!r}", file=sys.stderr)
     return 2
 

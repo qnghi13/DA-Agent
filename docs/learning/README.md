@@ -20,3 +20,4 @@ Mỗi cột mốc có một ghi chú tiếng Việt, theo khung sau:
 | [09. Đăng nhập bằng link và dashboard vận hành](09-dang-nhap-va-giam-sat.md) | Magic link, cookie phiên, CSRF, vai trò operator, giám sát hệ thống LLM |
 | [10. Thiết kế lại giao diện](10-giao-dien-kieu-vercel.md) | Chat làm trung tâm, tiến trình trực tiếp, panel bằng chứng, Tailwind + shadcn/ui |
 | [11. Memory: hội thoại và ghi chú theo dataset](11-memory-hoi-thoai-va-dataset.md) | Conversation, ghi chú do người duyệt, snapshot theo run, chống memory poisoning |
+| [12. Xuất kết quả](12-xuat-ket-qua.md) | Giới hạn hiển thị và tải về, export bằng job trong sandbox, CSV injection |

@@ -1,8 +1,8 @@
 """Run a worker: python -m da_agent.worker. Settings come from the environment (da_agent.config).
 
-The worker claims ingest, build, and run jobs, runs sandboxes through the Runner, and records every
-model call in Postgres. SIGTERM or Ctrl-C stops it after the current job; if it is killed instead,
-the job's lease runs out and another worker continues it.
+The worker claims ingest, build, run, and export jobs, runs sandboxes through the Runner, and
+records every model call in Postgres. SIGTERM or Ctrl-C stops it after the current job; if it is
+killed instead, the job's lease runs out and another worker continues it.
 """
 
 import os
@@ -23,6 +23,7 @@ from da_agent.storage.db import connect, migrate
 from da_agent.storage.ledger import PostgresCostLedger
 from da_agent.telemetry.tracing import configure_tracing
 from da_agent.worker.datasets import BuildHandler, DatasetOpener, IngestHandler
+from da_agent.worker.exports import ExportHandler
 from da_agent.worker.limits import WorkspaceBudgets
 from da_agent.worker.memory import MemoryLoader
 from da_agent.worker.runs import RunHandler
@@ -36,7 +37,11 @@ def build_worker(
     opened when it is not given."""
     if not settings.routes:
         raise ValueError("DA_AGENT_ROUTES is required for the worker, such as groq:MODEL")
-    for root in (settings.uploads_root, settings.staging_root, settings.datasets_root):
+    roots_to_make = (
+        settings.uploads_root, settings.staging_root, settings.datasets_root,
+        settings.exports_root,
+    )  # fmt: skip
+    for root in roots_to_make:
         root.mkdir(parents=True, exist_ok=True)
     runner: SandboxRunner
     if settings.runner_url and settings.runner_token:
@@ -75,6 +80,7 @@ def build_worker(
         ),
         "ingest": IngestHandler(**database, **roots, llm=llm, budgets=budgets),
         "build": BuildHandler(**database, **roots),
+        "export": ExportHandler(**database, runner=runner, exports_root=settings.exports_root),
     }
     return Worker(WorkerConfig(url=settings.database_url, schema=settings.schema), handlers)
 
