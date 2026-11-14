@@ -21,16 +21,20 @@ def export_filename(run_id: str, query_index: int) -> str:
     return f"da-agent-{run_id[:8]}-query-{query_index + 1}.csv"
 
 
+def edited_export_filename(query_id: str) -> str:
+    return f"da-agent-{query_id[:8]}-edited.csv"
+
+
 def dataset_changed_since_run(
     conn: psycopg.Connection, workspace_id: UUID, run_id: UUID, dataset_id: UUID
 ) -> bool:
-    """True unless the dataset is ready and unchanged since the run was asked. An edited spec
-    rebuilds a dataset under the same id (ADR 0019), so its rows may differ from
-    what the run saw."""
+    """True unless the dataset is ready and unchanged since the run, or the edited query
+    (docs/design/2026-11-14-edit-sql.md), was asked. An edited spec rebuilds a dataset under the
+    same id (ADR 0019), so its rows may differ from what the run saw."""
     row = conn.execute(
         "SELECT d.status = 'ready' AND d.updated_at <= j.created_at "
         "FROM datasets d JOIN jobs j ON j.workspace_id = d.workspace_id "
-        "WHERE d.id = %s AND j.id = %s AND d.workspace_id = %s AND j.kind = 'run'",
+        "WHERE d.id = %s AND j.id = %s AND d.workspace_id = %s AND j.kind IN ('run', 'query')",
         (dataset_id, run_id, workspace_id),
     ).fetchone()
     return row is None or not row[0]

@@ -268,6 +268,23 @@ export class Api {
     return this.request(`/v1/exports/${encodeURIComponent(id)}`);
   }
 
+  /** Run SQL edited from one of a run's queries. Bad SQL is refused at once with a 422. */
+  runQuery(runId: string, sql: string): Promise<{ id: string; status: string }> {
+    return this.request(`/v1/runs/${encodeURIComponent(runId)}/queries`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sql }),
+    });
+  }
+
+  getQuery(id: string): Promise<QueryJob> {
+    return this.request(`/v1/queries/${encodeURIComponent(id)}`);
+  }
+
+  startQueryExport(queryId: string): Promise<{ id: string; status: string }> {
+    return this.request(`/v1/queries/${encodeURIComponent(queryId)}/export`, { method: "POST" });
+  }
+
   /** The standalone HTML report, shown in a sandboxed frame. */
   async getReport(id: string): Promise<string> {
     const response = await fetch(`/v1/runs/${encodeURIComponent(id)}/report`, {
@@ -289,6 +306,17 @@ export interface ExportJob {
 }
 
 /** Where a finished export downloads from; the session cookie goes with it. */
+/** An edited query run as a job (docs/design/2026-11-14-edit-sql.md). */
+export interface QueryJob {
+  id: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  sql: string;
+  columns: string[];
+  rows: unknown[][];
+  truncated: boolean;
+  error: string | null;
+}
+
 export function exportFileUrl(id: string): string {
   return `/v1/exports/${encodeURIComponent(id)}/file`;
 }

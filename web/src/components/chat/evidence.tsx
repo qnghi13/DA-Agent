@@ -1,10 +1,11 @@
-import { Check, Copy, Download, ExternalLink } from "lucide-react";
+import { Check, Copy, Download, ExternalLink, Pencil, Play, RotateCcw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { type Api, type QueryRecord, errorMessage, exportFileUrl } from "@/api";
+import { type Api, type ExportJob, type QueryJob, type QueryRecord, errorMessage, exportFileUrl } from "@/api";
 import { cell, DataTable } from "@/components/data-table";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { waitForExport } from "@/export";
+import { Textarea } from "@/components/ui/textarea";
+import { waitForJob } from "@/export";
 import { StepLine, type Evidence } from "./run-message";
 
 const PREVIEW_ROWS = 20;
@@ -57,7 +58,9 @@ export function EvidenceContent({ api, evidence }: { api: Api; evidence: Evidenc
           </TabsContent>
           <TabsContent value="sql" className="flex flex-col gap-3 p-4">
             {queries.length ? (
-              queries.map((query, index) => <SqlBlock key={index} index={index} query={query} />)
+              queries.map((query, index) => (
+                <SqlBlock key={index} api={api} runId={run.id} index={index} query={query} />
+              ))
             ) : (
               <Empty>The agent ran no queries.</Empty>
             )}
@@ -117,26 +120,156 @@ function useCopy(): [boolean, (text: string) => void] {
   ];
 }
 
-function SqlBlock({ index, query }: { index: number; query: QueryRecord }) {
+/**
+ * One of the agent's queries. Edit runs a changed copy on the same dataset as a query job; the
+ * agent's SQL and answer stay as they were (docs/design/2026-11-14-edit-sql.md).
+ */
+function SqlBlock({
+  api,
+  runId,
+  index,
+  query,
+}: {
+  api: Api;
+  runId: string;
+  index: number;
+  query: QueryRecord;
+}) {
   const [copied, copy] = useCopy();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(query.sql);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<QueryJob | null>(null);
+  const polling = useRef<AbortController | null>(null);
+  useEffect(() => () => polling.current?.abort(), []);
+
+  async function run() {
+    polling.current?.abort();
+    const controller = new AbortController();
+    polling.current = controller;
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const { id } = await api.runQuery(runId, draft);
+      const job = await waitForJob((queryId) => api.getQuery(queryId), id, {
+        signal: controller.signal,
+      });
+      if (job.status === "failed") setError(job.error ?? "The query failed.");
+      else setResult(job);
+    } catch (caught) {
+      if (!controller.signal.aborted) setError(errorMessage(caught));
+    } finally {
+      if (polling.current === controller) setBusy(false);
+    }
+  }
+
+  function reset() {
+    polling.current?.abort();
+    setBusy(false);
+    setDraft(query.sql);
+    setError(null);
+    setResult(null);
+  }
+
   return (
     <div className="overflow-hidden rounded-lg border">
-      <div className="bg-muted flex items-center justify-between border-b px-3 py-1.5">
-        <span className="text-muted-foreground text-xs">Query {index + 1}</span>
+      <div className="bg-muted flex items-center justify-between gap-1 border-b px-3 py-1.5">
+        <span className="text-muted-foreground flex-1 text-xs">
+          Query {index + 1}
+          {editing && draft !== query.sql ? " · edited" : ""}
+        </span>
+        {!editing && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7"
+            aria-label={`Edit query ${index + 1}`}
+            onClick={() => setEditing(true)}
+          >
+            <Pencil />
+            Edit
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="icon"
           className="size-7"
           aria-label={`Copy query ${index + 1}`}
-          onClick={() => copy(query.sql)}
+          onClick={() => copy(editing ? draft : query.sql)}
         >
           {copied ? <Check /> : <Copy />}
         </Button>
       </div>
-      <pre className="p-3 font-mono text-[12.5px] leading-relaxed break-words whitespace-pre-wrap">
-        {query.sql}
-      </pre>
+      {editing ? (
+        <div className="flex flex-col gap-2 p-3">
+          <Textarea
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !busy) run();
+            }}
+            spellCheck={false}
+            aria-label={`SQL for query ${index + 1}`}
+            aria-invalid={error ? true : undefined}
+            className="font-mono text-[12.5px] leading-relaxed md:text-[12.5px]"
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" className="h-7" disabled={busy || !draft.trim()} onClick={run}>
+              <Play />
+              {busy ? "Running…" : "Run"}
+            </Button>
+            <Button variant="ghost" size="sm" className="h-7" onClick={reset}>
+              <RotateCcw />
+              Reset
+            </Button>
+            <span className="text-muted-foreground text-xs">
+              One SELECT on this dataset. Ctrl+Enter runs it.
+            </span>
+          </div>
+          {error && (
+            <p role="alert" className="text-danger font-mono text-xs break-words whitespace-pre-wrap">
+              {error}
+            </p>
+          )}
+          {result && <EditedRows api={api} job={result} />}
+        </div>
+      ) : (
+        <pre className="p-3 font-mono text-[12.5px] leading-relaxed break-words whitespace-pre-wrap">
+          {query.sql}
+        </pre>
+      )}
     </div>
+  );
+}
+
+function EditedRows({ api, job }: { api: Api; job: QueryJob }) {
+  const shown = job.rows.slice(0, PREVIEW_ROWS);
+  return (
+    <section className="flex flex-col gap-2 pt-1">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-muted-foreground text-xs font-medium">
+          Edited query · {job.truncated ? "first " : ""}
+          {job.rows.length.toLocaleString()} row{job.rows.length === 1 ? "" : "s"}
+        </h3>
+        <ExportButton
+          start={() => api.startQueryExport(job.id)}
+          getExport={(id) => api.getExport(id)}
+          label="the edited query"
+        />
+      </div>
+      {shown.length ? (
+        <DataTable columns={job.columns} rows={shown.map((row) => row.map(cell))} />
+      ) : (
+        <Empty>No rows.</Empty>
+      )}
+      {(job.truncated || job.rows.length > PREVIEW_ROWS) && (
+        <p className="text-muted-foreground text-xs">
+          Showing the first {shown.length} rows{job.truncated ? " of a longer result" : ""}.
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -160,7 +293,11 @@ function QueryRows({
           {query.rows.length.toLocaleString()} row
           {query.rows.length === 1 ? "" : "s"}
         </h3>
-        <ExportButton api={api} runId={runId} index={index} />
+        <ExportButton
+          start={() => api.startExport(runId, index)}
+          getExport={(id) => api.getExport(id)}
+          label={`query ${index + 1}`}
+        />
       </div>
       {shown.length ? (
         <DataTable columns={query.columns} rows={shown.map((row) => row.map(cell))} />
@@ -180,7 +317,15 @@ function QueryRows({
  * Downloads the whole result of one query as CSV. The server runs the stored query again in a
  * sandbox, so the file holds every row, not the preview (docs/design/2026-11-14-result-export.md).
  */
-function ExportButton({ api, runId, index }: { api: Api; runId: string; index: number }) {
+function ExportButton({
+  start,
+  getExport,
+  label,
+}: {
+  start: () => Promise<{ id: string }>;
+  getExport: (id: string) => Promise<ExportJob>;
+  label: string;
+}) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Polling has no deadline, so it stops when this view goes away.
@@ -193,8 +338,8 @@ function ExportButton({ api, runId, index }: { api: Api; runId: string; index: n
     const controller = new AbortController();
     polling.current = controller;
     try {
-      const { id } = await api.startExport(runId, index);
-      const job = await waitForExport((exportId) => api.getExport(exportId), id, {
+      const { id } = await start();
+      const job = await waitForJob(getExport, id, {
         signal: controller.signal,
       });
       if (job.status === "failed") {
@@ -220,7 +365,7 @@ function ExportButton({ api, runId, index }: { api: Api; runId: string; index: n
         className="h-7"
         disabled={busy}
         onClick={download}
-        aria-label={`Download query ${index + 1} as CSV`}
+        aria-label={`Download ${label} as CSV`}
       >
         <Download />
         {busy ? "Preparing file…" : "Download CSV"}

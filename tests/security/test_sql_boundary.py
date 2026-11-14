@@ -190,3 +190,14 @@ def test_duckdb_guard_rejects_files_settings_and_side_effects(sql: str) -> None:
 )
 def test_duckdb_guard_accepts_ordinary_queries(sql: str) -> None:
     assert validate_select(sql, dialect="duckdb")
+
+
+def test_a_parse_error_reads_as_plain_text() -> None:
+    # People see this message under the SQL editor, and the model sees it as a tool error.
+    with pytest.raises(SqlRejectedError) as raised:
+        validate_select("SELEC total FROM orders", dialect="duckdb")
+
+    message = str(raised.value)
+    assert "\x1b" not in message
+    assert message.startswith("could not parse the query")
+    assert "Line 1, Col: 16" in message

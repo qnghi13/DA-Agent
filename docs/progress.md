@@ -1,6 +1,6 @@
 # Progress
 
-Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-14 (result export, ADR 0032)
+Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-14 (edit SQL, ADR 0033)
 **Phase:** optimisation. Challenge rules: ≤15B params in total, offline Docker, 2×5090, 6 h,
 re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for the submission.
 
@@ -24,9 +24,9 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
   (Groq +55). Then status variants and line-vs-header revenue (~12, checked by hand SQL), debt
   4, budget abstains 8 (SQLite functions, made-up columns). Semantic layer: private folder.
 ## Next step
-0. Result export (ADR 0032, `feat/result-export` on `main`, not merged): full CSV per query in a
-   sandbox, chart PNG/SVG ($0.001 browser check). Then merge and `docker compose up -d --build`.
-   Guard signals (ADR 0031): the next eval run reports `verify_kinds`, `runs_saved_by_repair`.
+0. Edit SQL (ADR 0033, branch `feat/edit-sql`): edit a query in the SQL tab, then run
+   it as a `query` job (guard at API and worker, sandbox), export it. Checked in the browser ($0).
+   Export (ADR 0032) on `main`. Next: data overview. Next eval reports `verify_kinds` (ADR 0031).
 1. v0.1.0 released (ADR 0028); holdout ran once (+44, never rerun). Open: run 97d7bc1f guessed
    a `product_id` absent from the data. Offline audit of `final-regression` (2026-11-13, $0):
    no wrong answer had an absent filter literal; absent ones sit in exploratory queries of
@@ -36,7 +36,7 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
 ## Baselines (Groq `gpt-oss-20b`, before 559f88a): `regression` +53 (93/40/17), holdout +44.
 ## Done
 
-- ADRs 0001–0032, notes 01–12. Scorer 3000/3000; splits in `eval/splits/splits.json`.
+- ADRs 0001–0033, notes 01–13. Scorer 3000/3000; splits in `eval/splits/splits.json`.
 - Agent: `LLMClient`, SQL guard, LangGraph with checkpoints and verify, Groq `gpt-oss-20b`.
   Sandbox: all escape tests pass; ingestion and agent SQL run in it (ADRs 0009–0012).
   `datasets-dev/`: 24/24 ok, parse 99.98%+, exclusion precision and recall 100%.

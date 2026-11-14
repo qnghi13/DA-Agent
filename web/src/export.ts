@@ -1,19 +1,18 @@
-import type { ExportJob } from "./api";
-
 /**
- * Poll an export job until it has finished, either way (docs/design/2026-11-14-result-export.md).
- * There is no deadline here: the export may wait behind other jobs, and the server ends every job
- * (sandbox timeout, job leases). The caller aborts when the view goes away.
+ * Poll a job (an export or an edited query) until it has finished, either way
+ * (docs/design/2026-11-14-result-export.md). There is no deadline here: the job may wait behind
+ * other jobs, and the server ends every job (sandbox timeout, job leases). The caller aborts when
+ * the view goes away.
  */
-export async function waitForExport(
-  get: (id: string) => Promise<ExportJob>,
+export async function waitForJob<T extends { status: string }>(
+  get: (id: string) => Promise<T>,
   id: string,
   {
     intervalMs = 1000,
     signal,
     sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms)),
   }: { intervalMs?: number; signal?: AbortSignal; sleep?: (ms: number) => Promise<void> } = {},
-): Promise<ExportJob> {
+): Promise<T> {
   for (;;) {
     signal?.throwIfAborted();
     const job = await get(id);

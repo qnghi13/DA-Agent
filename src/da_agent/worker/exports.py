@@ -1,8 +1,9 @@
-"""Export jobs: write one query of a finished run as a whole CSV file.
+"""Export jobs: write one query of a finished run, or an edited query, as a whole CSV file.
 
-The job names a run and a query index, never SQL. The SQL comes from the stored run result and
-passes the SQL guard again before a sandbox runs it. Failures reach the user as messages written
-here or in the export report, never as sandbox stderr. See docs/design/2026-11-14-result-export.md.
+The job names a run and a query index, or an edited query job, never SQL. The SQL comes from the
+stored result and passes the SQL guard again before a sandbox runs it. Failures reach the user as
+messages written here or in the export report, never as sandbox stderr. See
+docs/design/2026-11-14-result-export.md and docs/design/2026-11-14-edit-sql.md.
 """
 
 import shutil
@@ -20,6 +21,7 @@ from da_agent.storage.db import connect
 from da_agent.storage.exports import (
     CHANGED_DATASET,
     dataset_changed_since_run,
+    edited_export_filename,
     export_file,
     export_filename,
     purge_expired,
@@ -49,24 +51,38 @@ class ExportHandler:
         self.runner = runner
         self.exports_root = exports_root
 
-    def _stored_sql(self, job: Job) -> tuple[UUID, UUID, str, int]:
-        run_id, dataset_id = _id(job.payload.get("run_id")), _id(job.payload.get("dataset_id"))
-        index = job.payload.get("query_index")
+    def _stored_sql(self, job: Job) -> tuple[UUID, str, str]:
+        """The dataset, the stored SQL, and the file name. The job names a run's query by index
+        or an edited query job by id; the SQL is always read from the stored result."""
+        dataset_id = _id(job.payload.get("dataset_id"))
         with connect(self.url, schema=self.schema) as conn:
-            run = JobQueue(conn).get(run_id, job.workspace_id)
-            if run is None or run.kind != "run" or run.status != "succeeded" or not run.result:
+            queue = JobQueue(conn)
+            if "query_id" in job.payload:
+                source = queue.get(_id(job.payload.get("query_id")), job.workspace_id)
+                if source is None or source.kind != "query":
+                    raise PermanentJobError("not found")
+                sql = (source.result or {}).get("sql")
+                filename = edited_export_filename(str(source.id))
+            else:
+                source = queue.get(_id(job.payload.get("run_id")), job.workspace_id)
+                if source is None or source.kind != "run":
+                    raise PermanentJobError("not found")
+                queries = (source.result or {}).get("queries") or []
+                index = job.payload.get("query_index")
+                if not isinstance(index, int) or not 0 <= index < len(queries):
+                    raise PermanentJobError("not found")
+                sql = queries[index].get("sql")
+                filename = export_filename(str(source.id), index)
+            if source.status != "succeeded" or not sql:
                 raise PermanentJobError("not found")
-            if run.payload.get("dataset_id") != str(dataset_id):
+            if source.payload.get("dataset_id") != str(dataset_id):
                 raise PermanentJobError("not found")
-            queries = run.result.get("queries") or []
-            if not isinstance(index, int) or not 0 <= index < len(queries):
-                raise PermanentJobError("not found")
-            if dataset_changed_since_run(conn, job.workspace_id, run_id, dataset_id):
+            if dataset_changed_since_run(conn, job.workspace_id, source.id, dataset_id):
                 raise PermanentJobError(CHANGED_DATASET)
-        return run_id, dataset_id, str(queries[index]["sql"]), index
+        return dataset_id, str(sql), filename
 
     def __call__(self, job: Job, lost: threading.Event) -> dict[str, Any]:
-        run_id, dataset_id, sql, index = self._stored_sql(job)
+        dataset_id, sql, filename = self._stored_sql(job)
         try:
             checked = validate_select(sql, dialect="duckdb")
         except SqlRejectedError as error:
@@ -91,5 +107,5 @@ class ExportHandler:
         return {
             "rows": result.report.rows,
             "bytes": kept.stat().st_size,
-            "filename": export_filename(str(run_id), index),
+            "filename": filename,
         }

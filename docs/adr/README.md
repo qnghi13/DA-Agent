@@ -37,3 +37,4 @@ decision, add a new ADR and mark the old one as superseded.
 | [0030](0030-conversation-and-dataset-memory.md) | Conversation and dataset memory in Postgres, written only by people | Accepted |
 | [0031](0031-guard-signals-by-kind.md) | Guard signals are counted by kind in traces, events, eval rows, and the dashboard | Accepted |
 | [0032](0032-result-export.md) | Result export is a job that writes the whole result in a sandbox | Accepted |
+| [0033](0033-edited-sql-as-a-query-job.md) | Edited SQL runs as a query job, checked before it is queued | Accepted |

@@ -244,6 +244,9 @@ Reports are standalone HTML, and every number links to the query cell that produ
 A query's whole result downloads as CSV through an `export` job: the worker re-runs the stored SQL
 in a sandbox that writes the file, and the API serves it to the workspace for 24 hours. Charts
 download as PNG or SVG from the browser ([ADR 0032](adr/0032-result-export.md)).
+A person who knows SQL can edit a query in the SQL tab and run it as a `query` job: the API
+checks it with the SQL guard before queuing, and the worker runs it in a sandbox like agent SQL
+([ADR 0033](adr/0033-edited-sql-as-a-query-job.md)).
 
 ## Failure handling
 

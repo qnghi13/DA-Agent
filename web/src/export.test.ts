@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ExportJob } from "./api";
-import { chartFilename, waitForExport } from "./export";
+import { chartFilename, waitForJob } from "./export";
 
 const job = (status: ExportJob["status"], extra: Partial<ExportJob> = {}): ExportJob => ({
   id: "e1",
@@ -25,12 +25,12 @@ function sequence(jobs: ExportJob[]) {
 
 const noSleep = () => Promise.resolve();
 
-describe("waitForExport", () => {
+describe("waitForJob", () => {
   it("resolves when the export succeeds", async () => {
     const done = job("succeeded", { rows: 2, filename: "a.csv" });
     const { get, asked } = sequence([job("queued"), job("running"), done]);
 
-    await expect(waitForExport(get, "e1", { sleep: noSleep })).resolves.toEqual(done);
+    await expect(waitForJob(get, "e1", { sleep: noSleep })).resolves.toEqual(done);
     expect(asked).toEqual(["e1", "e1", "e1"]);
   });
 
@@ -38,14 +38,14 @@ describe("waitForExport", () => {
     const failed = job("failed", { error: "the result has more than 1,000,000 rows" });
     const { get } = sequence([job("queued"), failed]);
 
-    await expect(waitForExport(get, "e1", { sleep: noSleep })).resolves.toEqual(failed);
+    await expect(waitForJob(get, "e1", { sleep: noSleep })).resolves.toEqual(failed);
   });
 
   it("keeps waiting while the export is queued behind other jobs", async () => {
     const done = job("succeeded", { rows: 2, filename: "a.csv" });
     const { get, asked } = sequence([...Array(400).fill(job("queued")), done]);
 
-    await expect(waitForExport(get, "e1", { sleep: noSleep, intervalMs: 1000 })).resolves.toEqual(
+    await expect(waitForJob(get, "e1", { sleep: noSleep, intervalMs: 1000 })).resolves.toEqual(
       done,
     );
     expect(asked).toHaveLength(401);
@@ -59,7 +59,7 @@ describe("waitForExport", () => {
       return Promise.resolve();
     };
 
-    await expect(waitForExport(get, "e1", { sleep, signal: controller.signal })).rejects.toThrow(
+    await expect(waitForJob(get, "e1", { sleep, signal: controller.signal })).rejects.toThrow(
       "aborted",
     );
     expect(asked).toEqual(["e1"]);
@@ -74,5 +74,16 @@ describe("chartFilename", () => {
   it("falls back to chart", () => {
     expect(chartFilename(undefined, "svg")).toBe("chart.svg");
     expect(chartFilename("!!!", "svg")).toBe("chart.svg");
+  });
+});
+
+describe("waitForJob with a query job", () => {
+  it("resolves with the rows when the query succeeds", async () => {
+    const done = { id: "q1", status: "succeeded" as const, rows: [[1]] };
+    const replies = [{ ...done, status: "running" as const, rows: [] }, done];
+    let asked = 0;
+    const get = () => Promise.resolve(replies[Math.min(asked++, replies.length - 1)]);
+
+    await expect(waitForJob(get, "q1", { sleep: noSleep })).resolves.toEqual(done);
   });
 });

@@ -208,3 +208,70 @@ def test_expired_exports_are_purged_on_each_export(
     setup["handler"](_export_job(conn, workspace, setup), threading.Event())
 
     assert not old.exists()
+
+
+def _edited_query(
+    conn: psycopg.Connection, workspace: UUID, setup: dict[str, Any], sql: str
+) -> UUID:
+    payload = {"run_id": str(setup["run"]), "dataset_id": str(setup["dataset"]), "sql": "x"}
+    query = JobQueue(conn).enqueue(workspace, "query", payload)
+    conn.execute(
+        "UPDATE jobs SET status = 'succeeded', result = %s WHERE id = %s",
+        (Jsonb({"sql": sql, "columns": ["id"], "rows": [[1]], "truncated": True}), query),
+    )
+    return query
+
+
+def _query_export_job(
+    conn: psycopg.Connection, workspace: UUID, setup: dict[str, Any], query: UUID
+) -> Job:
+    payload = {"query_id": str(query), "dataset_id": str(setup["dataset"])}
+    job_id = JobQueue(conn).enqueue(workspace, "export", payload)
+    job = JobQueue(conn).get(job_id, workspace)
+    assert job is not None
+    return job
+
+
+def test_an_edited_query_exports_the_sql_it_ran(
+    conn: psycopg.Connection, workspace: UUID, setup: dict[str, Any]
+) -> None:
+    query = _edited_query(conn, workspace, setup, "SELECT id FROM sales WHERE id > 1")
+    job = _query_export_job(conn, workspace, setup, query)
+
+    result = setup["handler"](job, threading.Event())
+
+    assert setup["runner"].requests == [
+        ExportRun(dataset_id=str(setup["dataset"]), sql="SELECT id FROM sales WHERE id > 1")
+    ]
+    assert result["filename"] == f"da-agent-{str(query)[:8]}-edited.csv"
+    assert export_file(setup["exports"], job.id).read_text(encoding="utf-8") == "id\n1\n2\n"
+
+
+def test_an_edited_query_on_a_changed_dataset_is_refused(
+    conn: psycopg.Connection, workspace: UUID, setup: dict[str, Any]
+) -> None:
+    query = _edited_query(conn, workspace, setup, "SELECT id FROM sales")
+    conn.execute(
+        "UPDATE datasets SET updated_at = now() + interval '1 minute' WHERE id = %s",
+        (setup["dataset"],),
+    )
+    job = _query_export_job(conn, workspace, setup, query)
+
+    with pytest.raises(PermanentJobError, match=CHANGED_DATASET):
+        setup["handler"](job, threading.Event())
+    assert setup["runner"].requests == []
+
+
+@pytest.mark.security
+def test_an_edited_query_of_another_dataset_is_not_found(
+    conn: psycopg.Connection, workspace: UUID, setup: dict[str, Any]
+) -> None:
+    query = _edited_query(conn, workspace, setup, "SELECT id FROM sales")
+    other = DatasetStore(conn).create(workspace, "other", "")
+    payload = {"query_id": str(query), "dataset_id": str(other)}
+    job_id = JobQueue(conn).enqueue(workspace, "export", payload)
+    job = JobQueue(conn).get(job_id, workspace)
+    assert job is not None
+
+    with pytest.raises(PermanentJobError, match="not found"):
+        setup["handler"](job, threading.Event())

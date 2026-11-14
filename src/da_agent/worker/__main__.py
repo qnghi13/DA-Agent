@@ -1,6 +1,6 @@
 """Run a worker: python -m da_agent.worker. Settings come from the environment (da_agent.config).
 
-The worker claims ingest, build, run, and export jobs, runs sandboxes through the Runner, and
+The worker claims ingest, build, run, export, and query jobs, runs sandboxes through the Runner, and
 records every model call in Postgres. SIGTERM or Ctrl-C stops it after the current job; if it is
 killed instead, the job's lease runs out and another worker continues it.
 """
@@ -26,6 +26,7 @@ from da_agent.worker.datasets import BuildHandler, DatasetOpener, IngestHandler
 from da_agent.worker.exports import ExportHandler
 from da_agent.worker.limits import WorkspaceBudgets
 from da_agent.worker.memory import MemoryLoader
+from da_agent.worker.queries import QueryHandler
 from da_agent.worker.runs import RunHandler
 from da_agent.worker.worker import Worker, WorkerConfig
 
@@ -81,6 +82,7 @@ def build_worker(
         "ingest": IngestHandler(**database, **roots, llm=llm, budgets=budgets),
         "build": BuildHandler(**database, **roots),
         "export": ExportHandler(**database, runner=runner, exports_root=settings.exports_root),
+        "query": QueryHandler(**database, runner=runner),
     }
     return Worker(WorkerConfig(url=settings.database_url, schema=settings.schema), handlers)
 

@@ -4,6 +4,8 @@ The database engine enforces its own limits as well, so a parser bug here is not
 both layers.
 """
 
+import re
+
 from sqlglot import exp, parse
 from sqlglot.errors import SqlglotError
 
@@ -50,12 +52,17 @@ def _function_name(node: exp.Expr) -> str | None:
     return None
 
 
+_TERMINAL_CODES = re.compile(r"\x1b\[[0-9;]*m")
+
+
 def validate_select(sql: str, dialect: str = "sqlite") -> str:
     """Return the query without trailing semicolons, or raise SqlRejectedError."""
     try:
         statements = [statement for statement in parse(sql, read=dialect) if statement is not None]
     except SqlglotError as error:
-        raise SqlRejectedError(f"could not parse the query: {error}") from error
+        # sqlglot underlines the bad token with terminal codes; people and the model read text.
+        plain = _TERMINAL_CODES.sub("", str(error))
+        raise SqlRejectedError(f"could not parse the query: {plain}") from error
 
     if len(statements) != 1:
         raise SqlRejectedError(f"expected one statement, found {len(statements)}")

@@ -41,6 +41,8 @@ from pydantic import BaseModel, Field
 
 from da_agent.agent.answer import result_from_json
 from da_agent.reports.html import CONTENT_SECURITY_POLICY, render_report
+from da_agent.runner.runner import MAX_SQL_CHARS
+from da_agent.security.sql_guard import SqlRejectedError, validate_select
 from da_agent.storage import audit, ops
 from da_agent.storage.datasets import (
     DatasetNotFoundError,
@@ -136,6 +138,13 @@ class RunRequest(BaseModel):
         default=None,
         description="A conversation of the same dataset; the run reads its earlier turns.",
     )
+
+
+class QueryRequest(BaseModel):
+    sql: str = Field(
+        min_length=1, max_length=MAX_SQL_CHARS,
+        description="One read-only SELECT on the run's dataset, in DuckDB SQL.",
+    )  # fmt: skip
 
 
 class MemoryRequest(BaseModel):
@@ -859,6 +868,81 @@ def _read_and_close(file: BinaryIO, chunk_bytes: int = 1 << 20) -> Iterator[byte
     with file:
         while chunk := file.read(chunk_bytes):
             yield chunk
+
+
+# Edited SQL (docs/design/2026-11-14-edit-sql.md): a query job per run of edited SQL.
+
+
+@router.post("/runs/{run_id}/queries", status_code=202)
+def create_query(
+    run_id: str, body: QueryRequest, conn: Db, caller: Caller, settings: Settings
+) -> dict[str, Any]:
+    """Run SQL a person edited from one of the run's queries, on the run's dataset. The SQL guard
+    runs here so a typo or a forbidden statement is answered at once and queues nothing; the
+    worker checks it again and a sandbox runs it."""
+    job = run_job(run_id, conn, caller)
+    if job.status != "succeeded":
+        raise HTTPException(status_code=409, detail=f"the run is {job.status}")
+    try:
+        sql = validate_select(body.sql, dialect="duckdb")
+    except SqlRejectedError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from None
+    dataset_id = _uuid(str(job.payload.get("dataset_id", "")))
+    record = DatasetStore(conn).get(dataset_id, caller.workspace_id)
+    if record is None:
+        raise _not_found()
+    if record.status != "ready":
+        raise HTTPException(status_code=409, detail="the dataset is not ready")
+    # A query runs in the sandbox and calls no model.
+    _may_start_job(conn, caller, settings, calls_model=False)
+    payload = {"run_id": str(job.id), "dataset_id": str(dataset_id), "sql": sql}
+    with conn.transaction():
+        query_id = JobQueue(conn).enqueue(caller.workspace_id, "query", payload)
+        # The length, not the text: SQL can hold values from the data.
+        log(conn, caller, "query.create", str(query_id), run_id=str(job.id), chars=len(sql))
+    return {"id": str(query_id), "status": "queued"}
+
+
+def query_job(query_id: str, conn: psycopg.Connection, caller: Member) -> Job:
+    job = JobQueue(conn).get(_uuid(query_id), caller.workspace_id)
+    if job is None or job.kind != "query":
+        raise _not_found()
+    return job
+
+
+@router.get("/queries/{query_id}")
+def get_query(query_id: str, conn: Db, caller: Caller) -> dict[str, Any]:
+    job = query_job(query_id, conn, caller)
+    result = job.result or {}
+    return {
+        "id": str(job.id),
+        "status": job.status,
+        "sql": result.get("sql") or job.payload.get("sql"),
+        "columns": result.get("columns") or [],
+        "rows": result.get("rows") or [],
+        "truncated": bool(result.get("truncated")),
+        "error": job.last_error if job.status == "failed" else None,
+    }
+
+
+@router.post("/queries/{query_id}/export", status_code=202)
+def create_query_export(
+    query_id: str, conn: Db, caller: Caller, settings: Settings
+) -> dict[str, Any]:
+    """Write the whole result of an edited query as CSV. The export names the query job; the
+    worker reads its SQL from the stored result."""
+    job = query_job(query_id, conn, caller)
+    if job.status != "succeeded" or job.result is None:
+        raise HTTPException(status_code=409, detail=f"the query is {job.status}")
+    dataset_id = _uuid(str(job.payload.get("dataset_id", "")))
+    if dataset_changed_since_run(conn, caller.workspace_id, job.id, dataset_id):
+        raise HTTPException(status_code=409, detail=CHANGED_DATASET)
+    _may_start_job(conn, caller, settings, calls_model=False)
+    payload = {"query_id": str(job.id), "dataset_id": str(dataset_id)}
+    with conn.transaction():
+        export_id = JobQueue(conn).enqueue(caller.workspace_id, "export", payload)
+        log(conn, caller, "export.create", str(export_id), query_id=str(job.id))
+    return {"id": str(export_id), "status": "queued"}
 
 
 FINISHED = ("succeeded", "failed")
