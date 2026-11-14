@@ -31,7 +31,10 @@ SPEC = json.loads(GOOD)
 
 
 def report(column: str = "total") -> BuildReport:
-    built = ColumnBuild(name=column, source="Tổng", type="money", non_blank=2, parsed=2)
+    built = ColumnBuild(
+        name=column, source="Tổng", type="money", non_blank=2, parsed=2,
+        distinct=1, number_min=100, number_max=100, number_mean=100,
+    )  # fmt: skip
     table = TableBuild(
         name="orders", source="don", description="one order", rows=2, columns=[built]
     )
@@ -82,6 +85,20 @@ def test_ingest_proposes_a_spec_and_installs_the_build(
         "rows": 2,
         "row": "one order",
         "columns": 1,
+        "profile": [
+            {
+                "name": "total",
+                "type": "money",
+                "filled": 2,
+                "parsed": 2,
+                "failed_samples": [],
+                "distinct": 1,
+                "min": 100,
+                "max": 100,
+                "mean": 100,
+                "top": [],
+            }
+        ],
     }
     assert record.documents == [{"path": "README.md", "text": "notes"}]
     assert (tmp_path / "datasets" / str(dataset_id) / BUILD_REPORT).is_file()

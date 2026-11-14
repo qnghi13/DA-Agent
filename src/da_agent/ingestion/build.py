@@ -66,8 +66,16 @@ PROVEN_SUBTOTAL = "Proven subtotal: equals the sum of the rows above (code)"
 # An identifier column, such as an order or slip id, is filled in at least half of the kept rows,
 # nearly unique there, and mostly not a number. Rows that carry one are records.
 ID_FILLED, ID_DISTINCT, ID_NUMERIC, ID_MIN_ROWS = 0.5, 0.9, 0.5, 20
+# The column profile lists this many most frequent values, each cut to this length.
+TOP_VALUES, TOP_VALUE_CHARS = 5, 60
+NUMBER_TYPES = ("integer", "number", "money", "quantity")
 # Excel serial numbers from 1954 to 2119. Five-digit numbers outside this range stay unparsed.
 EXCEL_SERIAL_MIN, EXCEL_SERIAL_MAX = 20000, 80000
+
+
+class ValueCount(BaseModel):
+    value: str
+    rows: int
 
 
 class ColumnBuild(BaseModel):
@@ -82,6 +90,15 @@ class ColumnBuild(BaseModel):
     )
     min_value: str | None = Field(default=None, description="Earliest value of a date column.")
     max_value: str | None = Field(default=None, description="Latest value of a date column.")
+    # The column profile people see (docs/design/2026-11-14-data-overview.md). The agent's prompt
+    # does not read these fields.
+    distinct: int | None = Field(default=None, description="Distinct values in the clean table.")
+    number_min: float | None = None
+    number_max: float | None = None
+    number_mean: float | None = None
+    top_values: list[ValueCount] = Field(
+        default_factory=list, description="The most frequent values of a text or boolean column."
+    )
 
     @property
     def parse_rate(self) -> float:
@@ -400,6 +417,7 @@ def _build_table(
             checked.values = _known_values(connection, table.name, column.name)
         if column.type in ("date", "datetime"):
             checked.min_value, checked.max_value = _value_range(connection, table.name, column.name)
+        _profile(connection, table.name, column, checked)
         report.columns.append(checked)
     connection.execute(f"DROP TABLE {q(stage)}")
     connection.execute(f"DROP TABLE {q(marked)}")
@@ -500,6 +518,33 @@ def _value_range(
         str(row[0]) if row[0] is not None else None,
         str(row[1]) if row[1] is not None else None,
     )
+
+
+def _profile(
+    connection: duckdb.DuckDBPyConnection, table: str, column: ColumnSpec, report: ColumnBuild
+) -> None:
+    """Distinct count, number range and mean, and the most frequent text or boolean values."""
+    name = q(column.name)
+    filled = f"{name} IS NOT NULL" + (f" AND trim({name}) <> ''" if column.type == "text" else "")
+    report.distinct = _scalar(
+        connection, f"SELECT count(DISTINCT {name}) FROM {q(table)} WHERE {filled}"
+    )
+    if column.type in NUMBER_TYPES:
+        row = connection.execute(
+            f"SELECT min({name}), max({name}), avg({name}) FROM {q(table)}"
+        ).fetchone()
+        if row is not None:
+            report.number_min, report.number_max, report.number_mean = (
+                float(value) if value is not None else None for value in row
+            )
+    if column.type in ("text", "boolean"):
+        rows = connection.execute(
+            f"SELECT CAST({name} AS VARCHAR), count(*) AS n FROM {q(table)} WHERE {filled} "
+            f"GROUP BY 1 ORDER BY n DESC, 1 LIMIT {TOP_VALUES}"
+        ).fetchall()
+        report.top_values = [
+            ValueCount(value=str(value)[:TOP_VALUE_CHARS], rows=n) for value, n in rows
+        ]
 
 
 def _known_values(connection: duckdb.DuckDBPyConnection, table: str, column: str) -> list[str]:

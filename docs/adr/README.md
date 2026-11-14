@@ -38,3 +38,4 @@ decision, add a new ADR and mark the old one as superseded.
 | [0031](0031-guard-signals-by-kind.md) | Guard signals are counted by kind in traces, events, eval rows, and the dashboard | Accepted |
 | [0032](0032-result-export.md) | Result export is a job that writes the whole result in a sandbox | Accepted |
 | [0033](0033-edited-sql-as-a-query-job.md) | Edited SQL runs as a query job, checked before it is queued | Accepted |
+| [0034](0034-column-profile-at-build.md) | The column profile is computed during the build and kept in the dataset summary | Accepted |

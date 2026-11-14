@@ -16,7 +16,7 @@ from typing import Any
 from uuid import UUID
 
 from da_agent.agent.loop_types import Document
-from da_agent.ingestion.build import BuildReport
+from da_agent.ingestion.build import BuildReport, ColumnBuild
 from da_agent.ingestion.pipeline import (
     PreparedDataset,
     parse_problems,
@@ -45,7 +45,13 @@ def _summary(prepared: PreparedDataset, report: BuildReport) -> dict[str, Any]:
     return {
         "status": prepared.status,
         "tables": [
-            {"name": t.name, "rows": t.rows, "row": t.description, "columns": len(t.columns)}
+            {
+                "name": t.name,
+                "rows": t.rows,
+                "row": t.description,
+                "columns": len(t.columns),
+                "profile": [_column_profile(c) for c in t.columns],
+            }
             for t in report.tables
             if t.error is None
         ],
@@ -53,6 +59,24 @@ def _summary(prepared: PreparedDataset, report: BuildReport) -> dict[str, Any]:
         "proposal_problems": prepared.proposal.problems if prepared.proposal else [],
         "dropped_rules": prepared.dropped_rules,
         "deduplicated": prepared.deduplicated,
+    }
+
+
+def _column_profile(column: ColumnBuild) -> dict[str, Any]:
+    """One column as people see it in the data overview (docs/design/2026-11-14-data-overview.md).
+    Hidden columns are not in the clean table, so they have no profile."""
+    dates = column.type in ("date", "datetime")
+    return {
+        "name": column.name,
+        "type": column.type,
+        "filled": column.non_blank,
+        "parsed": column.parsed,
+        "failed_samples": column.failed_samples,
+        "distinct": column.distinct,
+        "min": column.min_value if dates else column.number_min,
+        "max": column.max_value if dates else column.number_max,
+        "mean": column.number_mean,
+        "top": [{"value": v.value, "rows": v.rows} for v in column.top_values],
     }
 
 

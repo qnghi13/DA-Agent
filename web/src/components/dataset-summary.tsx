@@ -1,5 +1,6 @@
 import { ChevronRight, FileText } from "lucide-react";
-import type { Dataset } from "@/api";
+import type { ColumnProfile, Dataset } from "@/api";
+import { columnDetail, share } from "@/profile";
 import { cn } from "@/lib/utils";
 
 /** Files, tables, and the build's notes for one dataset; the approved spec when it has one. */
@@ -20,6 +21,9 @@ export function DatasetSummary({ dataset, showSpec = true }: { dataset: Dataset;
                 </div>
                 {table.row && (
                   <p className="text-muted-foreground mt-1 text-sm">{table.row}</p>
+                )}
+                {table.profile && table.profile.length > 0 && (
+                  <Columns columns={table.profile} rows={table.rows} />
                 )}
               </div>
             ))}
@@ -74,6 +78,51 @@ export function DatasetSummary({ dataset, showSpec = true }: { dataset: Dataset;
         </details>
       )}
     </div>
+  );
+}
+
+/** The data overview of one table: each column's type, how full it is, and what it holds. */
+function Columns({ columns, rows }: { columns: ColumnProfile[]; rows: number }) {
+  return (
+    <details className="group mt-2">
+      <summary className="text-muted-foreground hover:text-foreground flex cursor-pointer list-none items-center gap-1 text-xs">
+        <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
+        Columns
+      </summary>
+      <ul className="mt-2 divide-y border-t">
+        {columns.map((column) => {
+          const failed = column.filled - column.parsed;
+          const detail = columnDetail(column);
+          return (
+            <li key={column.name} className="flex flex-col gap-0.5 py-2">
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="min-w-0 truncate">
+                  <code className="text-sm">{column.name}</code>{" "}
+                  <span className="text-muted-foreground text-xs">{column.type}</span>
+                </span>
+                <span className="text-muted-foreground shrink-0 font-mono text-xs tabular-nums">
+                  {share(column.filled, rows)} filled
+                  {column.distinct !== null && ` · ${column.distinct.toLocaleString()} distinct`}
+                </span>
+              </div>
+              {detail && (
+                <p className="text-muted-foreground truncate text-xs" title={detail}>
+                  {detail}
+                </p>
+              )}
+              {failed > 0 && (
+                <p className="text-warning text-xs">
+                  {failed.toLocaleString()} {failed === 1 ? "cell" : "cells"} not read as{" "}
+                  {column.type}
+                  {column.failed_samples.length > 0 &&
+                    `, such as ${column.failed_samples.map((v) => `"${v}"`).join(", ")}`}
+                </p>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </details>
   );
 }
 

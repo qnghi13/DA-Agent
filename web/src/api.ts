@@ -58,9 +58,24 @@ export interface DatasetSpec {
   notes?: string[];
 }
 
+/** One visible column of a built table (docs/design/2026-11-14-data-overview.md). */
+export interface ColumnProfile {
+  name: string;
+  type: string;
+  filled: number;
+  parsed: number;
+  failed_samples: string[];
+  distinct: number | null;
+  min: string | number | null;
+  max: string | number | null;
+  mean: number | null;
+  top: { value: string; rows: number }[];
+}
+
 export interface DatasetSummary {
   status?: string;
-  tables?: { name: string; rows: number; row: string; columns: number }[];
+  /** profile is missing for datasets built before the data overview. */
+  tables?: { name: string; rows: number; row: string; columns: number; profile?: ColumnProfile[] }[];
   problems?: string[];
   proposal_problems?: string[];
   dropped_rules?: string[];

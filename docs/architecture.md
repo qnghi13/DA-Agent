@@ -146,6 +146,9 @@ Implemented in `src/da_agent/ingestion/`:
 - Invalid parts of a proposal are dropped one column at a time and sent back for repair.
 - A parse rate shows how many values parsed, not whether they parsed correctly. A wrong number
   format once read `22,000` as 22 at a 99% parse rate.
+- The build also profiles each visible column (distinct values, number range and mean, frequent
+  values) for the data overview people see; the agent's prompt does not use it
+  ([ADR 0034](adr/0034-column-profile-at-build.md)).
 
 ## Agent graph
 

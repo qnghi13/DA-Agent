@@ -721,3 +721,60 @@ def test_subtotals_a_narrow_rule_missed_are_proven_by_their_own_day(
 
     assert result.tables[0].proven_subtotals == 4
     assert rows(out, "SELECT count(*), sum(CAST(tien AS INTEGER)) FROM t") == [(180, 180_000)]
+
+
+# Column profile (docs/design/2026-11-14-data-overview.md)
+
+
+def test_number_columns_get_distinct_range_and_mean(tmp_path: Path, out: Path) -> None:
+    raw, report = raw_upload(tmp_path, {"t.csv": "v\n10\n20\n20\n\nabc\n60\n"})
+
+    result = build(
+        raw / RAW_DATABASE, one_table(ColumnSpec(source="v", name="v", type="number")), report, out
+    )
+
+    column = result.tables[0].columns[0]
+    assert column.distinct == 3
+    assert (column.number_min, column.number_max, column.number_mean) == (10, 60, 27.5)
+    assert column.top_values == []
+    assert (column.min_value, column.max_value) == (None, None)
+
+
+def test_text_columns_get_their_most_frequent_values_with_counts(tmp_path: Path, out: Path) -> None:
+    values = ["completed"] * 4 + ["Completed"] * 2 + ["cancelled", "a", "b", "c", "x" * 80, ""]
+    raw, report = raw_upload(tmp_path, {"t.csv": "s\n" + "\n".join(values)})
+
+    result = build(raw / RAW_DATABASE, one_table(ColumnSpec(source="s", name="s")), report, out)
+
+    column = result.tables[0].columns[0]
+    assert column.distinct == 7
+    assert [(v.value, v.rows) for v in column.top_values] == [
+        ("completed", 4),
+        ("Completed", 2),
+        ("a", 1),
+        ("b", 1),
+        ("c", 1),
+    ]
+    assert column.number_min is None and column.number_mean is None
+
+
+def test_long_text_values_are_cut_in_the_profile(tmp_path: Path, out: Path) -> None:
+    raw, report = raw_upload(tmp_path, {"t.csv": "s\n" + "\n".join(["y" * 80] * 2 + ["z"])})
+
+    result = build(raw / RAW_DATABASE, one_table(ColumnSpec(source="s", name="s")), report, out)
+
+    assert [(v.value, v.rows) for v in result.tables[0].columns[0].top_values] == [
+        ("y" * 60, 2),
+        ("z", 1),
+    ]
+
+
+def test_date_columns_keep_their_range_and_get_distinct(tmp_path: Path, out: Path) -> None:
+    raw, report = raw_upload(tmp_path, {"t.csv": "d\n2026-06-01\n2026-06-01\n2026-06-30\n"})
+    spec = one_table(ColumnSpec(source="d", name="d", type="date"))
+
+    column = build(raw / RAW_DATABASE, spec, report, out).tables[0].columns[0]
+
+    assert column.distinct == 2
+    assert (column.min_value, column.max_value) == ("2026-06-01", "2026-06-30")
+    assert column.number_min is None and column.top_values == []
