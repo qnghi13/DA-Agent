@@ -48,7 +48,7 @@ checkpointer, DuckDB, sqlglot, Vega-Lite, React + Vite + TypeScript.
 | `src/da_agent/agent/` | Graph, nodes, state, tools, verification |
 | `src/da_agent/ingestion/` | Readers, table detection, profiling, `DatasetSpec`, loader |
 | `src/da_agent/llm/` | `LLMClient`, provider adapters, price table |
-| `src/da_agent/reports/` | Standalone HTML reports of a run |
+| `src/da_agent/reports/` | Standalone HTML reports of a run; plain explanations of its SQL |
 | `src/da_agent/storage/` | Postgres access and the artifact store |
 | `src/da_agent/security/` | SQL guard and masking |
 | `src/da_agent/telemetry/` | OpenTelemetry setup |
@@ -108,6 +108,8 @@ browser ─127.0.0.1:8080─> web (nginx: UI files, /v1 proxy)
 4. The client asks a question. The API enqueues a run and streams progress over SSE.
 5. The Worker runs the graph, sending SQL and Python to the Runner.
 6. The result is a structured `AgentAnswer` with citations to tool results and artifacts.
+7. Reading a run, the API explains the answer's queries in plain words, read from the SQL with
+   sqlglot; no model call ([ADR 0035](adr/0035-plain-explanation-from-sql.md)).
 
 ## Ingestion
 

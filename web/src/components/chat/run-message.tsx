@@ -1,8 +1,9 @@
-import { AlertCircle, BookMarked, Check, CircleHelp, Copy, Loader2, PanelRight, X } from "lucide-react";
+import { AlertCircle, BookMarked, Check, CircleHelp, Copy, Loader2, PanelRight, Sigma, X } from "lucide-react";
 import { lazy, Suspense, useEffect, useReducer, useRef, useState } from "react";
-import { type Api, type Run, errorMessage } from "@/api";
+import { type Api, type Explanation, type Run, errorMessage } from "@/api";
 import { DataTable } from "@/components/data-table";
 import { StatusBadge } from "@/components/status-badge";
+import { explanationLines } from "@/explain";
 import { Button } from "@/components/ui/button";
 import {
   type Trail,
@@ -257,7 +258,12 @@ function Answer({
           </span>
         </Callout>
       ) : result?.answer ? (
-        <AnswerValue run={run} />
+        <>
+          <AnswerValue run={run} />
+          {result.answer.kind !== "unanswerable" && (
+            <HowCalculated explanations={run.explanations ?? []} />
+          )}
+        </>
       ) : (
         <p className="text-muted-foreground text-[15px]">
           {stopReasonText(result?.stop_reason) ?? result?.error ?? "No answer."}
@@ -341,6 +347,45 @@ function AnswerValue({ run }: { run: Run }) {
         <p className="text-muted-foreground text-[15px] leading-relaxed">{answer.reason}</p>
       )}
     </div>
+  );
+}
+
+/** The answer's queries in plain words, read from the SQL (ADR 0035). */
+function HowCalculated({ explanations }: { explanations: Explanation[] }) {
+  if (explanations.length === 0) return null;
+  const partial = explanations.some((explanation) => !explanation.complete);
+  return (
+    <details open className="group rounded-xl border px-4 py-3 text-sm">
+      <summary className="text-muted-foreground flex cursor-pointer list-none items-center gap-2 font-medium select-none">
+        <Sigma className="size-4" aria-hidden />
+        How it was calculated
+      </summary>
+      <div className="mt-3 flex flex-col gap-4">
+        {explanations.map((explanation, index) => (
+          <div key={explanation.query_index} className="flex flex-col gap-1.5">
+            {explanations.length > 1 && (
+              <p className="text-muted-foreground text-xs font-medium">
+                Calculation {index + 1} of {explanations.length}
+              </p>
+            )}
+            <dl className="grid grid-cols-[minmax(0,8.5rem)_1fr] gap-x-3 gap-y-1.5">
+              {explanationLines(explanation).map((line) => (
+                <div key={line.label} className="contents">
+                  <dt className="text-muted-foreground">{line.label}</dt>
+                  <dd className="min-w-0 break-words">{line.text}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        ))}
+        {partial && (
+          <p className="text-muted-foreground text-xs">
+            Some steps can't be put into words yet. Open Show work, then SQL, to see the whole
+            query.
+          </p>
+        )}
+      </div>
+    </details>
   );
 }
 

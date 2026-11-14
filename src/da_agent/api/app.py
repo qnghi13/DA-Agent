@@ -40,6 +40,7 @@ from fastapi.responses import (
 from pydantic import BaseModel, Field
 
 from da_agent.agent.answer import result_from_json
+from da_agent.reports.explain import Labels, explain_result
 from da_agent.reports.html import CONTENT_SECURITY_POLICY, render_report
 from da_agent.runner.runner import MAX_SQL_CHARS
 from da_agent.security.sql_guard import SqlRejectedError, validate_select
@@ -764,7 +765,21 @@ def list_runs(
 
 @router.get("/runs/{run_id}")
 def get_run(run_id: str, conn: Db, caller: Caller, settings: Settings) -> dict[str, Any]:
-    return _run_view(run_job(run_id, conn, caller), settings.trace_ui_url)
+    job = run_job(run_id, conn, caller)
+    return _run_view(job, settings.trace_ui_url) | {
+        "explanations": _explanations(job, conn, caller.workspace_id)
+    }
+
+
+def _explanations(job: Job, conn: psycopg.Connection, workspace: uuid.UUID) -> list[dict]:
+    """How the answer was calculated, read from its SQL on each request (ADR 0035). Parsing
+    runs no SQL, so old runs are explained too."""
+    if job.status != "succeeded" or not job.result:
+        return []
+    dataset_id = job.payload.get("dataset_id")
+    record = DatasetStore(conn).get(_uuid(dataset_id), workspace) if dataset_id else None
+    labels = Labels.from_spec(record.spec if record else None)
+    return explain_result(result_from_json(job.result), labels)
 
 
 @router.get("/runs/{run_id}/report", response_class=HTMLResponse)

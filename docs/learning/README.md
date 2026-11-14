@@ -23,3 +23,4 @@ Mỗi cột mốc có một ghi chú tiếng Việt, theo khung sau:
 | [12. Xuất kết quả](12-xuat-ket-qua.md) | Giới hạn hiển thị và tải về, export bằng job trong sandbox, CSV injection |
 | [13. Sửa SQL rồi chạy lại](13-sua-sql.md) | SQL do người gõ, kiểm tra nhiều lớp, lỗi dễ hiểu, không tốn tiền model |
 | [14. Tổng quan dữ liệu](14-tong-quan-du-lieu.md) | Profile từng cột lúc build, tách khỏi prompt của agent, đọc số liệu chất lượng dữ liệu |
+| [15. Giải thích cách tính](15-giai-thich-cach-tinh.md) | Đọc SQL bằng sqlglot thành lời, thành thật về phần chưa diễn giải, đo độ phủ trước khi mở rộng |

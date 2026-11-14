@@ -385,6 +385,49 @@ export interface Run {
   result: RunResult | null;
   /** One link per attempt, present only when an operator configured a trace viewer. */
   traces: { attempt: number; url: string }[];
+  /** How the answer was calculated, read from its SQL (ADR 0035). Only in a single run's view. */
+  explanations?: Explanation[];
+}
+
+/** A value in a query: a column, an aggregate, arithmetic, a number, or every column. */
+export interface ExprFact {
+  kind: "column" | "aggregate" | "arithmetic" | "number" | "all";
+  name?: string | null;
+  column?: string;
+  unit?: string | null;
+  func?: string;
+  of?: ExprFact | null;
+  distinct?: boolean;
+  condition?: FilterFact[];
+  op?: string;
+  left?: ExprFact;
+  right?: ExprFact;
+  value?: number;
+}
+
+export interface FilterFact {
+  of: ExprFact;
+  op: string;
+  /** Literals, or an ExprFact when two columns are compared. */
+  values: unknown[];
+  match: string;
+}
+
+export interface Explanation {
+  query_index: number;
+  tables: string[];
+  joins: { table: string; kind: string; on: string[][] }[];
+  measures: ExprFact[];
+  shown: ExprFact[];
+  filters: FilterFact[];
+  groups: ExprFact[];
+  having: FilterFact[];
+  order: { by: ExprFact; descending: boolean }[];
+  limit: number | null;
+  distinct_rows: boolean;
+  /** Parts not put in words, such as "subquery"; the SQL tab shows them. */
+  unexplained: string[];
+  complete: boolean;
 }
 
 export interface RunSummary {

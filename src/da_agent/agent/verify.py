@@ -168,7 +168,7 @@ def _truncated(node: exp.Expression, day: dt.date) -> tuple[str, dt.date, dt.dat
 FLIPPED = {exp.GT: exp.LT, exp.GTE: exp.LTE, exp.LT: exp.GT, exp.LTE: exp.GTE, exp.EQ: exp.EQ}
 
 
-def _bound(node: exp.Expression) -> tuple[str, dt.date | None, dt.date | None] | None:
+def date_bound(node: exp.Expression) -> tuple[str, dt.date | None, dt.date | None] | None:
     """One date condition as (column, start, end)."""
     if isinstance(node, exp.Between):
         column, low, high = _column(node.this), _date(node.args["low"]), _date(node.args["high"])
@@ -206,7 +206,7 @@ def query_periods(sql: str, dialect: str) -> list[Period]:
         return []
     scoped: dict[tuple[int, str], list[dt.date | None]] = {}
     for node in tree.find_all(exp.Between, exp.EQ, exp.GT, exp.GTE, exp.LT, exp.LTE):
-        found = _bound(node)
+        found = date_bound(node)
         if found is None:
             continue
         column, start, end = found
@@ -275,17 +275,26 @@ def _query_results(messages: list[Message]) -> list[tuple[str, list[float], list
     return [(q.sql, _walk_numbers(q.rows), q.rows) for q in query_records(messages)]
 
 
-def evidence_queries(answer: AgentAnswer, messages: list[Message]) -> list[str]:
-    """The queries behind an answer: those whose results hold its numbers, or the last successful
-    query when the answer has no numbers. Probes the model ran on the way are left out."""
-    results = _query_results(messages)
-    if not results:
+def evidence_indices(answer: AgentAnswer, queries: list[QueryRecord]) -> list[int]:
+    """Positions of the queries behind an answer: those whose results hold its numbers, or the
+    last query when the answer has no numbers. Probes the model ran on the way are left out."""
+    if not queries:
         return []
     values = answer_numbers(answer)
     if not values:
-        return [results[-1][0]]
+        return [len(queries) - 1]
     percent = answer.kind == "percent"
-    return [sql for sql, numbers, _ in results if any(traces(v, numbers, percent) for v in values)]
+    return [
+        index
+        for index, query in enumerate(queries)
+        if any(traces(v, _walk_numbers(query.rows), percent) for v in values)
+    ]
+
+
+def evidence_queries(answer: AgentAnswer, messages: list[Message]) -> list[str]:
+    """The SQL of the queries behind an answer (see evidence_indices)."""
+    records = query_records(messages)
+    return [records[index].sql for index in evidence_indices(answer, records)]
 
 
 def _period_problems(

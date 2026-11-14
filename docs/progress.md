@@ -1,6 +1,6 @@
 # Progress
 
-Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-14 (data overview, ADR 0034)
+Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-15 (plain explanation, ADR 0035)
 **Phase:** optimisation. Challenge rules: ≤15B params in total, offline Docker, 2×5090, 6 h,
 re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for the submission.
 
@@ -12,10 +12,8 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
 - Done (559f88a): code-computed periods, Vietnamese shorthand and Telex expansion, `vllm:` route.
   Test shops are new and rulebooks differ per split: ingestion runs in the container; the
   semantic layer holds data facts only, never rules.
-- Public test (`public_test/`, gitignored, 14 shops): `prepare --all-shops` on Groq, $0.10 total,
-  14/14 built. Spec repairs in code: raw text as a clean name becomes its slug; rules naming an
-  undeclared column by its slug map back to it (dev_013 dates 63% -> 100%). ADR 0029: code
-  excludes proven subtotals (dev_010 narrow rule: 240 left -> 0; train exclusions still 100%).
+- Public test (`public_test/`, 14 shops): `prepare --all-shops` on Groq $0.10, 14/14 built;
+  spec repairs in code (dev_013 dates 63% -> 100%); ADR 0029 excludes proven subtotals.
 - GPU kit (a24a501): runbook, `serve.sh`, preflight, `--workers`. Memory: ADR 0030 (9806563).
 - GPU run 1 (2026-11-13, 1x5090, vLLM 0.33.0, `gemma-4-12B-it` bf16, batch-invariant): preflight
   ok (tool calls, identical alone vs busy). `regression` on `datasets-dev`, 3 workers: **+56**
@@ -24,9 +22,11 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
   (Groq +55). Then status variants and line-vs-header revenue (~12, checked by hand SQL), debt
   4, budget abstains 8 (SQLite functions, made-up columns). Semantic layer: private folder.
 ## Next step
-0. Data overview (ADR 0034, branch `feat/data-overview`): a profile per column built in the
-   sandbox, shown in review and "About this data" (browser check, one upload, $0.010). On `main`:
-   export (0032), edit SQL (0033). Next: metric definitions. Next eval: `verify_kinds` (0031).
+0. "How it was calculated" (ADR 0035, branch `feat/explain-answer`): the answer's SQL read with
+   sqlglot into plain facts, worded by the web; 86% of 474 agent queries fully explained, the
+   rest flagged ($0). On `main`: export (0032), edit SQL (0033), data overview (0034). Users:
+   non-technical first; UI in English, translate later. Next: metric definitions made through
+   the conversation (clarify with choices, "remember this"). Next eval: `verify_kinds` (0031).
 1. v0.1.0 released (ADR 0028); holdout ran once (+44, never rerun). Open: run 97d7bc1f guessed
    a `product_id` absent from the data. Offline audit of `final-regression` (2026-11-13, $0):
    no wrong answer had an absent filter literal; absent ones sit in exploratory queries of
@@ -36,7 +36,7 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
 ## Baselines (Groq `gpt-oss-20b`, before 559f88a): `regression` +53 (93/40/17), holdout +44.
 ## Done
 
-- ADRs 0001–0034, notes 01–14. Scorer 3000/3000; splits in `eval/splits/splits.json`.
+- ADRs 0001–0035, notes 01–15. Scorer 3000/3000; splits in `eval/splits/splits.json`.
 - Agent: `LLMClient`, SQL guard, LangGraph with checkpoints and verify, Groq `gpt-oss-20b`.
   Sandbox: all escape tests pass; ingestion and agent SQL run in it (ADRs 0009–0012).
   `datasets-dev/`: 24/24 ok, parse 99.98%+, exclusion precision and recall 100%.
