@@ -58,20 +58,43 @@ add `-v` to delete all data.
 
 ## How it works
 
-```mermaid
-flowchart LR
-    browser[Browser: React UI] -- "HTTP, SSE" --> api[API: FastAPI]
-    api -- jobs --> pg[(Postgres: jobs, checkpoints,<br/>audit, costs)]
-    worker[Worker: ingestion + LangGraph] -- claims jobs --> pg
-    worker --> llm[LLMClient] --> providers[Model providers]
-    worker -- "SQL only" --> runner[Runner]
-    runner --> sandbox[Sandbox container:<br/>no network, no secrets,<br/>one read-only dataset]
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-dark.svg" />
+  <img src="docs/images/architecture-light.svg" alt="The system drawn as one bench: a terminal cabled to an intake box, a four-drawer card cabinet, a carriage on rails cabled to a teleprinter with an antenna, and an airlock that passes one lit SQL card into a sealed glass box holding a clamped data cartridge." />
+</picture>
+
+The system as one bench. The numbers follow a question through it:
+
+1. **Browser** (the terminal): the React UI, talking to the API over HTTP and SSE (two cables).
+2. **API** (the intake box): FastAPI. It checks sign-in, scopes each request to a workspace, and
+   queues a job; it never runs generated code or calls a model.
+3. **Postgres** (the card cabinet): four drawers for jobs, checkpoints, the audit log, and costs.
+4. **Worker** (the carriage on rails): claims a job card from the open drawer and runs ingestion
+   and the LangGraph agent.
+5. **LLMClient** (the teleprinter with an antenna): the only part that reaches model providers.
+6. **Runner** (the airlock): starts sandboxes. The lit card in its slot is a SQL query, the only
+   thing that goes in.
+7. **Sandbox** (the glass box): no cables, so no network and no secrets, and one dataset clamped
+   down read-only.
+
+Results come back the same way: runner to worker, worker to Postgres, and the API streams progress
+and the answer to the browser.
 
 - **Messy files become a reviewable spec.** Code profiles each upload inside a sandbox. The model
   proposes a declarative `DatasetSpec` (types, number and date formats, rows to exclude,
   sensitive columns), code dry-runs it and reports parse rates, and the user approves it before
   anything is queried ([ADR 0006](docs/adr/0006-dataset-spec.md)).
+
+```mermaid
+flowchart LR
+    upload --> profile["profile<br/>(sandbox)"]
+    profile --> propose["model proposes<br/>DatasetSpec"]
+    propose --> dryrun["dry-run, parse rates<br/>(sandbox)"]
+    dryrun -. "parse rate under 98%,<br/>up to 3 repairs" .-> propose
+    dryrun --> approve[user approves]
+    approve --> load[load into DuckDB]
+```
+
 - **Generated SQL runs in a sandbox.** A SQL guard allows read-only queries, and each query runs in
   a container without network or secrets that sees one dataset
   ([ADR 0009](docs/adr/0009-parse-uploads-in-sandbox.md),
