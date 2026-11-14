@@ -461,27 +461,28 @@ function Composer({
             onKeyDown={onKeyDown}
             className="placeholder:text-muted-foreground block max-h-48 min-h-[52px] w-full resize-none bg-transparent px-4 pt-3.5 pb-1 text-[15px] outline-none field-sizing-content"
           />
-          <div className="flex items-center gap-2 px-2.5 pb-2.5">
-            <label className="text-muted-foreground hover:bg-accent flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs whitespace-nowrap">
-              <CalendarDays className="size-3.5" aria-hidden />
-              <span>As of</span>
-              <input
-                type="date"
-                value={asOf}
-                onChange={(event) => onAsOf(event.target.value)}
-                className="text-foreground bg-transparent font-mono text-xs outline-none dark:[color-scheme:dark]"
-              />
-            </label>
-            {details}
-            <span className="text-muted-foreground ml-auto hidden text-xs whitespace-nowrap @3xl:inline">
-              Enter to send · Shift+Enter for a new line
-            </span>
+          <div className="flex items-end gap-2 px-2.5 pb-2.5">
+            {/* Tools wrap to a second line before they push the send button out of the box. */}
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
+              <label className="text-muted-foreground hover:bg-accent flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs whitespace-nowrap">
+                <CalendarDays className="size-3.5" aria-hidden />
+                <span>As of</span>
+                <input
+                  type="date"
+                  value={asOf}
+                  onChange={(event) => onAsOf(event.target.value)}
+                  className="text-foreground bg-transparent font-mono text-xs outline-none dark:[color-scheme:dark]"
+                />
+              </label>
+              {details}
+            </div>
             <Button
               type="submit"
               size="icon"
-              className="ml-auto size-8 shrink-0 rounded-full @3xl:ml-0"
+              className="size-8 shrink-0 rounded-full"
               disabled={sending || !question.trim()}
               aria-label="Ask"
+              title="Send (Enter) · Shift+Enter for a new line"
             >
               {sending ? <Loader2 className="animate-spin" /> : <ArrowUp />}
             </Button>
