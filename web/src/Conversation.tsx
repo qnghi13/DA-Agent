@@ -5,6 +5,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -17,12 +18,7 @@ import { Button } from "./components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "./components/ui/sheet";
 import { useMediaQuery } from "./hooks/use-media-query";
 import { conversationStarts, loadConversation, saveConversation } from "./memory";
-
-const EXAMPLES = [
-  "What are the totals by month?",
-  "Which items appear most often?",
-  "What date range does the data cover?",
-];
+import { suggestQuestions } from "./suggestions";
 
 type Panel =
   | { kind: "run"; evidence: Evidence; trigger: HTMLElement | null }
@@ -199,7 +195,7 @@ export function Conversation({ api, dataset }: { api: Api; dataset: Dataset }) {
                 <div className="bg-muted h-20 w-full animate-pulse rounded-xl" />
               </div>
             ) : runs.length === 0 ? (
-              <EmptyState name={dataset.name} onExample={pickExample} />
+              <EmptyState dataset={dataset} onExample={pickExample} />
             ) : (
               <>
                 {olderBefore && (
@@ -389,18 +385,19 @@ function DesktopPanel({
   );
 }
 
-function EmptyState({ name, onExample }: { name: string; onExample: (text: string) => void }) {
+function EmptyState({ dataset, onExample }: { dataset: Dataset; onExample: (text: string) => void }) {
+  const questions = useMemo(() => suggestQuestions(dataset), [dataset]);
   return (
     <div className="flex flex-col items-center gap-6 py-16 text-center">
       <div className="flex flex-col gap-2">
-        <h2 className="text-2xl font-semibold tracking-tight">Ask {name} anything</h2>
+        <h2 className="text-2xl font-semibold tracking-tight">Ask {dataset.name} anything</h2>
         <p className="text-muted-foreground mx-auto max-w-md text-[15px] text-balance">
           Ask in your own words. Every answer comes with the queries behind it, checked against
           the data.
         </p>
       </div>
       <div className="flex flex-wrap justify-center gap-2">
-        {EXAMPLES.map((example) => (
+        {questions.map((example) => (
           <button
             key={example}
             type="button"
