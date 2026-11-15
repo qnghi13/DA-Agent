@@ -25,7 +25,7 @@ from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -34,9 +34,12 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from da_agent.agent.checkpoints import postgres_checkpointer
 from da_agent.agent.graph import run_graph
 from da_agent.agent.loop import AgentLimits, run_agent
+from da_agent.agent.loop_types import Document
+from da_agent.agent.memory import MemoryNote, memory_documents
 from da_agent.llm.client import CostLedger, LLMClient, RunBudget
 from da_agent.llm.factory import build_routes
 from da_agent.reports.html import render_report
+from da_agent.reports.metric import Definition
 from da_agent.runner.runner import Runner, RunnerConfig
 from da_agent.telemetry.tracing import configure_tracing
 from eval.datamate.adapter import (
@@ -67,6 +70,36 @@ class RunConfig:
     reports: bool = False
     # Questions that run at the same time. Above one needs prepared datasets.
     workers: int = 1
+    # Metric definitions by shop, read as approved memory (ADR 0036). Empty for the standard
+    # eval, which reads no memory; set only to measure what definitions change.
+    metrics: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+
+
+def load_metrics(entries: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Metric entries ({shop, name, aliases, source_id, definition}) grouped by shop."""
+    by_shop: dict[str, list[dict[str, Any]]] = {}
+    for entry in entries:
+        by_shop.setdefault(str(entry["shop"]), []).append(entry)
+    return by_shop
+
+
+def _metric_documents(entries: list[dict[str, Any]], question_id: str) -> list[Document]:
+    """The shop's metrics as the notes document, leaving out any saved from this very question,
+    so a question never reads a definition taken from its own answer."""
+    notes = [
+        MemoryNote(
+            "metric",
+            str(entry["name"]),
+            None,
+            "eval",
+            name=str(entry["name"]),
+            aliases=tuple(entry.get("aliases") or ()),
+            definition=Definition.from_json(entry["definition"]),
+        )
+        for entry in entries
+        if entry.get("source_id") != question_id
+    ]
+    return memory_documents(notes, [])
 
 
 def thread_id(output_dir: Path, question_id: str) -> str:
@@ -82,6 +115,7 @@ def select_questions(
     shops: list[str] | None = None,
     *,
     holdout: bool = False,
+    ids: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Return the questions in a set, optionally only for some shops. Refuses any set that
     touches a holdout shop. The holdout set itself runs once, at the end, and only when the caller
@@ -103,6 +137,8 @@ def select_questions(
     touched = sorted({row["business_id"] for row in questions} & held_out)
     if touched:
         raise ValueError(f"question set {question_set!r} touches holdout shops: {touched}")
+    if ids is not None:
+        questions = [row for row in questions if row["id"] in set(ids)]
     return _filter(questions, limit, shops)
 
 
@@ -286,13 +322,19 @@ class _Run:
 
     def _run_one(self, question: dict[str, Any], shop: ShopContext) -> None:
         id_, config = question["id"], self.config
+        documents = shop.documents
+        if config.metrics.get(question["business_id"]):
+            documents = [
+                *documents,
+                *_metric_documents(config.metrics[question["business_id"]], id_),
+            ]
         started = time.monotonic()
         if config.agent == "graph":
             result = run_graph(
                 question["question"],
                 as_of=question["as_of_date"],
                 dataset=shop.dataset,
-                documents=shop.documents,
+                documents=documents,
                 llm=self.llm,
                 run_id=id_,
                 limits=self.limits,
@@ -305,7 +347,7 @@ class _Run:
                 question["question"],
                 as_of=question["as_of_date"],
                 dataset=shop.dataset,
-                documents=shop.documents,
+                documents=documents,
                 llm=self.llm,
                 run_id=id_,
                 limits=self.limits,
@@ -415,6 +457,12 @@ def main() -> int:
     parser.add_argument("--splits", type=Path, default=DEFAULT_SPLITS)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--shops", nargs="*", help="only questions about these shops")
+    parser.add_argument("--ids", nargs="*", help="only these question ids of the set")
+    parser.add_argument(
+        "--metrics-file",
+        type=Path,
+        help="JSON list of metric definitions by shop, read as memory; not a standard eval",
+    )
     parser.add_argument(
         "--holdout", action="store_true", help="allow --set holdout: the one run at the end"
     )
@@ -458,7 +506,7 @@ def main() -> int:
         else:
             questions = select_questions(
                 args.data_dir, args.splits, args.question_set, args.limit, args.shops,
-                holdout=args.holdout,
+                holdout=args.holdout, ids=args.ids,
             )  # fmt: skip
         config = RunConfig(
             output_dir=args.output_dir,
@@ -469,6 +517,11 @@ def main() -> int:
             agent=args.agent,
             reports=args.report,
             workers=args.workers,
+            metrics=(
+                load_metrics(json.loads(args.metrics_file.read_text(encoding="utf-8")))
+                if args.metrics_file
+                else {}
+            ),
         )
         opener = None
         if args.datasets_dir:

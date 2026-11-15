@@ -17,7 +17,13 @@ from eval.datamate.adapter import (
     rulebook_documents,
     to_submission,
 )
-from eval.datamate.run import RunConfig, run_questions, score_run, select_questions
+from eval.datamate.run import (
+    RunConfig,
+    load_metrics,
+    run_questions,
+    score_run,
+    select_questions,
+)
 
 CANARY = "ANSWER-CANARY-7731"
 
@@ -814,3 +820,49 @@ def test_results_and_metrics_count_guard_signals_by_kind(data_dir: Path, tmp_pat
     assert metrics["tool_error_kinds"] == {"rejected": 1}
     assert metrics["verify_kinds"] == {"tracing": 1}
     assert (metrics["runs_repaired"], metrics["runs_saved_by_repair"]) == (1, 1)
+
+
+# -- metric definitions in eval runs (docs/design/2026-11-15-metric-definitions.md) -------------
+
+REVENUE = {
+    "shop": "biz_1",
+    "name": "Doanh thu",
+    "aliases": ["dthu"],
+    "source_id": "q2",
+    "definition": {"table": "orders", "measure": 'SUM("total")', "filters": [], "facts": {}},
+}
+
+
+def test_metrics_reach_the_model_for_their_shop_only(data_dir: Path, tmp_path: Path) -> None:
+    llm, ledger, adapter = make_llm([answer(1)])
+    questions = [q for q in read_jsonl(data_dir / "questions.jsonl") if q["id"] == "q1"]
+    other = REVENUE | {"shop": "biz_2", "name": "Order count", "aliases": []}
+    config = RunConfig(tmp_path / "out", metrics=load_metrics([REVENUE, other]))
+
+    run_questions(questions, data_dir, llm, ledger, config)
+
+    sent = adapter.requests[0].model_dump_json()
+    assert "Metric 1: Doanh thu (also: dthu)" in sent
+    assert "Order count" not in sent
+
+
+def test_a_metric_is_not_shown_to_the_question_it_was_saved_from(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    llm, ledger, adapter = make_llm([answer(2)])
+    questions = [q for q in read_jsonl(data_dir / "questions.jsonl") if q["id"] == "q2"]
+
+    run_questions(
+        questions,
+        data_dir,
+        llm,
+        ledger,
+        RunConfig(tmp_path / "out", metrics=load_metrics([REVENUE])),
+    )
+
+    assert "Doanh thu" not in adapter.requests[0].model_dump_json()
+
+
+def test_select_questions_keeps_only_the_given_ids(data_dir: Path, splits: Path) -> None:
+    rows = select_questions(data_dir, splits, "good", ids=["q2", "q7"])
+    assert [row["id"] for row in rows] == ["q2"]

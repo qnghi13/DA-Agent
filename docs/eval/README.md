@@ -63,6 +63,27 @@ code can prove took B from −11 to +13. The graph matched the simpler loop's to
 sets (+31 each) for about 13% more tokens. It is kept for checkpoints, resumption, and
 verification routing, not for score.
 
+## Metric definitions (2026-11-15)
+
+What saved definitions ([ADR 0036](../adr/0036-metric-definitions.md)) change, on 20 `regression`
+questions in 8 dev shops: 13 that `final-regression` got wrong and that ask for a metric a
+definition covers (revenue, order count, cancelled orders), and 7 it got right, to catch harm.
+Twelve definitions were read from correct `final-regression` answers to generic questions
+("revenue in July?"), named as a shop owner would, and never from answers or holdout shops. A
+question never reads a definition saved from its own answer. Both runs: graph agent, Groq
+`gpt-oss-20b`, `datasets-dev`, `--metrics-file` only in the second.
+
+| Run | Correct | Wrong | Abstain | Score | Cost |
+|---|---:|---:|---:|---:|---:|
+| Without definitions | 9 | 8 | 3 | +1 | $0.048 |
+| With definitions | 12 | 5 | 3 | +7 | $0.047 |
+
+Six questions improved and two got worse. Neither regression read a definition: one hit Groq's
+`functions.submit_answer` tool-name error, the other used none. In 11 of 20 answers, code found a
+saved definition in the SQL. Three still-wrong answers used one and failed elsewhere (a grouping
+column that does not exist, which customer to rank). One run each, so +6 is a direction, not a
+measurement; the standard eval reads no memory and is unchanged.
+
 ## Caveats
 
 - One model, one run per set. Run-to-run variance of `gpt-oss-20b` is several points on 30
@@ -76,4 +97,5 @@ verification routing, not for score.
 
 ## Spend
 
-The whole project, from the first baseline to the final runs, cost about $2.59 in model calls.
+The whole project, from the first baseline to the final runs, cost about $2.59 in model calls,
+plus $0.095 for the metric definitions check.

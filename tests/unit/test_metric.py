@@ -3,14 +3,14 @@
 claims a filter its query did not apply."""
 
 import pytest
+
+from da_agent.reports.explain import Labels
 from da_agent.reports.metric import (
     Definition,
     definition_columns,
     metric_candidates,
     uses_metric,
 )
-
-from da_agent.reports.explain import Labels
 
 LABELS = Labels(
     tables={"orders": "Đơn hàng"},

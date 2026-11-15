@@ -25,8 +25,8 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
 0. Metric definitions phase 1 (branch `feat/metric-definitions`, ADR 0036, note 16): save a
    measure and its row filters from an answer's SQL, read first among notes, stale ones skipped,
    "Used your definition" marked by code. Browser-checked ($0.0005). Users: non-technical
-   first; UI in English. Next: effect eval (~20 dev business-rule questions with and without
-   definitions, ask first); phase 2: the agent asks when a word has no definition.
+   first; UI in English. Effect eval (20 dev questions, docs/eval): +1 -> +7, $0.095, one run
+   each. Next: phase 2: the agent asks when a word has no definition.
 1. v0.1.0 released (ADR 0028); holdout ran once (+44, never rerun). Open: run 97d7bc1f guessed
    a `product_id` absent from the data. Offline audit of `final-regression` (2026-11-13, $0):
    no wrong answer had an absent filter literal; absent ones sit in exploratory queries of
@@ -50,7 +50,7 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
 - No rows, questions, rulebook, or answers in any commit or image (organiser rules). When the
   challenge ends: delete `train/`, `eval/reports/`, and Docker volumes with eval data.
 
-## Spend so far: about $2.74 (agent runs $2.15, spec proposals $0.57, demos $0.004).
+## Spend so far: about $2.84 (agent runs $2.25, spec proposals $0.57, demos $0.004).
 
 ## Watch out
 
