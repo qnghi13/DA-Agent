@@ -15,11 +15,15 @@ from uuid import UUID
 
 import psycopg
 from psycopg.rows import class_row
+from psycopg.types.json import Jsonb
 
+from da_agent.agent.rules import normalize
 from da_agent.storage.db import returned_id
 
-MemoryKind = Literal["correction", "alias", "example"]
+MemoryKind = Literal["correction", "alias", "example", "metric"]
 KINDS = frozenset(get_args(MemoryKind))
+# Notes people write as text; a metric is saved from an answer with save_metric.
+NOTE_KINDS = KINDS - {"metric"}
 MAX_TEXT = 2000
 MAX_SQL = 10000
 # Bounds each field of a conversation turn, because turns go into every later prompt.
@@ -27,6 +31,8 @@ MAX_TURN_TEXT = 500
 MAX_TURN_SQL = 1000
 DEFAULT_TURNS = 3
 MAX_APPROVED = 200
+MAX_NAME = 80
+MAX_ALIASES = 10
 
 
 class MemoryStateError(Exception):
@@ -49,6 +55,33 @@ class MemoryEntry:
     author: str
     source_run_id: UUID | None
     superseded_by: UUID | None
+    # Set for metrics only.
+    name: str | None = None
+    aliases: list[str] | None = None
+    definition: dict[str, Any] | None = None
+
+
+_SELECT = (
+    "SELECT id, dataset_id, kind, text, sql, status, author, source_run_id, superseded_by, name, "
+    "aliases, definition FROM dataset_memories "
+)
+
+
+def metric_key(name: str) -> str:
+    """How metric names compare: without accents or case, spaces collapsed."""
+    return " ".join(normalize(name).split())
+
+
+def _metric_names(name: str, aliases: list[str]) -> tuple[str, list[str]]:
+    name = " ".join(name.split())
+    cleaned = [" ".join(alias.split()) for alias in aliases]
+    if not 1 <= len(name) <= MAX_NAME:
+        raise MemoryStateError(f"a name must have 1 to {MAX_NAME} characters")
+    if len(cleaned) > MAX_ALIASES:
+        raise MemoryStateError(f"a metric has at most {MAX_ALIASES} other names")
+    if any(not 1 <= len(alias) <= MAX_NAME for alias in cleaned):
+        raise MemoryStateError(f"other names must have 1 to {MAX_NAME} characters")
+    return name, list(dict.fromkeys(cleaned))
 
 
 @dataclass(frozen=True)
@@ -90,8 +123,8 @@ class MemoryStore:
     ) -> UUID:
         text = text.strip()
         sql = sql.strip() if sql and sql.strip() else None
-        if kind not in KINDS:
-            raise MemoryStateError(f"kind must be one of {', '.join(sorted(KINDS))}")
+        if kind not in NOTE_KINDS:
+            raise MemoryStateError(f"kind must be one of {', '.join(sorted(NOTE_KINDS))}")
         if not text or len(text) > MAX_TEXT:
             raise MemoryStateError(f"text must have 1 to {MAX_TEXT} characters")
         if sql is not None and len(sql) > MAX_SQL:
@@ -141,13 +174,101 @@ class MemoryStore:
             source_run_id=source_run_id,
         )  # fmt: skip
 
+    def _insert_metric(
+        self,
+        workspace_id: UUID,
+        dataset_id: UUID,
+        *,
+        name: str,
+        aliases: list[str],
+        definition: dict[str, Any],
+        text: str,
+        author: str,
+        source_run_id: UUID | None,
+    ) -> UUID:
+        """Insert an approved metric and supersede every live metric of the dataset that shares a
+        name or other name with it, so one name has one definition. Runs inside a transaction."""
+        name, aliases = _metric_names(name, aliases)
+        text = text.strip()
+        if not text or len(text) > MAX_TEXT:
+            raise MemoryStateError(f"text must have 1 to {MAX_TEXT} characters")
+        self._require_dataset(workspace_id, dataset_id)
+        # One writer per dataset at a time, so two saves of one name cannot both stay live.
+        self._conn.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (f"metric:{dataset_id}",)
+        )
+        new = returned_id(
+            self._conn.execute(
+                "INSERT INTO dataset_memories (workspace_id, dataset_id, kind, text, status, "
+                "author, source_run_id, name, aliases, definition) "
+                "VALUES (%s, %s, 'metric', %s, 'approved', %s, %s, %s, %s, %s) RETURNING id",
+                (workspace_id, dataset_id, text, author, source_run_id, name, aliases,
+                 Jsonb(definition)),
+            )
+        )  # fmt: skip
+        keys = {metric_key(n) for n in [name, *aliases]}
+        rows = self._conn.execute(
+            "SELECT id, name, aliases FROM dataset_memories WHERE dataset_id = %s "
+            "AND workspace_id = %s AND kind = 'metric' AND status = 'approved' "
+            "AND superseded_by IS NULL AND id <> %s",
+            (dataset_id, workspace_id, new),
+        ).fetchall()
+        clashes = [
+            row[0] for row in rows if keys & {metric_key(n) for n in [row[1], *(row[2] or [])]}
+        ]
+        if clashes:
+            self._conn.execute(
+                "UPDATE dataset_memories SET superseded_by = %s, updated_at = now() "
+                "WHERE id = ANY(%s)",
+                (new, clashes),
+            )
+        return new
+
+    def save_metric(
+        self,
+        workspace_id: UUID,
+        dataset_id: UUID,
+        *,
+        name: str,
+        aliases: list[str],
+        definition: dict[str, Any],
+        text: str,
+        author: str,
+        source_run_id: UUID | None,
+    ) -> UUID:
+        """A metric a person saves from an answer: approved at once. It replaces any live metric
+        of the dataset with the same name or other name, compared without accents or case."""
+        with self._conn.transaction():
+            return self._insert_metric(
+                workspace_id, dataset_id, name=name, aliases=aliases, definition=definition,
+                text=text, author=author, source_run_id=source_run_id,
+            )  # fmt: skip
+
+    def rename_metric(
+        self, workspace_id: UUID, entry_id: UUID, *, name: str, aliases: list[str], author: str
+    ) -> UUID:
+        """Replace a metric with one under a new name and other names; the definition stays."""
+        with self._conn.transaction():
+            old = self._get(workspace_id, entry_id, lock=True)
+            if old.kind != "metric" or old.definition is None:
+                raise MemoryStateError("only a metric can be renamed")
+            if old.superseded_by is not None:
+                raise MemoryStateError("only a current metric can be renamed")
+            new = self._insert_metric(
+                workspace_id, old.dataset_id, name=name, aliases=aliases,
+                definition=old.definition, text=old.text, author=author,
+                source_run_id=old.source_run_id,
+            )  # fmt: skip
+            self._conn.execute(
+                "UPDATE dataset_memories SET superseded_by = %s, updated_at = now() WHERE id = %s",
+                (new, entry_id),
+            )
+            return new
+
     def _get(self, workspace_id: UUID, entry_id: UUID, *, lock: bool = False) -> MemoryEntry:
         with self._conn.cursor(row_factory=class_row(MemoryEntry)) as cursor:
             entry = cursor.execute(
-                "SELECT id, dataset_id, kind, text, sql, status, author, source_run_id, "
-                "superseded_by "
-                "FROM dataset_memories WHERE id = %s AND workspace_id = %s"
-                + (" FOR UPDATE" if lock else ""),
+                _SELECT + "WHERE id = %s AND workspace_id = %s" + (" FOR UPDATE" if lock else ""),
                 (entry_id, workspace_id),
             ).fetchone()
         if entry is None:
@@ -181,6 +302,8 @@ class MemoryStore:
             old = self._get(workspace_id, entry_id, lock=True)
             if old.superseded_by is not None or old.status == "rejected":
                 raise MemoryStateError("only a current, not rejected entry can be edited")
+            if old.kind == "metric":
+                raise MemoryStateError("a metric is renamed, or saved again from an answer")
             new = self._insert(
                 workspace_id, old.dataset_id, old.kind, text,
                 sql=sql if sql is not None else old.sql, author=author, status="approved",
@@ -204,10 +327,7 @@ class MemoryStore:
         """Every entry of the dataset, oldest first, for review."""
         with self._conn.cursor(row_factory=class_row(MemoryEntry)) as cursor:
             return cursor.execute(
-                "SELECT id, dataset_id, kind, text, sql, status, author, source_run_id, "
-                "superseded_by "
-                "FROM dataset_memories "
-                "WHERE dataset_id = %s AND workspace_id = %s ORDER BY created_at, id",
+                _SELECT + "WHERE dataset_id = %s AND workspace_id = %s ORDER BY created_at, id",
                 (dataset_id, workspace_id),
             ).fetchall()
 
@@ -215,10 +335,7 @@ class MemoryStore:
         """The entries a run reads: approved and not replaced, oldest first."""
         with self._conn.cursor(row_factory=class_row(MemoryEntry)) as cursor:
             return cursor.execute(
-                "SELECT id, dataset_id, kind, text, sql, status, author, source_run_id, "
-                "superseded_by "
-                "FROM dataset_memories "
-                "WHERE dataset_id = %s AND workspace_id = %s AND status = 'approved' "
+                _SELECT + "WHERE dataset_id = %s AND workspace_id = %s AND status = 'approved' "
                 "AND superseded_by IS NULL ORDER BY created_at, id LIMIT %s",
                 (dataset_id, workspace_id, MAX_APPROVED),
             ).fetchall()
@@ -229,10 +346,7 @@ class MemoryStore:
             return []
         with self._conn.cursor(row_factory=class_row(MemoryEntry)) as cursor:
             return cursor.execute(
-                "SELECT id, dataset_id, kind, text, sql, status, author, source_run_id, "
-                "superseded_by "
-                "FROM dataset_memories "
-                "WHERE id = ANY(%s) AND dataset_id = %s AND workspace_id = %s "
+                _SELECT + "WHERE id = ANY(%s) AND dataset_id = %s AND workspace_id = %s "
                 "ORDER BY created_at, id",
                 (list(ids), dataset_id, workspace_id),
             ).fetchall()

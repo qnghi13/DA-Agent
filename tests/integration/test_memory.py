@@ -276,3 +276,146 @@ def test_a_run_without_memory_or_conversation_gets_no_documents(
     job_id = JobQueue(conn).enqueue(workspace, "run", payload)
     assert POSTGRES_URL is not None
     assert MemoryLoader(url=POSTGRES_URL, schema=schema)(_job(conn, workspace, job_id)) == []
+
+
+# -- metric definitions (design 2026-11-15-metric-definitions) ---------------------------------
+
+DEFINITION = {
+    "table": "orders",
+    "measure": 'SUM("thanh_tien")',
+    "filters": ["\"trang_thai\" <> 'Hủy'"],
+    "facts": {"measure": {"kind": "aggregate", "func": "sum"}, "filters": []},
+}
+
+
+def save(store: MemoryStore, workspace: UUID, dataset: UUID, name: str, aliases=()) -> UUID:
+    return store.save_metric(
+        workspace, dataset, name=name, aliases=list(aliases), definition=DEFINITION,
+        text="Sum of Thành tiền", author="key:a", source_run_id=None,
+    )  # fmt: skip
+
+
+def live_metrics(store: MemoryStore, workspace: UUID, dataset: UUID) -> list:
+    return [e for e in store.approved(workspace, dataset) if e.kind == "metric"]
+
+
+def test_save_metric_is_approved_and_listed(
+    conn: psycopg.Connection, workspace: UUID, dataset: UUID
+) -> None:
+    store = MemoryStore(conn)
+    entry_id = save(store, workspace, dataset, " Doanh thu ", ["doanh số", "DT"])
+    [entry] = live_metrics(store, workspace, dataset)
+    assert entry.id == entry_id
+    assert entry.status == "approved"
+    assert entry.name == "Doanh thu"
+    assert entry.aliases == ["doanh số", "DT"]
+    assert entry.definition == DEFINITION
+    assert entry.text == "Sum of Thành tiền"
+
+
+def test_same_name_without_accents_supersedes(
+    conn: psycopg.Connection, workspace: UUID, dataset: UUID
+) -> None:
+    store = MemoryStore(conn)
+    old = save(store, workspace, dataset, "doanh thu")
+    new = save(store, workspace, dataset, "Doanh Thu")
+    [entry] = live_metrics(store, workspace, dataset)
+    assert entry.id == new
+    [replaced] = [e for e in store.entries(workspace, dataset) if e.id == old]
+    assert replaced.superseded_by == new
+
+
+def test_name_matching_an_alias_supersedes(
+    conn: psycopg.Connection, workspace: UUID, dataset: UUID
+) -> None:
+    store = MemoryStore(conn)
+    save(store, workspace, dataset, "Doanh thu", ["DT"])
+    new = save(store, workspace, dataset, "dt")
+    assert [e.id for e in live_metrics(store, workspace, dataset)] == [new]
+
+
+def test_other_names_do_not_supersede(
+    conn: psycopg.Connection, workspace: UUID, dataset: UUID
+) -> None:
+    store = MemoryStore(conn)
+    save(store, workspace, dataset, "Doanh thu")
+    save(store, workspace, dataset, "Số đơn")
+    assert len(live_metrics(store, workspace, dataset)) == 2
+
+
+def test_rename_keeps_definition_and_supersedes(
+    conn: psycopg.Connection, workspace: UUID, dataset: UUID
+) -> None:
+    store = MemoryStore(conn)
+    old = save(store, workspace, dataset, "Doanh thu")
+    new = store.rename_metric(workspace, old, name="Revenue", aliases=["DT"], author="key:b")
+    [entry] = live_metrics(store, workspace, dataset)
+    assert (entry.id, entry.name, entry.aliases, entry.author) == (new, "Revenue", ["DT"], "key:b")
+    assert entry.definition == DEFINITION
+
+
+def test_rename_supersedes_another_metric_with_that_name(
+    conn: psycopg.Connection, workspace: UUID, dataset: UUID
+) -> None:
+    store = MemoryStore(conn)
+    save(store, workspace, dataset, "Revenue")
+    other = save(store, workspace, dataset, "Doanh thu")
+    new = store.rename_metric(workspace, other, name="revenue", aliases=[], author="key:a")
+    assert [e.id for e in live_metrics(store, workspace, dataset)] == [new]
+
+
+@pytest.mark.parametrize(
+    ("name", "aliases"),
+    [("", []), ("x" * 81, []), ("Doanh thu", ["a"] * 11), ("Doanh thu", [" "]),
+     ("Doanh thu", ["y" * 81])],
+)  # fmt: skip
+def test_metric_names_are_bounded(
+    conn: psycopg.Connection, workspace: UUID, dataset: UUID, name: str, aliases: list[str]
+) -> None:
+    with pytest.raises(MemoryStateError):
+        save(MemoryStore(conn), workspace, dataset, name, aliases)
+
+
+def test_metric_requires_name_and_definition_in_the_database(
+    conn: psycopg.Connection, workspace: UUID, dataset: UUID
+) -> None:
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(
+            "INSERT INTO dataset_memories (workspace_id, dataset_id, kind, text, status, author) "
+            "VALUES (%s, %s, 'metric', 'x', 'approved', 'key:a')",
+            (workspace, dataset),
+        )
+
+
+def test_metric_kind_is_not_written_as_a_plain_note(
+    conn: psycopg.Connection, workspace: UUID, dataset: UUID
+) -> None:
+    with pytest.raises(MemoryStateError):
+        MemoryStore(conn).write(workspace, dataset, "metric", "Doanh thu", author="key:a")
+
+
+def test_rename_rejects_a_non_metric_and_edit_rejects_a_metric(
+    conn: psycopg.Connection, workspace: UUID, dataset: UUID
+) -> None:
+    store = MemoryStore(conn)
+    note = store.write(workspace, dataset, "correction", "Rule.", author="key:a")
+    with pytest.raises(MemoryStateError):
+        store.rename_metric(workspace, note, name="X", aliases=[], author="key:a")
+    metric = save(store, workspace, dataset, "Doanh thu")
+    with pytest.raises(MemoryStateError):
+        store.edit(workspace, metric, "new text", author="key:a")
+
+
+def test_other_workspace_cannot_see_or_rename_a_metric(
+    conn: psycopg.Connection, workspace: UUID, dataset: UUID
+) -> None:
+    store = MemoryStore(conn)
+    metric = save(store, workspace, dataset, "Doanh thu")
+    other = create_workspace(conn, "other")
+    with pytest.raises(MemoryNotFoundError):
+        store.rename_metric(other, metric, name="X", aliases=[], author="key:z")
+    with pytest.raises(MemoryNotFoundError):
+        store.save_metric(
+            other, dataset, name="X", aliases=[], definition=DEFINITION, text="t",
+            author="key:z", source_run_id=None,
+        )  # fmt: skip
