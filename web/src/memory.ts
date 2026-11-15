@@ -1,8 +1,10 @@
 // Dataset memory and conversations in the UI (docs/adr/0030-conversation-and-dataset-memory.md).
 
-import type { MemoryEntry } from "./api";
+import type { MemoryEntry, NewMemory } from "./api";
 
 export interface MemoryGroups {
+  /** Metric definitions in use, each the one reading of its name. */
+  definitions: MemoryEntry[];
   /** Suggested notes that no run reads until someone approves them. */
   review: MemoryEntry[];
   /** Approved notes that later runs read. */
@@ -12,10 +14,11 @@ export interface MemoryGroups {
 }
 
 export function groupMemory(entries: MemoryEntry[]): MemoryGroups {
-  const groups: MemoryGroups = { review: [], active: [], history: [] };
+  const groups: MemoryGroups = { definitions: [], review: [], active: [], history: [] };
   for (const entry of entries) {
     if (entry.superseded_by !== null || entry.status === "rejected") groups.history.push(entry);
     else if (entry.status === "proposed") groups.review.push(entry);
+    else if (entry.kind === "metric") groups.definitions.push(entry);
     else groups.active.push(entry);
   }
   return groups;
@@ -72,7 +75,7 @@ export function saveConversation(
   }
 }
 
-export const MEMORY_KINDS: { value: MemoryEntry["kind"]; label: string; hint: string }[] = [
+export const MEMORY_KINDS: { value: NewMemory["kind"]; label: string; hint: string }[] = [
   {
     value: "correction",
     label: "Correction",

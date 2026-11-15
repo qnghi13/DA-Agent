@@ -222,6 +222,7 @@ export function Conversation({ api, dataset }: { api: Api; dataset: Dataset }) {
                           ? closePanel()
                           : setPanel({ kind: "run", evidence, trigger })
                       }
+                      onOpenMemory={(trigger) => setPanel({ kind: "memory", trigger })}
                       onCorrect={(run, trigger) =>
                         setPanel({
                           kind: "memory",

@@ -1,11 +1,13 @@
-import { Check, ChevronRight, Loader2, Pencil, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronRight, Loader2, Pencil, Trash2, X } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
 import { type Api, type MemoryEntry, type NewMemory, errorMessage } from "@/api";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { MEMORY_KINDS, groupMemory } from "@/memory";
+import { MAX_NAME, metricSentence, readMetricName } from "@/metrics";
 
 /** What a "Correct" button on an answer fills in. */
 export type MemoryDraft = Partial<NewMemory>;
@@ -69,6 +71,24 @@ export function MemoryPanel({
         <div className="bg-muted h-24 animate-pulse rounded-lg" aria-label="Loading notes" />
       ) : (
         <>
+          <Group title={`Definitions (${groups.definitions.length})`}>
+            {groups.definitions.length === 0 ? (
+              <p className="text-muted-foreground text-sm">
+                No definitions yet. Under an answer you trust, open How it was calculated and
+                choose Save as a definition. New questions that use its name are calculated the
+                same way.
+              </p>
+            ) : (
+              groups.definitions.map((entry) => (
+                <DefinitionCard
+                  key={entry.id}
+                  entry={entry}
+                  onRename={(name, aliases) => change(() => api.renameMetric(entry.id, name, aliases))}
+                  onDelete={() => change(() => api.deleteMemory(entry.id))}
+                />
+              ))
+            )}
+          </Group>
           {groups.review.length > 0 && (
             <Group title={`Waiting for review (${groups.review.length})`}>
               {groups.review.map((entry) => (
@@ -295,7 +315,83 @@ function ActiveNote({
   );
 }
 
-const KIND_LABEL = Object.fromEntries(MEMORY_KINDS.map((item) => [item.value, item.label]));
+function DefinitionCard({
+  entry,
+  onRename,
+  onDelete,
+}: {
+  entry: MemoryEntry;
+  onRename: (name: string, aliases: string[]) => Promise<boolean>;
+  onDelete: () => Promise<boolean>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [name, setName] = useState(entry.name ?? "");
+  const [aliases, setAliases] = useState((entry.aliases ?? []).join(", "));
+  const [error, setError] = useState<string | null>(null);
+
+  async function save() {
+    const read = readMetricName(name, aliases);
+    if ("error" in read) {
+      setError(read.error);
+      return;
+    }
+    setError(null);
+    if (await onRename(read.name, read.aliases)) setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <div className="flex flex-col gap-2 rounded-lg border p-3">
+        <Input aria-label="Name" maxLength={MAX_NAME} value={name} onChange={(event) => setName(event.target.value)} />
+        <Input
+          aria-label="Other names (comma-separated)"
+          placeholder="Other names, comma-separated"
+          value={aliases}
+          onChange={(event) => setAliases(event.target.value)}
+        />
+        {error && (
+          <p role="alert" className="text-danger text-xs">
+            {error}
+          </p>
+        )}
+        <div className="flex justify-end gap-2">
+          <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
+            Cancel
+          </Button>
+          <Button size="sm" onClick={() => void save()}>
+            Save
+          </Button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <NoteCard entry={entry}>
+      <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
+        <Pencil />
+        Rename
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        className="text-muted-foreground"
+        onClick={() => {
+          if (window.confirm("Delete this definition? New questions will no longer use it.")) {
+            void onDelete();
+          }
+        }}
+      >
+        <Trash2 />
+        Delete
+      </Button>
+    </NoteCard>
+  );
+}
+
+const KIND_LABEL: Record<string, string> = {
+  ...Object.fromEntries(MEMORY_KINDS.map((item) => [item.value, item.label])),
+  metric: "Definition",
+};
 
 function NoteCard({
   entry,
@@ -309,7 +405,7 @@ function NoteCard({
   return (
     <div className={cn("flex flex-col gap-2 rounded-lg border px-3 py-2.5", muted && "opacity-70")}>
       <div className="flex items-center gap-2">
-        <StatusBadge tone={entry.kind === "correction" ? "warning" : "info"}>
+        <StatusBadge tone={entry.kind === "correction" ? "warning" : entry.kind === "metric" ? "success" : "info"}>
           {KIND_LABEL[entry.kind]}
         </StatusBadge>
         {muted && (
@@ -321,13 +417,38 @@ function NoteCard({
           {entry.author}
         </span>
       </div>
-      <p className="text-sm leading-relaxed whitespace-pre-wrap">{entry.text}</p>
+      {entry.kind === "metric" ? (
+        <MetricBody entry={entry} />
+      ) : (
+        <p className="text-sm leading-relaxed whitespace-pre-wrap">{entry.text}</p>
+      )}
       {entry.sql && (
         <pre className="bg-muted overflow-x-auto rounded-md p-2 font-mono text-xs leading-relaxed">
           {entry.sql}
         </pre>
       )}
       {children && <div className="flex flex-wrap justify-end gap-1">{children}</div>}
+    </div>
+  );
+}
+
+function MetricBody({ entry }: { entry: MemoryEntry }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <p className="text-sm font-medium">
+        {entry.name}
+        {entry.aliases && entry.aliases.length > 0 && (
+          <span className="text-muted-foreground font-normal"> · also {entry.aliases.join(", ")}</span>
+        )}
+      </p>
+      <p className="text-sm leading-relaxed">{entry.facts ? metricSentence(entry.facts) : entry.text}</p>
+      {entry.stale && entry.superseded_by === null && (
+        <p className="text-warning flex items-start gap-1.5 text-xs">
+          <AlertTriangle className="mt-px size-3.5 shrink-0" aria-hidden />
+          The data changed and this definition no longer fits it, so new questions skip it. Save it
+          again from a new answer.
+        </p>
+      )}
     </div>
   );
 }

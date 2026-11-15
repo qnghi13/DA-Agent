@@ -33,6 +33,20 @@ describe("groupMemory", () => {
   });
 });
 
+describe("groupMemory with definitions", () => {
+  it("lists live definitions apart from notes, and replaced ones in history", () => {
+    const metric = (id: string, superseded_by: string | null = null): MemoryEntry => ({
+      ...entry(id, "approved", superseded_by),
+      kind: "metric",
+      name: `m${id}`,
+    });
+    const groups = groupMemory([entry("a", "approved"), metric("m"), metric("old", "m")]);
+    expect(groups.definitions.map((e) => e.id)).toEqual(["m"]);
+    expect(groups.active.map((e) => e.id)).toEqual(["a"]);
+    expect(groups.history.map((e) => e.id)).toEqual(["old"]);
+  });
+});
+
 describe("conversationStarts", () => {
   it("marks each run that starts a different conversation from the one before it", () => {
     const starts = conversationStarts([

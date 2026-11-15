@@ -1,9 +1,21 @@
-import { AlertCircle, BookMarked, Check, CircleHelp, Copy, Loader2, PanelRight, Sigma, X } from "lucide-react";
+import {
+  AlertCircle,
+  BookMarked,
+  BookmarkPlus,
+  Check,
+  CircleHelp,
+  Copy,
+  Loader2,
+  PanelRight,
+  Sigma,
+  X,
+} from "lucide-react";
 import { lazy, Suspense, useEffect, useReducer, useRef, useState } from "react";
 import { type Api, type Explanation, type Run, errorMessage } from "@/api";
+import { type MetricChoice, SaveMetricDialog } from "@/components/chat/save-metric-dialog";
 import { DataTable } from "@/components/data-table";
 import { StatusBadge } from "@/components/status-badge";
-import { explanationLines } from "@/explain";
+import { describeExpr, explanationLines } from "@/explain";
 import { Button } from "@/components/ui/button";
 import {
   type Trail,
@@ -33,6 +45,7 @@ export function RunMessage({
   active,
   onShowWork,
   onCorrect,
+  onOpenMemory,
 }: {
   api: Api;
   runId: string;
@@ -40,6 +53,8 @@ export function RunMessage({
   onShowWork: (evidence: Evidence, trigger: HTMLElement) => void;
   /** Opens memory to write a correction linked to this run. */
   onCorrect?: (run: Run, trigger: HTMLElement) => void;
+  /** Opens memory, where saved definitions are listed. */
+  onOpenMemory?: (trigger: HTMLElement) => void;
 }) {
   const [run, setRun] = useState<Run | null>(null);
   const [trail, dispatch] = useReducer(
@@ -86,6 +101,8 @@ export function RunMessage({
       </div>
       {finished ? (
         <Answer
+          api={api}
+          onOpenMemory={onOpenMemory}
           run={run}
           trail={trail}
           active={active}
@@ -206,12 +223,16 @@ function answerText(run: Run): string | null {
 }
 
 function Answer({
+  api,
+  onOpenMemory,
   run,
   trail,
   active,
   onShowWork,
   onCorrect,
 }: {
+  api: Api;
+  onOpenMemory?: (trigger: HTMLElement) => void;
   run: Run;
   trail: Trail;
   active: boolean;
@@ -261,7 +282,7 @@ function Answer({
         <>
           <AnswerValue run={run} />
           {result.answer.kind !== "unanswerable" && (
-            <HowCalculated explanations={run.explanations ?? []} />
+            <HowCalculated api={api} run={run} onOpenMemory={onOpenMemory} />
           )}
         </>
       ) : (
@@ -350,10 +371,22 @@ function AnswerValue({ run }: { run: Run }) {
   );
 }
 
-/** The answer's queries in plain words, read from the SQL (ADR 0035). */
-function HowCalculated({ explanations }: { explanations: Explanation[] }) {
+/** The answer's queries in plain words, read from the SQL (ADR 0035), with the definitions they
+ * used and the measures that can be saved as one (docs/design/2026-11-15-metric-definitions.md). */
+function HowCalculated({
+  api,
+  run,
+  onOpenMemory,
+}: {
+  api: Api;
+  run: Run;
+  onOpenMemory?: (trigger: HTMLElement) => void;
+}) {
+  const [choice, setChoice] = useState<MetricChoice | null>(null);
+  const explanations = run.explanations ?? [];
   if (explanations.length === 0) return null;
   const partial = explanations.some((explanation) => !explanation.complete);
+  const used = uniqueById(explanations.flatMap((explanation) => explanation.metrics_used ?? []));
   return (
     <details open className="group rounded-xl border px-4 py-3 text-sm">
       <summary className="text-muted-foreground flex cursor-pointer list-none items-center gap-2 font-medium select-none">
@@ -361,6 +394,23 @@ function HowCalculated({ explanations }: { explanations: Explanation[] }) {
         How it was calculated
       </summary>
       <div className="mt-3 flex flex-col gap-4">
+        {used.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {used.map((metric) => (
+              <Button
+                key={metric.id}
+                variant="outline"
+                size="sm"
+                className="h-7 rounded-full text-xs"
+                title="Open memory to see this definition"
+                onClick={(event) => onOpenMemory?.(event.currentTarget)}
+              >
+                <BookMarked className="text-info" />
+                Used your definition of {metric.name}
+              </Button>
+            ))}
+          </div>
+        )}
         {explanations.map((explanation, index) => (
           <div key={explanation.query_index} className="flex flex-col gap-1.5">
             {explanations.length > 1 && (
@@ -376,6 +426,18 @@ function HowCalculated({ explanations }: { explanations: Explanation[] }) {
                 </div>
               ))}
             </dl>
+            <SaveMetricButtons
+              explanation={explanation}
+              onChoose={(candidate) =>
+                setChoice({
+                  runId: run.id,
+                  datasetId: run.dataset_id,
+                  queryIndex: explanation.query_index,
+                  candidateIndex: candidate.index,
+                  facts: candidate.facts,
+                })
+              }
+            />
           </div>
         ))}
         {partial && (
@@ -385,7 +447,44 @@ function HowCalculated({ explanations }: { explanations: Explanation[] }) {
           </p>
         )}
       </div>
+      <SaveMetricDialog api={api} choice={choice} onClose={() => setChoice(null)} />
     </details>
+  );
+}
+
+function uniqueById<T extends { id: string }>(items: T[]): T[] {
+  return [...new Map(items.map((item) => [item.id, item])).values()];
+}
+
+type Candidate = NonNullable<Explanation["metric_candidates"]>[number];
+
+/** "Save as a definition" for each measure the API can read; named when there are several. */
+function SaveMetricButtons({
+  explanation,
+  onChoose,
+}: {
+  explanation: Explanation;
+  onChoose: (candidate: Candidate) => void;
+}) {
+  const candidates = explanation.metric_candidates ?? [];
+  if (candidates.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5 pt-1">
+      {candidates.map((candidate) => (
+        <Button
+          key={candidate.index}
+          variant="ghost"
+          size="sm"
+          className="text-muted-foreground h-7 text-xs"
+          onClick={() => onChoose(candidate)}
+        >
+          <BookmarkPlus />
+          {candidates.length > 1
+            ? `Save “${describeExpr(candidate.facts.measure)}” as a definition`
+            : "Save as a definition"}
+        </Button>
+      ))}
+    </div>
   );
 }
 

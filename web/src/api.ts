@@ -230,6 +230,27 @@ export class Api {
     });
   }
 
+  /** Saves one measure of a run's answer as a definition; the server reads it from the run. */
+  saveMetric(
+    datasetId: string,
+    body: { run_id: string; query_index: number; candidate_index: number; name: string; aliases: string[] },
+  ): Promise<{ id: string }> {
+    return this.request(`/v1/datasets/${encodeURIComponent(datasetId)}/metrics`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    });
+  }
+
+  /** Renames a definition; its calculation stays. Returns the new id. */
+  renameMetric(id: string, name: string, aliases: string[]): Promise<{ id: string }> {
+    return this.request(`/v1/memory/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ name, aliases }),
+    });
+  }
+
   reviewMemory(id: string, decision: "approve" | "reject"): Promise<unknown> {
     return this.request(`/v1/memory/${encodeURIComponent(id)}/${decision}`, { method: "POST" });
   }
@@ -357,17 +378,29 @@ export type VegaLiteSpec = Record<string, unknown>;
 
 export interface MemoryEntry {
   id: string;
-  kind: "correction" | "alias" | "example";
+  kind: "correction" | "alias" | "example" | "metric";
   text: string;
   sql: string | null;
   status: "proposed" | "approved" | "rejected";
   author: string;
   source_run_id: string | null;
   superseded_by: string | null;
+  /** Set for metric definitions only. */
+  name?: string;
+  aliases?: string[];
+  facts?: MetricFacts;
+  /** The dataset no longer has a column the definition reads; runs leave it out. */
+  stale?: boolean;
+}
+
+/** What a metric definition computes, as facts read from the SQL it was saved from. */
+export interface MetricFacts {
+  measure: ExprFact;
+  filters: FilterFact[];
 }
 
 export interface NewMemory {
-  kind: MemoryEntry["kind"];
+  kind: Exclude<MemoryEntry["kind"], "metric">;
   text: string;
   sql?: string;
   source_run_id?: string;
@@ -428,6 +461,10 @@ export interface Explanation {
   /** Parts not put in words, such as "subquery"; the SQL tab shows them. */
   unexplained: string[];
   complete: boolean;
+  /** Measures of this query that can be saved as a metric definition. */
+  metric_candidates?: { index: number; facts: MetricFacts }[];
+  /** Saved definitions this query used, found by reading its SQL. */
+  metrics_used?: { id: string; name: string }[];
 }
 
 export interface RunSummary {
