@@ -245,9 +245,16 @@ class MemoryStore:
             )  # fmt: skip
 
     def rename_metric(
-        self, workspace_id: UUID, entry_id: UUID, *, name: str, aliases: list[str], author: str
+        self,
+        workspace_id: UUID,
+        entry_id: UUID,
+        *,
+        name: str,
+        aliases: list[str] | None,
+        author: str,
     ) -> UUID:
-        """Replace a metric with one under a new name and other names; the definition stays."""
+        """Replace a metric with one under a new name and other names; the definition stays.
+        With aliases None, the other names stay as they were."""
         with self._conn.transaction():
             old = self._get(workspace_id, entry_id, lock=True)
             if old.kind != "metric" or old.definition is None:
@@ -255,7 +262,8 @@ class MemoryStore:
             if old.superseded_by is not None:
                 raise MemoryStateError("only a current metric can be renamed")
             new = self._insert_metric(
-                workspace_id, old.dataset_id, name=name, aliases=aliases,
+                workspace_id, old.dataset_id, name=name,
+                aliases=list(old.aliases or []) if aliases is None else aliases,
                 definition=old.definition, text=old.text, author=author,
                 source_run_id=old.source_run_id,
             )  # fmt: skip

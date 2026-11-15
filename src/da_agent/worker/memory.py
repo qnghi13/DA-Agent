@@ -14,7 +14,7 @@ from uuid import UUID
 
 from da_agent.agent.loop_types import Document
 from da_agent.agent.memory import EarlierTurn, MemoryNote, memory_documents
-from da_agent.reports.metric import Definition, definition_columns
+from da_agent.reports.metric import Definition, is_stale
 from da_agent.storage.db import connect
 from da_agent.storage.jobs import Job
 from da_agent.storage.memory import (
@@ -25,15 +25,6 @@ from da_agent.storage.memory import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def is_stale(definition: Definition, visible: dict[str, set[str]]) -> bool:
-    """True when the dataset lacks a table or column the definition reads."""
-    tables = {table.lower(): {c.lower() for c in columns} for table, columns in visible.items()}
-    if definition.table.lower() not in tables:
-        return True
-    pairs = definition_columns(definition)
-    return any(column not in tables.get(table, set()) for table, column in pairs)
 
 
 def _note(entry: MemoryEntry, visible: dict[str, set[str]]) -> MemoryNote | None:

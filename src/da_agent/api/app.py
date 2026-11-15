@@ -7,6 +7,7 @@ found", so ids from another workspace reveal nothing. See docs/adr/0020.
 
 import datetime as dt
 import json
+import logging
 import math
 import os
 import shutil
@@ -37,11 +38,19 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from da_agent.agent.answer import result_from_json
+from da_agent.agent.answer import AgentResult, result_from_json
+from da_agent.agent.verify import evidence_indices
 from da_agent.reports.explain import Labels, explain_result
 from da_agent.reports.html import CONTENT_SECURITY_POLICY, render_report
+from da_agent.reports.metric import (
+    Definition,
+    definition_text,
+    is_stale,
+    metric_candidates,
+    uses_metric,
+)
 from da_agent.runner.runner import MAX_SQL_CHARS
 from da_agent.security.sql_guard import SqlRejectedError, validate_select
 from da_agent.storage import audit, ops
@@ -65,6 +74,8 @@ from da_agent.storage.keys import KEY_PATTERN, authenticate
 from da_agent.storage.ledger import daily_budget, spent_today
 from da_agent.storage.limits import RateLimiter
 from da_agent.storage.memory import (
+    MAX_ALIASES,
+    MAX_NAME,
     MAX_SQL,
     MAX_TEXT,
     ConversationStore,
@@ -86,6 +97,8 @@ from da_agent.storage.sessions import (
 from da_agent.storage.uploads import UploadRejectedError, storage_name
 
 CHUNK_BYTES = 1024 * 1024
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -156,8 +169,25 @@ class MemoryRequest(BaseModel):
 
 
 class MemoryEditRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=MAX_TEXT)
+    """A note changes its text (and SQL); a metric changes its name and other names."""
+
+    text: str | None = Field(default=None, min_length=1, max_length=MAX_TEXT)
     sql: str | None = Field(default=None, max_length=MAX_SQL)
+    name: str | None = Field(default=None, min_length=1, max_length=MAX_NAME)
+    aliases: list[str] | None = Field(default=None, max_length=MAX_ALIASES)
+
+
+class MetricRequest(BaseModel):
+    """Save a measure of a run's answer as a metric. The server reads the definition from the
+    run's stored SQL, so the body names the query and never carries SQL."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    query_index: int = Field(ge=0, description="The answer's query, as in its explanations.")
+    candidate_index: int = Field(ge=0, description="The measure, as in metric_candidates.")
+    name: str = Field(min_length=1, max_length=MAX_NAME)
+    aliases: list[str] = Field(default_factory=list, max_length=MAX_ALIASES)
 
 
 class ConversationRequest(BaseModel):
@@ -621,8 +651,30 @@ def _author(caller: Member) -> str:
     return f"session:{caller.session_id}"
 
 
-def _memory_view(entry: MemoryEntry) -> dict[str, Any]:
+def _visible(spec: dict[str, Any] | None) -> dict[str, set[str]]:
+    """Each table of a dataset spec and its visible columns: sensitive ones are not built."""
     return {
+        str(table.get("name")): {
+            str(c.get("name")) for c in table.get("columns", []) if not c.get("sensitive")
+        }
+        for table in (spec or {}).get("tables", [])
+    }
+
+
+def _metric_view(entry: MemoryEntry, visible: dict[str, set[str]]) -> dict[str, Any]:
+    if entry.kind != "metric" or entry.definition is None:
+        return {}
+    definition = Definition.from_json(entry.definition)
+    return {
+        "name": entry.name,
+        "aliases": entry.aliases or [],
+        "facts": definition.facts,
+        "stale": is_stale(definition, visible),
+    }
+
+
+def _memory_view(entry: MemoryEntry, visible: dict[str, set[str]] | None = None) -> dict[str, Any]:
+    return _metric_view(entry, visible or {}) | {
         "id": str(entry.id),
         "kind": entry.kind,
         "text": entry.text,
@@ -651,10 +703,49 @@ def create_conversation(body: ConversationRequest, conn: Db, caller: Caller) -> 
 def list_memory(dataset_id: str, conn: Db, caller: Caller) -> dict[str, Any]:
     """Every note of the dataset, for review: proposed, approved, rejected, and replaced."""
     key = _uuid(dataset_id)
-    if DatasetStore(conn).get(key, caller.workspace_id) is None:
+    record = DatasetStore(conn).get(key, caller.workspace_id)
+    if record is None:
         raise _not_found()
     entries = MemoryStore(conn).entries(caller.workspace_id, key)
-    return {"memory": [_memory_view(entry) for entry in entries]}
+    visible = _visible(record.spec)
+    return {"memory": [_memory_view(entry, visible) for entry in entries]}
+
+
+@router.post("/datasets/{dataset_id}/metrics", status_code=201)
+def save_metric(dataset_id: str, body: MetricRequest, conn: Db, caller: Caller) -> dict[str, Any]:
+    """Save one measure of a finished run's answer as a metric definition, approved at once. It
+    replaces a metric of the dataset with the same name or other name."""
+    record = DatasetStore(conn).get(_uuid(dataset_id), caller.workspace_id)
+    if record is None:
+        raise _not_found()
+    job = run_job(body.run_id, conn, caller)
+    if job.status != "succeeded" or not job.result:
+        raise HTTPException(status_code=409, detail=f"the run is {job.status}")
+    if job.payload.get("dataset_id") != str(record.id):
+        raise HTTPException(status_code=422, detail="the run is about another dataset")
+    result = result_from_json(job.result)
+    evidence = evidence_indices(result.answer, result.queries) if result.answer else []
+    if body.query_index not in evidence:
+        raise HTTPException(status_code=422, detail="that query is not behind the answer")
+    candidates = metric_candidates(
+        result.queries[body.query_index].sql, Labels.from_spec(record.spec), _visible(record.spec)
+    )
+    if body.candidate_index >= len(candidates):
+        raise HTTPException(status_code=422, detail="that measure cannot be saved as a metric")
+    definition = candidates[body.candidate_index]
+    try:
+        entry_id = MemoryStore(conn).save_metric(
+            caller.workspace_id, record.id, name=body.name, aliases=body.aliases,
+            definition=definition.to_json(), text=definition_text(definition),
+            author=_author(caller), source_run_id=job.id,
+        )  # fmt: skip
+    except MemoryNotFoundError as error:
+        raise _not_found() from error
+    except MemoryStateError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    log(conn, caller, "memory.create", str(entry_id), dataset_id=dataset_id, kind="metric",
+        run_id=body.run_id)  # fmt: skip
+    return {"id": str(entry_id), "status": "approved"}
 
 
 @router.post("/datasets/{dataset_id}/memory", status_code=201)
@@ -705,12 +796,21 @@ def reject_memory(memory_id: str, conn: Db, caller: Caller) -> dict[str, Any]:
 def edit_memory(
     memory_id: str, body: MemoryEditRequest, conn: Db, caller: Caller
 ) -> dict[str, Any]:
-    """Replace a note with an approved one; the old one stays in the history."""
+    """Replace a note with an approved one; the old one stays in the history. A metric is
+    renamed instead: its definition stays."""
+    store, key = MemoryStore(conn), _uuid(memory_id)
+    if body.name is None and body.text is None:
+        raise HTTPException(status_code=422, detail="send text for a note, or name for a metric")
     try:
-        new_id = MemoryStore(conn).edit(
-            caller.workspace_id, _uuid(memory_id), body.text, sql=body.sql,
-            author=_author(caller),
-        )  # fmt: skip
+        if body.name is not None:
+            new_id = store.rename_metric(
+                caller.workspace_id, key, name=body.name, aliases=body.aliases,
+                author=_author(caller),
+            )  # fmt: skip
+        else:
+            new_id = store.edit(  # text is set: checked above
+                caller.workspace_id, key, body.text or "", sql=body.sql, author=_author(caller)
+            )
     except MemoryNotFoundError as error:
         raise _not_found() from error
     except MemoryStateError as error:
@@ -778,8 +878,45 @@ def _explanations(job: Job, conn: psycopg.Connection, workspace: uuid.UUID) -> l
         return []
     dataset_id = job.payload.get("dataset_id")
     record = DatasetStore(conn).get(_uuid(dataset_id), workspace) if dataset_id else None
-    labels = Labels.from_spec(record.spec if record else None)
-    return explain_result(result_from_json(job.result), labels)
+    spec = record.spec if record else None
+    labels = Labels.from_spec(spec)
+    result = result_from_json(job.result)
+    explanations = explain_result(result, labels)
+    if not explanations or record is None:
+        return explanations
+    # Only the metrics the run read when it started can be credited (ADR 0030 snapshot).
+    ids = [_uuid(value) for value in job.payload.get("memory_ids") or []]
+    metrics = [
+        (entry, Definition.from_json(entry.definition))
+        for entry in MemoryStore(conn).by_ids(workspace, record.id, ids)
+        if entry.kind == "metric" and entry.definition is not None
+    ]
+    visible = _visible(spec)
+    for item in explanations:
+        item |= _metric_facts(result, item["query_index"], labels, visible, metrics)
+    return explanations
+
+
+def _metric_facts(
+    result: AgentResult,
+    index: int,
+    labels: Labels,
+    visible: dict[str, set[str]],
+    metrics: list[tuple[MemoryEntry, Definition]],
+) -> dict[str, Any]:
+    """What can be saved from one evidence query, and which saved metrics it used. A bug here
+    must not hide the run, as in _safe_explain."""
+    sql = result.queries[index].sql
+    try:
+        candidates = metric_candidates(sql, labels, visible)
+        used = [entry for entry, definition in metrics if uses_metric(sql, definition)]
+    except Exception:
+        logger.exception("could not read metrics of a query")
+        return {"metric_candidates": [], "metrics_used": []}
+    return {
+        "metric_candidates": [{"index": n, "facts": c.facts} for n, c in enumerate(candidates)],
+        "metrics_used": [{"id": str(e.id), "name": e.name} for e in used],
+    }
 
 
 @router.get("/runs/{run_id}/report", response_class=HTMLResponse)

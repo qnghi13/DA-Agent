@@ -183,6 +183,24 @@ def definition_columns(definition: Definition, dialect: str = "duckdb") -> set[t
     return columns
 
 
+def definition_text(definition: Definition, limit: int = 2000) -> str:
+    """The definition as one line of SQL, kept as the entry's text for logs and old clients."""
+    text = definition.measure
+    if definition.filters:
+        text += " where " + " and ".join(definition.filters)
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def is_stale(definition: Definition, visible: dict[str, set[str]]) -> bool:
+    """True when the dataset lacks the table or a column the definition reads: a rebuild renamed
+    or dropped it, or it is now hidden. `visible` maps each table to its visible columns."""
+    tables = {table.lower(): {c.lower() for c in columns} for table, columns in visible.items()}
+    if definition.table.lower() not in tables:
+        return True
+    pairs = definition_columns(definition)
+    return any(column not in tables.get(table, set()) for table, column in pairs)
+
+
 def _tables(select: exp.Select) -> set[str]:
     return {table.name.lower() for table in select.find_all(exp.Table)}
 
