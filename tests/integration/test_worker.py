@@ -332,15 +332,18 @@ def test_a_run_job_gives_the_model_its_memory_after_the_dataset_documents(
     adapter = ScriptedAdapter([plan(), sql(), submit("number", 350)])
     handler = run_handler(adapter, dataset, schema)
     seen: list[UUID] = []
+    tables: list[dict[str, set[str]]] = []
 
-    def memory(claimed: Job) -> list[Document]:
+    def memory(claimed: Job, visible: dict[str, set[str]]) -> list[Document]:
         seen.append(claimed.id)
+        tables.append(visible)
         return [Document("notes", "Revenue excludes cancelled orders.")]
 
     handler.memory = memory
     assert Worker(config(schema, "w1"), {"run": handler}).run_once()
 
     assert seen == [job_id]
+    assert tables == [{t.name: {c.name for c in t.columns} for t in dataset.describe()}]
     system = adapter.requests[0].messages[0].content or ""
     assert system.index("Revenue is the sum of totals.") < system.index(
         "Revenue excludes cancelled orders."

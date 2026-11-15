@@ -4,15 +4,51 @@ The API records the ids of the approved notes in the run's payload when it creat
 (memory_snapshot in storage.memory), and the worker reads exactly those, so a resumed run sees
 what it started with even if someone edits memory meanwhile. Earlier turns are the
 conversation's finished runs created before this one.
+
+A metric whose table or columns the current dataset no longer has (a rebuild renamed or dropped
+them) is stale: it is left out, so the model never reads a definition that cannot run.
 """
 
+import logging
 from uuid import UUID
 
 from da_agent.agent.loop_types import Document
 from da_agent.agent.memory import EarlierTurn, MemoryNote, memory_documents
+from da_agent.reports.metric import Definition, definition_columns
 from da_agent.storage.db import connect
 from da_agent.storage.jobs import Job
-from da_agent.storage.memory import ConversationStore, MemoryNotFoundError, MemoryStore
+from da_agent.storage.memory import (
+    ConversationStore,
+    MemoryEntry,
+    MemoryNotFoundError,
+    MemoryStore,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def is_stale(definition: Definition, visible: dict[str, set[str]]) -> bool:
+    """True when the dataset lacks a table or column the definition reads."""
+    tables = {table.lower(): {c.lower() for c in columns} for table, columns in visible.items()}
+    if definition.table.lower() not in tables:
+        return True
+    pairs = definition_columns(definition)
+    return any(column not in tables.get(table, set()) for table, column in pairs)
+
+
+def _note(entry: MemoryEntry, visible: dict[str, set[str]]) -> MemoryNote | None:
+    if entry.kind != "metric":
+        return MemoryNote(entry.kind, entry.text, entry.sql, entry.author)
+    if entry.definition is None:
+        return None
+    definition = Definition.from_json(entry.definition)
+    if is_stale(definition, visible):
+        logger.warning("metric %r (%s) is stale and was left out", entry.name, entry.id)
+        return None
+    return MemoryNote(
+        entry.kind, entry.text, None, entry.author, name=entry.name,
+        aliases=tuple(entry.aliases or ()), definition=definition,
+    )  # fmt: skip
 
 
 class MemoryLoader:
@@ -20,7 +56,8 @@ class MemoryLoader:
         self.url = url
         self.schema = schema
 
-    def __call__(self, job: Job) -> list[Document]:
+    def __call__(self, job: Job, visible: dict[str, set[str]]) -> list[Document]:
+        """The run's memory. `visible` maps each table of the dataset to its visible columns."""
         payload = job.payload
         ids = [UUID(value) for value in payload.get("memory_ids") or []]
         conversation = payload.get("conversation_id")
@@ -37,5 +74,5 @@ class MemoryLoader:
                     )
                 except MemoryNotFoundError:
                     turns = []  # deleted with its dataset, or never in this workspace
-        notes = [MemoryNote(e.kind, e.text, e.sql, e.author) for e in entries]
+        notes = [note for e in entries if (note := _note(e, visible)) is not None]
         return memory_documents(notes, [EarlierTurn(t.question, t.answer, t.sql) for t in turns])

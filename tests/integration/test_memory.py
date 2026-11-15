@@ -4,13 +4,14 @@ approved, and nothing crosses workspaces or datasets.
 Needs Postgres (DA_AGENT_TEST_POSTGRES_URL).
 """
 
+import logging
 from uuid import UUID, uuid4
 
 import psycopg
 import pytest
 
 from da_agent.storage.datasets import DatasetStore
-from da_agent.storage.jobs import JobQueue
+from da_agent.storage.jobs import Job, JobQueue
 from da_agent.storage.memory import (
     MAX_TURN_TEXT,
     ConversationStore,
@@ -262,7 +263,7 @@ def test_a_run_reads_the_memory_it_was_created_with_and_its_earlier_turns(
     store.write(workspace, dataset, "correction", "Written after the run started.", author="k")
 
     assert POSTGRES_URL is not None
-    documents = MemoryLoader(url=POSTGRES_URL, schema=schema)(_job(conn, workspace, job_id))
+    documents = MemoryLoader(url=POSTGRES_URL, schema=schema)(_job(conn, workspace, job_id), {})
     text = "\n".join(d.text for d in documents)
     assert "Revenue excludes cancelled orders." in text
     assert "Written after the run started." not in text
@@ -275,7 +276,7 @@ def test_a_run_without_memory_or_conversation_gets_no_documents(
     payload = {"dataset_id": str(dataset), "question": "q", "as_of": "2025-11-01"}
     job_id = JobQueue(conn).enqueue(workspace, "run", payload)
     assert POSTGRES_URL is not None
-    assert MemoryLoader(url=POSTGRES_URL, schema=schema)(_job(conn, workspace, job_id)) == []
+    assert MemoryLoader(url=POSTGRES_URL, schema=schema)(_job(conn, workspace, job_id), {}) == []
 
 
 # -- metric definitions (design 2026-11-15-metric-definitions) ---------------------------------
@@ -419,3 +420,36 @@ def test_other_workspace_cannot_see_or_rename_a_metric(
             other, dataset, name="X", aliases=[], definition=DEFINITION, text="t",
             author="key:z", source_run_id=None,
         )  # fmt: skip
+
+
+def _metric_run(conn: psycopg.Connection, workspace: UUID, dataset: UUID) -> Job:
+    save(MemoryStore(conn), workspace, dataset, "Doanh thu")
+    payload = {"dataset_id": str(dataset), "question": "q", "as_of": "2025-11-01"}
+    payload |= memory_snapshot(conn, workspace, dataset)
+    return _job(conn, workspace, JobQueue(conn).enqueue(workspace, "run", payload))
+
+
+def test_a_run_reads_a_metric_whose_columns_exist(
+    schema: str, conn: psycopg.Connection, workspace: UUID, dataset: UUID
+) -> None:
+    job = _metric_run(conn, workspace, dataset)
+    assert POSTGRES_URL is not None
+    visible = {"orders": {"thanh_tien", "trang_thai", "ngay"}}
+    [document] = MemoryLoader(url=POSTGRES_URL, schema=schema)(job, visible)
+    assert "## Metric 1: Doanh thu" in document.text
+    assert 'SUM("thanh_tien")' in document.text
+
+
+def test_stale_metric_is_left_out(
+    schema: str,
+    conn: psycopg.Connection,
+    workspace: UUID,
+    dataset: UUID,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    job = _metric_run(conn, workspace, dataset)
+    assert POSTGRES_URL is not None
+    with caplog.at_level(logging.WARNING):
+        documents = MemoryLoader(url=POSTGRES_URL, schema=schema)(job, {"orders": {"thanh_tien"}})
+    assert documents == []
+    assert "Doanh thu" in caplog.text

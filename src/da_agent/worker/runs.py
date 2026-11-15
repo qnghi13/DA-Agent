@@ -30,8 +30,9 @@ from da_agent.worker.worker import RetryableJobError
 
 # Returns the dataset and its documents, only if the dataset belongs to the workspace.
 DatasetResolver = Callable[[UUID, str], tuple[Dataset, list[Document]]]
-# Returns the run's memory as documents: the notes in its snapshot and its earlier turns.
-MemoryResolver = Callable[[Job], list[Document]]
+# Returns the run's memory as documents: the notes in its snapshot and its earlier turns. The
+# second argument maps each table to its visible columns, so stale metrics are left out.
+MemoryResolver = Callable[[Job, dict[str, set[str]]], list[Document]]
 
 
 class RunHandler:
@@ -70,7 +71,8 @@ class RunHandler:
             limits = replace(limits, budget=self.budgets.for_job(job))
         dataset, documents = self.datasets(job.workspace_id, payload["dataset_id"])
         if self.memory is not None:
-            documents = [*documents, *self.memory(job)]
+            visible = {t.name: {c.name for c in t.columns} for t in dataset.describe()}
+            documents = [*documents, *self.memory(job, visible)]
         with (
             self._checkpoint_connection() as conn,
             connect(self.checkpoint_url, schema=self.schema) as events_conn,
