@@ -232,6 +232,9 @@ phase and cut for time.
   aliases, and verified examples that people write or approve. A run reads the approved ids the
   API recorded in its payload, as a document after the dataset's own; past ten, on demand through
   `search_rules`. The graph never writes memory, and eval runs use none.
+- **Metric definitions:** a `metric` entry names a measure and its row filters, saved from an
+  answer's SQL by the server and read first among the notes; stale ones are skipped, and code marks
+  answers that used one ([ADR 0036](adr/0036-metric-definitions.md)).
 - **RAG:** dataset docs and rules. Rules that shape every answer stay in the prompt. Topic sections
   are listed by title and fetched with `search_rules`, by title or keywords
   ([ADR 0008](adr/0008-rules-on-demand.md)). Embedding retrieval was cut: about ten
