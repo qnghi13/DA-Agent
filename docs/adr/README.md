@@ -41,3 +41,4 @@ decision, add a new ADR and mark the old one as superseded.
 | [0034](0034-column-profile-at-build.md) | The column profile is computed during the build and kept in the dataset summary | Accepted |
 | [0035](0035-plain-explanation-from-sql.md) | An answer is explained in plain words by reading its SQL in code, not by the model | Accepted |
 | [0036](0036-metric-definitions.md) | Metric definitions are saved from an answer's SQL and read as approved memory | Accepted |
+| [0037](0037-alternative-readings-rejected.md) | Other readings of a business word are not offered with the answer | Rejected |

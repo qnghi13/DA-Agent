@@ -1,6 +1,6 @@
 # Progress
 
-Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-15 (metric definitions)
+Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-19 (other readings rejected)
 **Phase:** optimisation. Challenge rules: ≤15B params in total, offline Docker, 2×5090, 6 h,
 re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for the submission.
 
@@ -22,11 +22,10 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
   (Groq +55). Then status variants and line-vs-header revenue (~12, checked by hand SQL), debt
   4, budget abstains 8 (SQLite functions, made-up columns). Semantic layer: private folder.
 ## Next step
-0. Metric definitions phase 1 (branch `feat/metric-definitions`, ADR 0036, note 16): save a
-   measure and its row filters from an answer's SQL, read first among notes, stale ones skipped,
-   "Used your definition" marked by code. Browser-checked ($0.0005). Users: non-technical
-   first; UI in English. Effect eval (20 dev questions, docs/eval): +1 -> +7, $0.095, one run
-   each. Next: phase 2: the agent asks when a word has no definition.
+0. Metric definitions on `main` (ADR 0036, note 16): saved from an answer's SQL, matched by
+   code; eval +1 -> +7 (20 dev questions, $0.095). Phase 2, other readings with the answer, was
+   built on a branch and removed (ADR 0037): `gpt-oss-20b` never flagged the ambiguity (4 real
+   runs). Users: non-technical first; UI in English. Next: pick the next feature.
 1. v0.1.0 released (ADR 0028); holdout ran once (+44, never rerun). Open: run 97d7bc1f guessed
    a `product_id` absent from the data. Offline audit of `final-regression` (2026-11-13, $0):
    no wrong answer had an absent filter literal; absent ones sit in exploratory queries of
@@ -36,7 +35,7 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
 ## Baselines (Groq `gpt-oss-20b`, before 559f88a): `regression` +53 (93/40/17), holdout +44.
 ## Done
 
-- ADRs 0001–0036, notes 01–16. Scorer 3000/3000; splits in `eval/splits/splits.json`.
+- ADRs 0001–0037, notes 01–16. Scorer 3000/3000; splits in `eval/splits/splits.json`.
 - Agent: `LLMClient`, SQL guard, LangGraph with checkpoints and verify, Groq `gpt-oss-20b`.
   Sandbox: all escape tests pass; ingestion and agent SQL run in it (ADRs 0009–0012).
   `datasets-dev/`: 24/24 ok, parse 99.98%+, exclusion precision and recall 100%.
@@ -50,7 +49,7 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
 - No rows, questions, rulebook, or answers in any commit or image (organiser rules). When the
   challenge ends: delete `train/`, `eval/reports/`, and Docker volumes with eval data.
 
-## Spend so far: about $2.84 (agent runs $2.25, spec proposals $0.57, demos $0.004).
+## Spend so far: about $2.84 (agent runs $2.25, spec proposals $0.57, demos $0.006).
 
 ## Watch out
 
