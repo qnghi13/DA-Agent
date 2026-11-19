@@ -11,6 +11,9 @@ x-app: &app
     context: .
     dockerfile: deploy/app.Dockerfile
     target: app
+    # The commit for the agent manifest (ADR 0038): DA_AGENT_GIT_SHA=$(git rev-parse HEAD)
+    args:
+      DA_AGENT_GIT_SHA: ${DA_AGENT_GIT_SHA:-unknown}
   restart: unless-stopped
   volumes:
     - data:/data
@@ -50,6 +53,8 @@ services:
       context: .
       dockerfile: deploy/app.Dockerfile
       target: runner
+      args:
+        DA_AGENT_GIT_SHA: ${DA_AGENT_GIT_SHA:-unknown}
     command: ["python", "-m", "da_agent.runner", "--host", "0.0.0.0", "--port", "8100"]
     restart: unless-stopped
     # No database URL and no provider keys: the runner only starts sandboxes.

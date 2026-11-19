@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
+from da_agent.agent.checkpoints import checkpoint_version
 from da_agent.agent.graph import run_graph
 from da_agent.agent.loop_types import AgentLimits, Document
 from da_agent.llm.client import CostLedger, LLMClient, ModelPrice, Route, RunBudget
@@ -110,6 +111,7 @@ def run(
     reply: str | None = None,
     client: LLMClient | None = None,
     charts: bool = False,
+    agent_version: str | None = None,
     **limits: Any,
 ):
     adapter = adapter or ScriptedAdapter(script)
@@ -128,6 +130,7 @@ def run(
         checkpointer=checkpointer,
         reply=reply,
         charts=charts,
+        agent_version=agent_version,
     )
     return result, adapter
 
@@ -177,6 +180,29 @@ def test_ambiguity_uses_documented_defaults_when_no_one_can_answer(
     result, _ = run(dataset, script, interactive=False)
 
     assert result.stop_reason == "answered"
+
+
+# Versions (ADR 0038)
+
+
+def test_checkpoints_carry_the_agent_version(dataset: SqliteDataset) -> None:
+    saver = InMemorySaver()
+
+    run(dataset, [plan(), sql(), submit("number", 350)], checkpointer=saver, agent_version="v1")
+
+    assert checkpoint_version(saver, "r1") == (True, "v1")
+
+
+def test_a_run_without_a_version_leaves_none_in_its_checkpoints(dataset: SqliteDataset) -> None:
+    saver = InMemorySaver()
+
+    run(dataset, [plan(), sql(), submit("number", 350)], checkpointer=saver)
+
+    assert checkpoint_version(saver, "r1") == (True, None)
+
+
+def test_a_thread_without_checkpoints_has_no_version() -> None:
+    assert checkpoint_version(InMemorySaver(), "none") == (False, None)
 
 
 # Clarify

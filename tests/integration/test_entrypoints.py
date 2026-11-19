@@ -117,6 +117,21 @@ def test_the_worker_needs_model_routes(
 ROUTES = {"DA_AGENT_ROUTES": "groq:openai/gpt-oss-20b", "GROQ_API_KEY": "test-key"}
 
 
+def test_the_worker_registers_its_version(
+    tmp_path: Path, schema: str, conn: psycopg.Connection
+) -> None:
+    env = ROUTES | {"DA_AGENT_GIT_SHA": "abc"}
+
+    worker = build_worker(settings(tmp_path, schema, **env), env, ledger_conn=conn)
+
+    rows = conn.execute("SELECT id, manifest FROM agent_versions").fetchall()
+    assert [row[0] for row in rows] == [worker.config.agent_version]
+    manifest = rows[0][1]
+    assert manifest["code"] == {"sha": "abc", "dirty": None}
+    assert manifest["routes"][0]["model"] == "openai/gpt-oss-20b"
+    assert "test-key" not in str(manifest)
+
+
 def test_with_a_runner_url_the_worker_never_starts_sandboxes_itself(
     tmp_path: Path, schema: str, conn: psycopg.Connection
 ) -> None:
@@ -139,3 +154,11 @@ def test_without_a_runner_url_sandboxes_run_as_the_configured_user(
     worker = build_worker(settings(tmp_path, schema, **env), env)
 
     assert worker.handlers["build"].runner.config.user == "10001:10001"  # type: ignore[attr-defined]
+
+
+def test_the_run_handler_stamps_the_worker_version(
+    tmp_path: Path, schema: str, conn: psycopg.Connection
+) -> None:
+    worker = build_worker(settings(tmp_path, schema, **ROUTES), ROUTES, ledger_conn=conn)
+
+    assert worker.handlers["run"].agent_version == worker.config.agent_version  # type: ignore[attr-defined]

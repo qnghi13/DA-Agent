@@ -1,6 +1,6 @@
 # Run manifest: which agent produced each run
 
-**Status:** approved 2026-11-19. **ADR:** 0038 (to write with the change).
+**Status:** built 2026-11-19. **ADR:** [0038](../adr/0038-run-manifest.md).
 
 ## Why
 

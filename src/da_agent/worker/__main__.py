@@ -10,17 +10,21 @@ import signal
 import sys
 import threading
 from collections.abc import Mapping
+from dataclasses import asdict
 from typing import Any
 
 import psycopg
 
+from da_agent.agent.loop_types import AgentLimits
 from da_agent.config import ConfigError, Settings
 from da_agent.llm.client import LLMClient
 from da_agent.llm.factory import build_routes
+from da_agent.manifest import build_manifest
 from da_agent.runner.client import RunnerClient
 from da_agent.runner.runner import Runner, RunnerConfig, SandboxRunner
 from da_agent.storage.db import connect, migrate
 from da_agent.storage.ledger import PostgresCostLedger
+from da_agent.storage.versions import register_version
 from da_agent.telemetry.tracing import configure_tracing
 from da_agent.worker.datasets import BuildHandler, DatasetOpener, IngestHandler
 from da_agent.worker.exports import ExportHandler
@@ -62,7 +66,15 @@ def build_worker(
             )
         )
     conn = ledger_conn or connect(settings.database_url, schema=settings.schema)
-    llm = LLMClient(build_routes(settings.routes, env), PostgresCostLedger(conn))
+    routes = build_routes(settings.routes, env)
+    llm = LLMClient(routes, PostgresCostLedger(conn))
+    # Which agent this worker runs, recorded on every attempt (ADR 0038).
+    limits = {
+        "agent": asdict(AgentLimits()), "daily_usd": settings.daily_budget_usd,
+        "run_usd": settings.run_budget_usd, "run_tokens": settings.run_max_tokens,
+    }  # fmt: skip
+    manifest = build_manifest(routes=routes, limits=limits, env=env)
+    register_version(conn, manifest.version, manifest.to_json())
     database: dict[str, Any] = {"url": settings.database_url, "schema": settings.schema}
     budgets = WorkspaceBudgets(
         **database, daily_usd=settings.daily_budget_usd, run_usd=settings.run_budget_usd,
@@ -78,13 +90,17 @@ def build_worker(
             schema=settings.schema,
             budgets=budgets,
             memory=MemoryLoader(**database),
+            agent_version=manifest.version,
         ),
         "ingest": IngestHandler(**database, **roots, llm=llm, budgets=budgets),
         "build": BuildHandler(**database, **roots),
         "export": ExportHandler(**database, runner=runner, exports_root=settings.exports_root),
         "query": QueryHandler(**database, runner=runner),
     }
-    return Worker(WorkerConfig(url=settings.database_url, schema=settings.schema), handlers)
+    worker_config = WorkerConfig(
+        url=settings.database_url, schema=settings.schema, agent_version=manifest.version
+    )
+    return Worker(worker_config, handlers)
 
 
 def main() -> int:
@@ -105,7 +121,8 @@ def main() -> int:
         with connect(settings.database_url) as conn:
             migrate(conn)
             worker = build_worker(settings, os.environ, ledger_conn=conn)
-            print(f"worker {worker.worker_id} waiting for jobs", flush=True)
+            version = worker.config.agent_version
+            print(f"worker {worker.worker_id} (agent {version}) waiting for jobs", flush=True)
             worker.run_forever(stop)
     except ValueError as error:
         print(f"error: {error}", file=sys.stderr)

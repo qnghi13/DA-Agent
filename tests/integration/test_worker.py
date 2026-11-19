@@ -25,6 +25,7 @@ from da_agent.storage.events import RunEvents
 from da_agent.storage.jobs import Job, JobQueue
 from da_agent.storage.ledger import PostgresCostLedger, spent_today
 from da_agent.storage.sqlite_dataset import SqliteDataset
+from da_agent.storage.versions import Attempt, attempts_of, register_version
 from da_agent.storage.workspaces import set_daily_budget
 from da_agent.telemetry.tracing import configure_tracing
 from da_agent.worker.limits import WorkspaceBudgets
@@ -69,14 +70,21 @@ def config(schema: str, worker_id: str, **overrides: Any) -> WorkerConfig:
     return WorkerConfig(**(settings | overrides))
 
 
-def run_handler(adapter: ScriptedAdapter, dataset: SqliteDataset, schema: str) -> RunHandler:
+def run_handler(
+    adapter: ScriptedAdapter,
+    dataset: SqliteDataset,
+    schema: str,
+    agent_version: str | None = None,
+) -> RunHandler:
     def datasets(workspace_id: UUID, dataset_id: str):
         assert dataset_id == "shop"
         return dataset, [Document("rules", "Revenue is the sum of totals.")]
 
     llm = LLMClient([Route(adapter, "m")], CostLedger(), sleep=lambda _: None, max_retries=0)
     assert URL is not None
-    return RunHandler(llm=llm, datasets=datasets, checkpoint_url=URL, schema=schema)
+    return RunHandler(
+        llm=llm, datasets=datasets, checkpoint_url=URL, schema=schema, agent_version=agent_version
+    )
 
 
 def enqueue_run(conn: psycopg.Connection, workspace: UUID) -> UUID:
@@ -323,6 +331,95 @@ def test_without_tracing_no_trace_is_recorded(
     assert worker.run_once()
 
     assert job(conn, job_id, workspace).trace_ids == []
+
+
+def test_each_attempt_is_recorded_with_its_worker_version_and_trace(
+    schema: str, conn: psycopg.Connection, workspace: UUID
+) -> None:
+    exporter = InMemorySpanExporter()
+    provider = configure_tracing("http://unused", exporter=exporter)
+    register_version(conn, "v1", {})
+    job_id = JobQueue(conn).enqueue(workspace, "run", {})
+
+    def busy(job: Job, lost: Any) -> dict[str, Any]:
+        raise RetryableJobError("the sandbox is busy")
+
+    worker = Worker(
+        config(schema, "w1", retry_delays=(0,), agent_version="v1"),
+        {"run": busy},
+        tracer=provider.get_tracer("t"),
+    )
+    assert worker.run_once() and worker.run_once()
+    provider.force_flush()
+
+    attempts = attempts_of(conn, job_id)
+    assert [(a.attempt, a.worker_id, a.agent_version) for a in attempts] == [
+        (1, "w1", "v1"),
+        (2, "w1", "v1"),
+    ]
+    assert [a.trace_id for a in attempts] == job(conn, job_id, workspace).trace_ids
+    root = next(s for s in exporter.get_finished_spans() if s.name == "job.run")
+    assert root.attributes is not None
+    assert root.attributes["da_agent.agent_version"] == "v1"
+    assert root.attributes["gen_ai.agent.version"] == "v1"
+
+
+def test_without_tracing_the_attempt_is_still_recorded(
+    schema: str, conn: psycopg.Connection, workspace: UUID
+) -> None:
+    job_id = JobQueue(conn).enqueue(workspace, "run", {})
+    worker = Worker(config(schema, "w1"), {"run": lambda job, lost: {}}, tracer=trace.NoOpTracer())
+
+    assert worker.run_once()
+
+    assert attempts_of(conn, job_id) == [Attempt(1, "w1", None, None, None)]
+
+
+def resumed_marks(
+    conn: psycopg.Connection,
+    workspace: UUID,
+    dataset: SqliteDataset,
+    schema: str,
+    first: str | None,
+    second: str | None,
+) -> list[str | None]:
+    """Kill a run after plan and sql under version first, resume it under second."""
+    for version in {first, second} - {None}:
+        register_version(conn, version, {})
+    job_id = enqueue_run(conn, workspace)
+    adapter = ScriptedAdapter([plan(), sql(), Killed(), submit("number", 350)])
+    with pytest.raises(Killed):
+        Worker(
+            config(schema, "dead", agent_version=first),
+            {"run": run_handler(adapter, dataset, schema, first)},
+        ).run_once()
+    conn.execute("UPDATE jobs SET lease_until = now() - interval '1 second'")
+
+    assert Worker(
+        config(schema, "alive", agent_version=second),
+        {"run": run_handler(adapter, dataset, schema, second)},
+    ).run_once()
+
+    assert job(conn, job_id, workspace).status == "succeeded"
+    return [a.resumed_from_version for a in attempts_of(conn, job_id)]
+
+
+def test_a_run_resumed_by_another_version_is_marked(
+    schema: str, conn: psycopg.Connection, workspace: UUID, dataset: SqliteDataset
+) -> None:
+    assert resumed_marks(conn, workspace, dataset, schema, "old", "new") == [None, "old"]
+
+
+def test_a_run_resumed_by_the_same_version_is_not_marked(
+    schema: str, conn: psycopg.Connection, workspace: UUID, dataset: SqliteDataset
+) -> None:
+    assert resumed_marks(conn, workspace, dataset, schema, "v1", "v1") == [None, None]
+
+
+def test_a_checkpoint_from_before_versions_is_not_marked(
+    schema: str, conn: psycopg.Connection, workspace: UUID, dataset: SqliteDataset
+) -> None:
+    assert resumed_marks(conn, workspace, dataset, schema, None, "new") == [None, None]
 
 
 def test_a_run_job_gives_the_model_its_memory_after_the_dataset_documents(

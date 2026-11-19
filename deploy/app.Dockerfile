@@ -30,6 +30,10 @@ RUN groupadd --gid 10001 app \
     && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin app \
     && mkdir -p /data/uploads /data/staging /data/datasets \
     && chown -R 10001:10001 /data
+# The commit the image was built from, for the agent manifest (ADR 0038). Set late, so a new commit
+# does not reinstall dependencies. Without it, runs record the sha as unknown.
+ARG DA_AGENT_GIT_SHA=unknown
+ENV DA_AGENT_GIT_SHA=$DA_AGENT_GIT_SHA
 USER 10001:10001
 
 # The Runner holds the Docker socket (ADR 0024), which already means root on the host, so it runs

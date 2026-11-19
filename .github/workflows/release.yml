@@ -71,6 +71,7 @@ jobs:
             --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.version=$version" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --build-arg "DA_AGENT_GIT_SHA=$GITHUB_SHA" \
             ${TARGET:+--target "$TARGET"} --file "$FILE" "${tags[@]}" "$CONTEXT"
 
   verify:

@@ -14,10 +14,12 @@ from uuid import UUID
 
 import psycopg
 from langgraph.checkpoint.postgres import PostgresSaver
+from opentelemetry import trace
 from psycopg.conninfo import make_conninfo
 from psycopg.rows import DictRow, dict_row
 
 from da_agent.agent.answer import result_to_json
+from da_agent.agent.checkpoints import checkpoint_version
 from da_agent.agent.graph import run_graph
 from da_agent.agent.loop_types import AgentLimits, Document
 from da_agent.agent.tools import Dataset
@@ -25,6 +27,7 @@ from da_agent.llm.client import LLMClient
 from da_agent.storage.db import connect, search_path_option
 from da_agent.storage.events import RunEvents
 from da_agent.storage.jobs import Job
+from da_agent.storage.versions import mark_resumed_from
 from da_agent.worker.limits import WorkspaceBudgets
 from da_agent.worker.worker import RetryableJobError
 
@@ -46,6 +49,7 @@ class RunHandler:
         limits: AgentLimits | None = None,
         budgets: WorkspaceBudgets | None = None,
         memory: MemoryResolver | None = None,
+        agent_version: str | None = None,
     ) -> None:
         self.llm = llm
         self.datasets = datasets
@@ -56,6 +60,8 @@ class RunHandler:
         self.budgets = budgets
         # Memory goes after the dataset's documents (ADR 0030); without it, runs have none.
         self.memory = memory
+        # Stamped on every checkpoint, so a resume by another version is marked (ADR 0038).
+        self.agent_version = agent_version
 
     def _checkpoint_connection(self) -> psycopg.Connection[DictRow]:
         conninfo = make_conninfo(self.checkpoint_url, options=search_path_option(self.schema))
@@ -80,6 +86,7 @@ class RunHandler:
             events = RunEvents(events_conn)
             saver = PostgresSaver(conn)
             saver.setup()
+            self._mark_resume(saver, job, events_conn)
             result = run_graph(
                 payload["question"],
                 as_of=payload["as_of"],
@@ -91,7 +98,18 @@ class RunHandler:
                 checkpointer=saver,
                 charts=bool(payload.get("charts", True)),
                 on_event=lambda event: events.append(job.id, job.workspace_id, event),
+                agent_version=self.agent_version,
             )
         if result.stop_reason == "llm_error":
             raise RetryableJobError("the model provider failed; the run will continue later")
         return result_to_json(result)
+
+    def _mark_resume(self, saver: PostgresSaver, job: Job, conn: psycopg.Connection[Any]) -> None:
+        """Mark this attempt when it continues a checkpoint that another agent version wrote.
+
+        A checkpoint from before versions names none, which is unknown rather than different."""
+        found, previous = checkpoint_version(saver, str(job.id))
+        if not found or previous is None or previous == self.agent_version:
+            return
+        mark_resumed_from(conn, job.id, job.attempts, previous)
+        trace.get_current_span().set_attribute("da_agent.resumed_from_version", previous)

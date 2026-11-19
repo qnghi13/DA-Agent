@@ -795,6 +795,18 @@ def test_all_questions_refuses_training_holdout_shops(data_dir: Path, splits: Pa
         all_questions(data_dir, splits)
 
 
+def test_the_manifest_is_written_into_metrics(data_dir: Path, tmp_path: Path) -> None:
+    output = tmp_path / "out"
+    llm, ledger, _ = make_llm([answer(1)])
+    questions = read_jsonl(data_dir / "questions.jsonl")[:1]
+    manifest = {"version": "abc123def456", "code": {"sha": "x", "dirty": True}}
+
+    run_questions(questions, data_dir, llm, ledger, RunConfig(output, manifest=manifest))
+
+    saved = json.loads((output / "metrics.json").read_text(encoding="utf-8"))
+    assert saved["manifest"] == manifest
+
+
 def test_results_and_metrics_count_guard_signals_by_kind(data_dir: Path, tmp_path: Path) -> None:
     def tool(name: str, arguments: dict) -> LLMResponse:
         call = ToolCall(id=f"c_{name}", name=name, arguments=arguments)

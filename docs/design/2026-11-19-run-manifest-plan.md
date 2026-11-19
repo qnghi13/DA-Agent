@@ -72,9 +72,14 @@ pytest, Docker.
 
 ```python
 def test_the_same_configuration_always_gets_the_same_version() -> None:
-    a = build_manifest(routes=[route("groq", "m")], limits={"x": 1, "y": 2}, env={"DA_AGENT_GIT_SHA": "abc"})
-    b = build_manifest(routes=[route("groq", "m")], limits={"y": 2, "x": 1}, env={"DA_AGENT_GIT_SHA": "abc"})
+    a = build_manifest(
+        routes=[route("groq", "m")], limits={"x": 1, "y": 2}, env={"DA_AGENT_GIT_SHA": "abc"}
+    )
+    b = build_manifest(
+        routes=[route("groq", "m")], limits={"y": 2, "x": 1}, env={"DA_AGENT_GIT_SHA": "abc"}
+    )
     assert a.version == b.version and len(a.version) == 12
+
 
 def test_any_field_changes_the_version() -> None:
     base = dict(routes=[route("groq", "m")], limits={"x": 1}, env={"DA_AGENT_GIT_SHA": "abc"})
@@ -83,22 +88,35 @@ def test_any_field_changes_the_version() -> None:
     assert build_manifest(**{**base, "routes": [route("groq", "other")]}).version != v
     assert build_manifest(**{**base, "env": {"DA_AGENT_GIT_SHA": "def"}}).version != v
 
+
 def test_no_secret_reaches_the_manifest() -> None:
-    adapter = OpenAICompatibleAdapter(provider="groq", base_url="https://x/v1", api_key="sk-SECRET-123")
-    manifest = build_manifest(routes=[Route(adapter, "m")], limits={}, env={"GROQ_API_KEY": "sk-SECRET-123", "DA_AGENT_GIT_SHA": "abc"})
+    adapter = OpenAICompatibleAdapter(
+        provider="groq", base_url="https://x/v1", api_key="sk-SECRET-123"
+    )
+    manifest = build_manifest(
+        routes=[Route(adapter, "m")],
+        limits={},
+        env={"GROQ_API_KEY": "sk-SECRET-123", "DA_AGENT_GIT_SHA": "abc"},
+    )
     assert "SECRET" not in json.dumps(manifest.to_json())
 
+
 def test_route_options_are_recorded_in_order() -> None:
-    vllm = OpenAICompatibleAdapter(provider="vllm", base_url="http://v/v1", api_key="EMPTY", extra_body={"seed": 0})
+    vllm = OpenAICompatibleAdapter(
+        provider="vllm", base_url="http://v/v1", api_key="EMPTY", extra_body={"seed": 0}
+    )
     summary = route_summary([Route(vllm, "gemma"), route("groq", "m")])
     assert [(r["provider"], r["model"]) for r in summary] == [("vllm", "gemma"), ("groq", "m")]
     assert summary[0]["options"]["extra_body"] == {"seed": 0}
 
+
 def test_the_build_arg_wins_over_git(tmp_path: Path) -> None:
     assert code_version({"DA_AGENT_GIT_SHA": "abc"}, tmp_path) == {"sha": "abc", "dirty": None}
 
+
 def test_without_git_or_build_arg_the_sha_is_unknown(tmp_path: Path) -> None:
     assert code_version({}, tmp_path) == {"sha": "unknown", "dirty": None}
+
 
 def test_a_local_checkout_reports_its_sha_and_whether_it_is_dirty(tmp_path: Path) -> None:
     # git init, commit one file with -c user.name/-c user.email, then:
@@ -107,17 +125,20 @@ def test_a_local_checkout_reports_its_sha_and_whether_it_is_dirty(tmp_path: Path
     (tmp_path / "f.txt").write_text("changed")
     assert code_version({}, tmp_path)["dirty"] is True
 
+
 def test_a_prompt_constant_changes_its_fingerprint(monkeypatch) -> None:
     before = prompt_fingerprint(AGENT_PROMPT_MODULES, agent_prompt_samples())
     monkeypatch.setattr(prompts, "NUDGE", prompts.NUDGE + " ")
     assert prompt_fingerprint(AGENT_PROMPT_MODULES, agent_prompt_samples()) != before
     assert len(before) == 16
 
+
 def test_lowercase_names_and_unplain_values_do_not_count(monkeypatch) -> None:
     before = prompt_fingerprint([prompts])
     monkeypatch.setattr(prompts, "helper_text", "x", raising=False)
     monkeypatch.setattr(prompts, "SOME_PATTERN", re.compile("x"), raising=False)
     assert prompt_fingerprint([prompts]) == before
+
 
 def test_the_manifest_has_one_fingerprint_per_prompt_family() -> None:
     m = build_manifest(routes=[route("groq", "m")], limits={}, env={"DA_AGENT_GIT_SHA": "abc"})
@@ -250,20 +271,27 @@ git commit -m "feat: store agent versions and job attempts"
 
 ```python
 # tests/integration/test_worker.py
-def test_each_attempt_is_recorded_with_its_worker_version_and_trace(schema, conn, workspace) -> None:
+def test_each_attempt_is_recorded_with_its_worker_version_and_trace(
+    schema, conn, workspace
+) -> None:
     # tracing on (InMemorySpanExporter), register_version(conn, "v1", {}),
     # worker config agent_version="v1", a handler that raises RetryableJobError, retry_delays=(0,)
     # run_once twice
     attempts = attempts_of(conn, job_id)
-    assert [(a.attempt, a.worker_id, a.agent_version) for a in attempts] == [(1, "w1", "v1"), (2, "w1", "v1")]
+    assert [(a.attempt, a.worker_id, a.agent_version) for a in attempts] == [
+        (1, "w1", "v1"),
+        (2, "w1", "v1"),
+    ]
     assert [a.trace_id for a in attempts] == job(conn, job_id, workspace).trace_ids
     root = [s for s in exporter.get_finished_spans() if s.name == "job.run"][0]
     assert root.attributes["da_agent.agent_version"] == "v1"
     assert root.attributes["gen_ai.agent.version"] == "v1"
 
+
 def test_without_tracing_the_attempt_is_still_recorded(schema, conn, workspace) -> None:
     # trace.NoOpTracer(), no agent_version
     assert attempts_of(conn, job_id) == [Attempt(1, "w1", None, None, None)]
+
 
 # tests/integration/test_entrypoints.py
 def test_the_worker_registers_its_version(tmp_path, schema, conn) -> None:

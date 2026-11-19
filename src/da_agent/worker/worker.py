@@ -24,6 +24,7 @@ from opentelemetry import trace
 
 from da_agent.storage.db import connect
 from da_agent.storage.jobs import Job, JobQueue
+from da_agent.storage.versions import record_attempt
 
 Handler = Callable[[Job, threading.Event], dict[str, Any]]
 MAX_ERROR_CHARS = 500
@@ -49,6 +50,8 @@ class WorkerConfig:
     poll_seconds: float = 1.0
     # Delay before each retry; the last one repeats.
     retry_delays: tuple[float, ...] = (10.0, 60.0, 300.0)
+    # The registered agent version this worker runs (ADR 0038); recorded on every attempt.
+    agent_version: str | None = None
 
 
 class Worker:
@@ -79,10 +82,17 @@ class Worker:
                 span.set_attribute("da_agent.job_id", str(job.id))
                 span.set_attribute("da_agent.workspace_id", str(job.workspace_id))
                 span.set_attribute("da_agent.job_attempt", job.attempts)
+                version = self.config.agent_version
+                if version is not None:
+                    span.set_attribute("da_agent.agent_version", version)
+                    span.set_attribute("gen_ai.agent.version", version)
                 context = span.get_span_context()
+                trace_id = None
                 if context.is_valid:
                     # Lets an operator open each attempt's trace from the run (ADR 0023).
-                    queue.add_trace(job.id, self.worker_id, trace.format_trace_id(context.trace_id))
+                    trace_id = trace.format_trace_id(context.trace_id)
+                    queue.add_trace(job.id, self.worker_id, trace_id)
+                record_attempt(conn, job.id, job.attempts, self.worker_id, version, trace_id)
                 self._process(queue, job)
             return True
 

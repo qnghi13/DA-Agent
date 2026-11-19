@@ -517,6 +517,7 @@ def run_graph(
     thread_id: str | None = None,
     charts: bool = False,
     on_event: EventSink | None = None,
+    agent_version: str | None = None,
 ) -> AgentResult:
     """Answer one question, or continue the run saved under run_id.
 
@@ -525,7 +526,8 @@ def run_graph(
     answers the question an interactive run paused on. thread_id names the saved run, and
     defaults to run_id, which also keys the cost ledger. charts offers make_chart, whose specs
     come back in AgentResult.charts. on_event receives progress events (see node_events) as the
-    run goes; a resumed run may repeat the events of the step that was running.
+    run goes; a resumed run may repeat the events of the step that was running. agent_version
+    goes into every checkpoint's metadata and onto the run's span (ADR 0038).
     """
     limits = limits or AgentLimits()
     tracer = tracer or trace.get_tracer("da_agent.agent")
@@ -548,11 +550,17 @@ def run_graph(
         charts=charts,
     )
     app = build_graph(checkpointer)
-    config = {"configurable": {"thread_id": thread_id or run_id}}
+    config: dict[str, Any] = {"configurable": {"thread_id": thread_id or run_id}}
+    if agent_version is not None:
+        # LangGraph copies string config metadata into each checkpoint's metadata.
+        config["metadata"] = {"agent_version": agent_version}
     saved = app.get_state(config) if checkpointer is not None else None
     with tracer.start_as_current_span("agent.run") as span:
         span.set_attribute("openinference.span.kind", "AGENT")
         span.set_attribute("da_agent.run_id", run_id)
+        if agent_version is not None:
+            span.set_attribute("da_agent.agent_version", agent_version)
+            span.set_attribute("gen_ai.agent.version", agent_version)
         if saved is not None and saved.values and not saved.next:
             values, asked = dict(saved.values), None
         else:

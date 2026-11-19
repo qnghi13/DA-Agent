@@ -25,7 +25,7 @@ from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -36,8 +36,9 @@ from da_agent.agent.graph import run_graph
 from da_agent.agent.loop import AgentLimits, run_agent
 from da_agent.agent.loop_types import Document
 from da_agent.agent.memory import MemoryNote, memory_documents
-from da_agent.llm.client import CostLedger, LLMClient, RunBudget
+from da_agent.llm.client import CostLedger, LLMClient, Route, RunBudget
 from da_agent.llm.factory import build_routes
+from da_agent.manifest import build_manifest
 from da_agent.reports.html import render_report
 from da_agent.reports.metric import Definition
 from da_agent.runner.runner import Runner, RunnerConfig
@@ -73,6 +74,22 @@ class RunConfig:
     # Metric definitions by shop, read as approved memory (ADR 0036). Empty for the standard
     # eval, which reads no memory; set only to measure what definitions change.
     metrics: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    # The agent manifest (ADR 0038), written into metrics.json so results name their version.
+    manifest: dict[str, Any] | None = None
+
+
+def eval_manifest(args: argparse.Namespace, routes: list[Route]) -> dict[str, Any]:
+    """The manifest of this run. Besides limits, it records the run options that change what the
+    model sees: the agent, reports (which offer make_chart), and metric definitions."""
+    budget = RunBudget(max_total_tokens=args.max_tokens_per_question)
+    limits = {
+        "agent": asdict(AgentLimits(max_iterations=args.max_iterations, budget=budget)),
+        "max_total_tokens": args.max_total_tokens,
+        "agent_kind": args.agent,
+        "reports": bool(args.report),
+        "metrics_file": args.metrics_file.name if args.metrics_file else None,
+    }
+    return build_manifest(routes=routes, limits=limits, env=os.environ).to_json()
 
 
 def load_metrics(entries: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
@@ -252,6 +269,8 @@ def run_questions(
         raise ValueError(f"no shop could be opened: {sorted(run.shops)}")
     metrics = _build_metrics(run.results, run.skipped, run.failed, run.failed_tokens, run.stopped)
     metrics["workers"] = config.workers
+    if config.manifest is not None:
+        metrics["manifest"] = config.manifest
     metrics["wall_seconds"] = wall_seconds
     (config.output_dir / "metrics.json").write_text(
         json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -501,6 +520,8 @@ def main() -> int:
         ledger = CostLedger(args.output_dir / "ledger.jsonl")
         routes = build_routes(args.routes, os.environ)
         llm = LLMClient(routes, ledger, record_content=args.record_content)
+        manifest = eval_manifest(args, routes)
+        print(f"agent {manifest['version']}", flush=True)
         if args.all_questions:
             questions = all_questions(args.data_dir, args.splits, args.limit, args.shops)
         else:
@@ -522,6 +543,7 @@ def main() -> int:
                 if args.metrics_file
                 else {}
             ),
+            manifest=manifest,
         )
         opener = None
         if args.datasets_dir:

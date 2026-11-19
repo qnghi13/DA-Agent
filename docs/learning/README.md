@@ -25,3 +25,4 @@ Mỗi cột mốc có một ghi chú tiếng Việt, theo khung sau:
 | [14. Tổng quan dữ liệu](14-tong-quan-du-lieu.md) | Profile từng cột lúc build, tách khỏi prompt của agent, đọc số liệu chất lượng dữ liệu |
 | [15. Giải thích cách tính](15-giai-thich-cach-tinh.md) | Đọc SQL bằng sqlglot thành lời, thành thật về phần chưa diễn giải, đo độ phủ trước khi mở rộng |
 | [16. Định nghĩa chỉ số](16-dinh-nghia-chi-so.md) | Semantic layer nhỏ: lưu từ SQL của câu trả lời, so khớp bằng code, bỏ qua định nghĩa cũ |
+| [17. Run manifest](17-run-manifest.md) | Harness: phiên bản agent theo từng attempt, fingerprint của prompt, đánh dấu chạy tiếp qua phiên bản |
