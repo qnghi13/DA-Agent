@@ -98,6 +98,15 @@ class OpenAICompatibleAdapter:
             max_retries=0,
         )
 
+    @property
+    def options(self) -> dict[str, Any]:
+        """Request options that change answers, for the agent manifest. Never the key or URL."""
+        return {
+            "extra_body": dict(self._extra_body),
+            "min_output_tokens": self._min_output_tokens,
+            "timeout": self.timeout_seconds,
+        }
+
     def complete(self, request: LLMRequest, model: str) -> LLMResponse:
         # Typed as Any because the SDK's message types are exact shapes that we build dynamically.
         messages: Any = [_to_wire_message(message) for message in request.messages]
