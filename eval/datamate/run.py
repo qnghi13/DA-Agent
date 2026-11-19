@@ -38,7 +38,7 @@ from da_agent.agent.loop_types import Document
 from da_agent.agent.memory import MemoryNote, memory_documents
 from da_agent.llm.client import CostLedger, LLMClient, Route, RunBudget
 from da_agent.llm.factory import build_routes
-from da_agent.manifest import build_manifest
+from da_agent.manifest import build_manifest, fingerprint
 from da_agent.reports.html import render_report
 from da_agent.reports.metric import Definition
 from da_agent.runner.runner import Runner, RunnerConfig
@@ -87,7 +87,13 @@ def eval_manifest(args: argparse.Namespace, routes: list[Route]) -> dict[str, An
         "max_total_tokens": args.max_total_tokens,
         "agent_kind": args.agent,
         "reports": bool(args.report),
-        "metrics_file": args.metrics_file.name if args.metrics_file else None,
+        # The definitions themselves: the file is private and outside git, and editing it changes
+        # what the model reads while its name stays.
+        "metric_definitions": (
+            fingerprint(load_metrics(json.loads(args.metrics_file.read_text(encoding="utf-8"))))
+            if args.metrics_file
+            else None
+        ),
     }
     return build_manifest(routes=routes, limits=limits, env=os.environ).to_json()
 
@@ -360,6 +366,7 @@ class _Run:
                 checkpointer=self.checkpointer,
                 thread_id=thread_id(config.output_dir, id_),
                 charts=config.reports,
+                agent_version=config.manifest["version"] if config.manifest else None,
             )
         else:
             result = run_agent(

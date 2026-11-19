@@ -5,10 +5,15 @@ short hash of the manifest, so the same configuration always gets the same id. P
 fingerprinted by what the model sees (the fixed text and tool specs), not by source files, so
 comments and refactors do not change the version; the git sha covers every other code change.
 Nothing here reads secrets: routes contribute only their provider, model, and request options.
+
+Code is named by git when the checkout is there: the sha, whether anything changed since, and a
+hash of those changes, so two runs on different uncommitted code never share a version. An image
+has no checkout, so it names its sha by the DA_AGENT_GIT_SHA build arg.
 """
 
 import hashlib
 import json
+import math
 import subprocess
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -32,7 +37,7 @@ AGENT_PROMPT_MODULES: tuple[ModuleType, ...] = (
 )  # fmt: skip
 INGESTION_PROMPT_MODULES: tuple[ModuleType, ...] = (propose, pipeline)
 
-UNKNOWN_CODE: dict[str, Any] = {"sha": "unknown", "dirty": None}
+UNKNOWN_CODE: dict[str, Any] = {"sha": "unknown", "dirty": None, "diff": None}
 
 
 class _NotPlain(Exception):
@@ -40,15 +45,25 @@ class _NotPlain(Exception):
 
 
 def _canonical(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    )
 
 
 def _hash(value: Any, chars: int) -> str:
     return hashlib.sha256(_canonical(value).encode("utf-8")).hexdigest()[:chars]
 
 
+def fingerprint(value: Any) -> str:
+    """A short hash of JSON data, such as metric definitions an eval run reads."""
+    return _hash(_plain(value), FINGERPRINT_CHARS)
+
+
 def _plain(value: Any) -> Any:
     """The value as JSON data, or _NotPlain for anything else, such as a pattern or a function."""
+    if isinstance(value, float) and not math.isfinite(value):
+        # Postgres jsonb and strict JSON have no Infinity or NaN.
+        return str(value)
     if value is None or isinstance(value, str | int | float | bool):
         return value
     if isinstance(value, BaseModel):
@@ -91,28 +106,44 @@ def agent_prompt_samples() -> list[str]:
     return [sample for sample in samples if sample is not None]
 
 
-def _git(repo: Path, *args: str) -> str:
+def _git(repo: Path, *args: str) -> bytes:
     # Fixed arguments, no user input. git is looked up on PATH, as in any local checkout.
     done = subprocess.run(  # noqa: S603
         ["git", "-C", str(repo), *args],  # noqa: S607
-        capture_output=True, text=True, timeout=GIT_TIMEOUT_SECONDS, check=True,
+        capture_output=True, timeout=GIT_TIMEOUT_SECONDS, check=True,
     )  # fmt: skip
     return done.stdout
 
 
-def code_version(env: Mapping[str, str], repo: Path = REPO_ROOT) -> dict[str, Any]:
-    """The git sha baked into the image, else the local checkout's sha and whether it has changes.
+def _changes_hash(repo: Path) -> str:
+    """A hash of every change since HEAD: the diff of tracked files, and the names and bytes of
+    untracked files that git does not ignore."""
+    digest = hashlib.sha256(_git(repo, "diff", "HEAD", "--binary"))
+    untracked = _git(repo, "ls-files", "--others", "--exclude-standard", "-z").split(b"\0")
+    for name in sorted(name for name in untracked if name):
+        digest.update(b"\0" + name + b"\0")
+        path = repo / name.decode("utf-8", "surrogateescape")
+        if path.is_file():
+            digest.update(path.read_bytes())
+    return digest.hexdigest()[:FINGERPRINT_CHARS]
 
-    An image does not know whether its source had changes, so dirty is None there."""
-    baked = env.get("DA_AGENT_GIT_SHA")
-    if baked:
-        return {"sha": baked, "dirty": None}
+
+def code_version(env: Mapping[str, str], repo: Path | None = None) -> dict[str, Any]:
+    """The checkout's sha, whether it has changes, and a hash of them; without a checkout, as in an
+    image, the DA_AGENT_GIT_SHA build arg, which cannot know about changes.
+
+    git comes first, so a stale DA_AGENT_GIT_SHA left in a local .env never names local code."""
+    repo = repo or REPO_ROOT
     try:
-        sha = _git(repo, "rev-parse", "HEAD").strip()
+        sha = _git(repo, "rev-parse", "HEAD").decode().strip()
         dirty = bool(_git(repo, "status", "--porcelain").strip())
+        diff = _changes_hash(repo) if dirty else None
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        baked = env.get("DA_AGENT_GIT_SHA")
+        if baked:
+            return {"sha": baked, "dirty": None, "diff": None}
         return dict(UNKNOWN_CODE)
-    return {"sha": sha, "dirty": dirty}
+    return {"sha": sha, "dirty": dirty, "diff": diff}
 
 
 def route_summary(routes: Sequence[Route]) -> list[dict[str, Any]]:
@@ -155,7 +186,7 @@ def build_manifest(
     routes: Sequence[Route],
     limits: Mapping[str, Any],
     env: Mapping[str, str],
-    repo: Path = REPO_ROOT,
+    repo: Path | None = None,
 ) -> AgentManifest:
     return AgentManifest(
         code=code_version(env, repo),

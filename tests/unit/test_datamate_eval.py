@@ -1,5 +1,6 @@
 """DataMate eval adapter and runner, on a small synthetic shop."""
 
+import argparse
 import json
 import sqlite3
 from pathlib import Path
@@ -805,6 +806,61 @@ def test_the_manifest_is_written_into_metrics(data_dir: Path, tmp_path: Path) ->
 
     saved = json.loads((output / "metrics.json").read_text(encoding="utf-8"))
     assert saved["manifest"] == manifest
+
+
+def test_graph_checkpoints_carry_the_manifest_version(data_dir: Path, tmp_path: Path) -> None:
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    from da_agent.agent.checkpoints import checkpoint_version
+    from eval.datamate.run import thread_id
+
+    def tool(name: str, arguments: dict) -> LLMResponse:
+        call = ToolCall(id=f"c_{name}", name=name, arguments=arguments)
+        return LLMResponse(tool_calls=[call], usage=Usage(input_tokens=40, output_tokens=10))
+
+    script = [
+        tool("submit_plan", {"steps": ["count"]}),
+        tool("run_sql", {"sql": "SELECT count(*) AS n FROM khach_hang"}),
+        answer(1),
+    ]
+    llm, ledger, _ = make_llm(script)
+    question = read_jsonl(data_dir / "questions.jsonl")[0]
+    saver = InMemorySaver()
+    output = tmp_path / "out"
+    config = RunConfig(output, agent="graph", manifest={"version": "abc123def456"})
+
+    run_questions([question], data_dir, llm, ledger, config, checkpointer=saver)
+
+    assert checkpoint_version(saver, thread_id(output, question["id"])) == (True, "abc123def456")
+
+
+def _manifest_args(metrics_file: Path | None) -> argparse.Namespace:
+    return argparse.Namespace(
+        max_tokens_per_question=60000, max_iterations=10, max_total_tokens=None,
+        agent="graph", report=False, metrics_file=metrics_file,
+    )  # fmt: skip
+
+
+def test_the_eval_version_follows_metric_definitions_not_their_file_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from da_agent.llm.factory import build_routes
+    from eval.datamate.run import eval_manifest
+
+    monkeypatch.setattr("da_agent.manifest.REPO_ROOT", tmp_path / "no-git")
+    monkeypatch.setenv("DA_AGENT_GIT_SHA", "abc")
+    entry = {"shop": "s1", "name": "Revenue", "aliases": [], "source_id": "q1", "definition": {}}
+    first, renamed, edited = tmp_path / "a.json", tmp_path / "b.json", tmp_path / "c.json"
+    first.write_text(json.dumps([entry]))
+    renamed.write_text(json.dumps([entry]))
+    edited.write_text(json.dumps([{**entry, "name": "Sales"}]))
+    routes = build_routes("ollama:m", {})
+
+    version = eval_manifest(_manifest_args(first), routes)["version"]
+
+    assert eval_manifest(_manifest_args(renamed), routes)["version"] == version
+    assert eval_manifest(_manifest_args(edited), routes)["version"] != version
+    assert eval_manifest(_manifest_args(None), routes)["version"] != version
 
 
 def test_results_and_metrics_count_guard_signals_by_kind(data_dir: Path, tmp_path: Path) -> None:

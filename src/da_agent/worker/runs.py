@@ -111,5 +111,10 @@ class RunHandler:
         found, previous = checkpoint_version(saver, str(job.id))
         if not found or previous is None or previous == self.agent_version:
             return
-        mark_resumed_from(conn, job.id, job.attempts, previous)
-        trace.get_current_span().set_attribute("da_agent.resumed_from_version", previous)
+        span = trace.get_current_span()
+        span.set_attribute("da_agent.resumed_from_version", previous)
+        try:
+            mark_resumed_from(conn, job.id, job.attempts, previous)
+        except psycopg.Error as error:
+            # A record of the resume; never a reason to fail the run.
+            span.record_exception(error)

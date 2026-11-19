@@ -35,6 +35,13 @@ def route(provider: str, model: str) -> Route:
 SHA = {"DA_AGENT_GIT_SHA": "abc"}
 
 
+@pytest.fixture(autouse=True)
+def outside_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """build_manifest reads git from REPO_ROOT; point it at a folder that is no checkout, as in an
+    image, so the build arg decides the sha."""
+    monkeypatch.setattr("da_agent.manifest.REPO_ROOT", tmp_path / "no-git")
+
+
 def test_the_same_configuration_always_gets_the_same_version() -> None:
     a = build_manifest(routes=[route("groq", "m")], limits={"x": 1, "y": 2}, env=SHA)
     b = build_manifest(routes=[route("groq", "m")], limits={"y": 2, "x": 1}, env=SHA)
@@ -58,7 +65,7 @@ def test_to_json_holds_every_field_and_the_version() -> None:
     saved = manifest.to_json()
 
     assert saved["version"] == manifest.version
-    assert saved["code"] == {"sha": "abc", "dirty": None}
+    assert saved["code"] == {"sha": "abc", "dirty": None, "diff": None}
     assert saved["routes"] == [{"provider": "groq", "model": "m", "options": {}}]
     assert saved["limits"] == {"x": 1}
 
@@ -86,12 +93,13 @@ def test_route_options_are_recorded_in_order() -> None:
     assert summary[1]["options"] == {}
 
 
-def test_the_build_arg_wins_over_git(tmp_path: Path) -> None:
-    assert code_version({"DA_AGENT_GIT_SHA": "abc"}, tmp_path) == {"sha": "abc", "dirty": None}
+def test_without_git_the_build_arg_names_the_sha(tmp_path: Path) -> None:
+    expected = {"sha": "abc", "dirty": None, "diff": None}
+    assert code_version({"DA_AGENT_GIT_SHA": "abc"}, tmp_path) == expected
 
 
 def test_without_git_or_build_arg_the_sha_is_unknown(tmp_path: Path) -> None:
-    assert code_version({}, tmp_path) == {"sha": "unknown", "dirty": None}
+    assert code_version({}, tmp_path) == {"sha": "unknown", "dirty": None, "diff": None}
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -100,18 +108,56 @@ def _git(repo: Path, *args: str) -> str:
     return done.stdout.strip()
 
 
-def test_a_local_checkout_reports_its_sha_and_whether_it_is_dirty(tmp_path: Path) -> None:
-    _git(tmp_path, "init", "-q")
-    (tmp_path / "f.txt").write_text("one")
-    _git(tmp_path, "add", "f.txt")
-    _git(tmp_path, "commit", "-qm", "first")
+@pytest.fixture
+def checkout(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "f.txt").write_text("one")
+    _git(repo, "add", "f.txt")
+    _git(repo, "commit", "-qm", "first")
+    return repo
 
-    clean = code_version({}, tmp_path)
-    (tmp_path / "f.txt").write_text("changed")
-    dirty = code_version({}, tmp_path)
 
-    assert clean == {"sha": _git(tmp_path, "rev-parse", "HEAD"), "dirty": False}
-    assert dirty["dirty"] is True
+def test_a_clean_checkout_reports_its_sha(checkout: Path) -> None:
+    expected = {"sha": _git(checkout, "rev-parse", "HEAD"), "dirty": False, "diff": None}
+    assert code_version({}, checkout) == expected
+
+
+def test_in_a_checkout_git_wins_over_a_stale_build_arg(checkout: Path) -> None:
+    assert code_version({"DA_AGENT_GIT_SHA": "stale"}, checkout)["sha"] == _git(
+        checkout, "rev-parse", "HEAD"
+    )
+
+
+def test_different_uncommitted_changes_get_different_diffs(checkout: Path) -> None:
+    (checkout / "f.txt").write_text("two")
+    first = code_version({}, checkout)
+    (checkout / "f.txt").write_text("three")
+    second = code_version({}, checkout)
+
+    assert first["dirty"] is True and second["dirty"] is True
+    assert re.fullmatch(r"[0-9a-f]{16}", first["diff"])
+    assert first["diff"] != second["diff"]
+
+
+def test_an_untracked_file_counts_as_a_change(checkout: Path) -> None:
+    (checkout / "new.py").write_text("A = 1")
+    first = code_version({}, checkout)
+    (checkout / "new.py").write_text("A = 2")
+    second = code_version({}, checkout)
+
+    assert first["dirty"] is True
+    assert first["diff"] != second["diff"]
+
+
+def test_a_non_finite_limit_still_makes_strict_json() -> None:
+    manifest = build_manifest(
+        routes=[route("groq", "m")], limits={"daily_usd": float("inf")}, env=SHA
+    )
+
+    json.dumps(manifest.to_json(), allow_nan=False)
+    assert manifest.limits == {"daily_usd": "inf"}
 
 
 def test_a_prompt_constant_changes_its_fingerprint(monkeypatch: pytest.MonkeyPatch) -> None:

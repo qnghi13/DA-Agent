@@ -422,6 +422,36 @@ def test_a_checkpoint_from_before_versions_is_not_marked(
     assert resumed_marks(conn, workspace, dataset, schema, None, "new") == [None, None]
 
 
+def test_a_failed_attempt_record_never_fails_the_job(
+    schema: str, conn: psycopg.Connection, workspace: UUID
+) -> None:
+    job_id = JobQueue(conn).enqueue(workspace, "run", {})
+    # A version the database does not know makes the attempt insert fail.
+    worker = Worker(
+        config(schema, "w1", agent_version="unregistered"), {"run": lambda job, lost: {"ok": 1}}
+    )
+
+    assert worker.run_once()
+
+    assert job(conn, job_id, workspace).status == "succeeded"
+    assert attempts_of(conn, job_id) == []
+
+
+def test_a_failed_resume_mark_never_fails_the_run(
+    schema: str,
+    conn: psycopg.Connection,
+    workspace: UUID,
+    dataset: SqliteDataset,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken(*args: Any) -> None:
+        raise psycopg.OperationalError("the database went away")
+
+    monkeypatch.setattr("da_agent.worker.runs.mark_resumed_from", broken)
+
+    assert resumed_marks(conn, workspace, dataset, schema, "old", "new") == [None, None]
+
+
 def test_a_run_job_gives_the_model_its_memory_after_the_dataset_documents(
     schema: str, conn: psycopg.Connection, workspace: UUID, dataset: SqliteDataset
 ) -> None:

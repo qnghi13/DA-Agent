@@ -25,8 +25,15 @@ Khi điểm tụt hoặc một run sai, câu hỏi "phiên bản nào làm ra k�
   hoa là dữ liệu thuần (prompt, tool spec, tên tool) cộng với văn bản do hàm sinh ra khi không có
   dữ liệu. Sửa comment không đổi phiên bản; thêm một câu vào prompt thì đổi. Git sha lo phần còn
   lại của code ([ADR 0038](../adr/0038-run-manifest.md)).
-- **Cờ `dirty`.** Eval hay chạy trên code chưa commit. Lúc đó sha giống nhau mà kết quả khác, nên
-  manifest ghi thêm `dirty: true` và fingerprint của prompt là thứ phân biệt hai lần chạy.
+- **Cờ `dirty` và hash của phần thay đổi.** Eval hay chạy trên code chưa commit. Lúc đó sha giống
+  nhau mà code khác, nên manifest ghi thêm `dirty: true` và `diff`: hash của `git diff HEAD` cộng
+  các file chưa track. Hai bản code chưa commit khác nhau không bao giờ chung một phiên bản. Bản
+  review đầu tiên chỉ có cờ `dirty` và trông vào fingerprint của prompt, nhưng fingerprint bỏ sót
+  chữ model thấy (thông báo lỗi của verify, bảng viết tắt tiếng Việt), nên reviewer bắt được lỗi.
+- **Git trước, biến môi trường sau.** `DA_AGENT_GIT_SHA` chỉ dùng khi không có checkout (trong
+  image). Nếu để biến này trong `.env` mà nó thắng git, mọi lần chạy local sẽ ghi một sha cũ.
+- **Bản ghi không được làm hỏng việc chính.** Ghi attempt hay đánh dấu chạy tiếp bị lỗi thì chỉ ghi
+  lỗi lên span; job vẫn chạy.
 - **Ghi theo từng attempt, không theo job.** Một job có thể được worker khác nhận lại sau khi
   worker cũ chết, có khi sau một lần deploy. Bảng `job_attempts` có một dòng cho mỗi lần nhận.
 - **Phiên bản nằm trong metadata của checkpoint.** LangGraph chép metadata của config vào mỗi

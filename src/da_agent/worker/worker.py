@@ -20,6 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+import psycopg
 from opentelemetry import trace
 
 from da_agent.storage.db import connect
@@ -92,7 +93,11 @@ class Worker:
                     # Lets an operator open each attempt's trace from the run (ADR 0023).
                     trace_id = trace.format_trace_id(context.trace_id)
                     queue.add_trace(job.id, self.worker_id, trace_id)
-                record_attempt(conn, job.id, job.attempts, self.worker_id, version, trace_id)
+                try:
+                    record_attempt(conn, job.id, job.attempts, self.worker_id, version, trace_id)
+                except psycopg.Error as error:
+                    # A record of which agent ran the job; never a reason to fail the job.
+                    span.record_exception(error)
                 self._process(queue, job)
             return True
 

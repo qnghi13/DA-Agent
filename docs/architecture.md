@@ -104,7 +104,7 @@ browser ─127.0.0.1:8080─> web (nginx: UI files, /v1 proxy)
   registers it in `agent_versions`. Every claim of a job writes a `job_attempts` row with the
   worker, the version, and the trace id, and spans carry `gen_ai.agent.version`. Run checkpoints
   carry the version in their metadata, so a run continued by another version is marked
-  `resumed_from_version`. Eval runs write the same manifest into `metrics.json`.
+  `resumed_from_version`. Eval runs write a manifest of the same form into `metrics.json`.
 
 ## Request flow
 

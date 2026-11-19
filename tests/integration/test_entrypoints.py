@@ -8,6 +8,7 @@ import pytest
 
 from da_agent import admin
 from da_agent.config import Settings
+from da_agent.manifest import code_version
 from da_agent.storage.keys import authenticate
 from da_agent.storage.sessions import create_session, find_session, redeem_login_link
 from da_agent.worker.__main__ import build_worker
@@ -127,7 +128,8 @@ def test_the_worker_registers_its_version(
     rows = conn.execute("SELECT id, manifest FROM agent_versions").fetchall()
     assert [row[0] for row in rows] == [worker.config.agent_version]
     manifest = rows[0][1]
-    assert manifest["code"] == {"sha": "abc", "dirty": None}
+    # In a checkout git names the code; DA_AGENT_GIT_SHA applies only without one, as in images.
+    assert manifest["code"] == code_version(env)
     assert manifest["routes"][0]["model"] == "openai/gpt-oss-20b"
     assert "test-key" not in str(manifest)
 

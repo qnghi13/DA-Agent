@@ -33,7 +33,6 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
 1. v0.1.0 released (ADR 0028); holdout ran once (+44, never rerun). Open: run 97d7bc1f guessed
    an absent `product_id` (audit: a UI guardrail, not a score fix); `\uXXXX` escapes written into
    SQL text (2 runs in all reports).
-
 ## Baselines (Groq `gpt-oss-20b`, before 559f88a): `regression` +53 (93/40/17), holdout +44.
 ## Done
 - ADRs 0001–0038, notes 01–17. Scorer 3000/3000; splits in `eval/splits/splits.json`.
