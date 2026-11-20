@@ -13,7 +13,13 @@ replayed outputs by hand to measure kind coercion.
   provider, model, and whole `LLMRequest`.
 - Recorded outcomes are responses and the errors that depend on the request
   (`InvalidToolCallError`, `PermanentLLMError`). Rate limits and transient errors are network
-  events and are not recorded. The same key replays its outcomes in recorded order.
+  events and are not recorded. Error text is stored with URLs and key-like tokens removed.
+- Eval wraps each question in `replay_scope(question_id)`: lines name the question and attempt, so
+  two questions with the same request keep their own outcomes, and a question retried after a
+  failure replays its latest attempt first (earlier attempts stay behind it for turns only they
+  recorded, as when a checkpointed run resumed). Within one attempt, outcomes replay in order.
+- With several routes, a route whose request a later route has recorded steps aside, so the
+  fallback of the recorded run is followed and no model is called for it.
 - A miss raises `ReplayMissError` (a `PermanentLLMError`) naming the first message where the request
   differs from the closest recorded one of the same route. `--replay-miss live` calls the model
   instead and records the result.
@@ -37,3 +43,7 @@ replayed outputs by hand to measure kind coercion.
 - Money budgets (`max_cost_usd`) do not act as in the recorded run, since replay costs $0. The eval
   uses token budgets, which do.
 - A question that failed on every route when recorded has no outcome and misses on replay.
+- `metrics.json` `replay` counts cover this invocation only; a resumed replay counts only the
+  questions it ran. A miss is counted once per question and request.
+- The key covers every field of `LLMRequest`, `Message`, and `ToolCall`, defaults included, so adding
+  a field invalidates old cassettes; they then miss with "tools or options differ".

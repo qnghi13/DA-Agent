@@ -51,3 +51,6 @@ dist/
 
 # Brainstorming mockups
 .superpowers/
+
+# Record/replay cassettes hold questions and data the model saw (ADR 0039).
+cassette.jsonl

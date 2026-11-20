@@ -13,6 +13,7 @@ from da_agent.llm.replay import (
     ReplayMissError,
     record_routes,
     replay_routes,
+    replay_scope,
     request_key,
 )
 from da_agent.llm.types import (
@@ -203,3 +204,83 @@ def test_strict_replay_with_two_routes_never_calls_a_model(tmp_path: Path) -> No
 
     with pytest.raises(Exception, match="replay miss"):
         LLMClient(routes, CostLedger()).complete(request("q"), run_id="r")
+
+
+def test_live_replay_uses_a_later_routes_recording_before_calling_a_model(tmp_path: Path) -> None:
+    path = tmp_path / "cassette.jsonl"
+    flaky = ScriptedAdapter("groq", [TransientLLMError("down")] * 3)
+    backup = ScriptedAdapter("vllm", [reply("from vllm")])
+    recording = record_routes([Route(flaky, "a"), Route(backup, "b")], path)
+    LLMClient(recording, CostLedger(), sleep=lambda _: None).complete(request("q"), run_id="r")
+
+    cassette = Cassette.load(path)
+    live = ScriptedAdapter("groq", [reply("live groq")])
+    routes = replay_routes([Route(live, "a"), Route(ScriptedAdapter("vllm", []), "b")], cassette)
+    response = LLMClient(routes, CostLedger()).complete(request("q"), run_id="r")
+
+    assert (response.content, live.calls) == ("from vllm", 0)
+    assert (cassette.hits, cassette.misses) == (1, 0)
+
+
+def test_a_miss_on_one_route_answered_by_the_next_is_not_counted(tmp_path: Path) -> None:
+    path = tmp_path / "cassette.jsonl"
+    RecordingAdapter(ScriptedAdapter("vllm", [reply()]), path).complete(request("q"), "b")
+    cassette = Cassette.load(path)
+
+    routes = replay_routes([("groq", "a"), ("vllm", "b")], cassette)
+    LLMClient(routes, CostLedger()).complete(request("q"), run_id="r")
+
+    assert (cassette.hits, cassette.misses, cassette.miss_details) == (1, 0, [])
+
+
+def test_a_retried_question_replays_its_last_attempt_first(tmp_path: Path) -> None:
+    path = tmp_path / "cassette.jsonl"
+    with replay_scope("q1"):
+        RecordingAdapter(ScriptedAdapter("groq", [reply("first try")]), path).complete(
+            request("q"), "m"
+        )
+    with replay_scope("q1"):
+        RecordingAdapter(ScriptedAdapter("groq", [reply("second try")]), path).complete(
+            request("q"), "m"
+        )
+
+    with replay_scope("q1"):
+        assert replayer(path).complete(request("q"), "m").content == "second try"
+
+
+def test_questions_with_the_same_request_keep_their_own_outcomes(tmp_path: Path) -> None:
+    path = tmp_path / "cassette.jsonl"
+    for run, text in (("q1", "one"), ("q2", "two")):
+        with replay_scope(run):
+            RecordingAdapter(ScriptedAdapter("groq", [reply(text)]), path).complete(
+                request("same"), "m"
+            )
+
+    replay = replayer(path)
+    with replay_scope("q2"):
+        assert replay.complete(request("same"), "m").content == "two"
+    with replay_scope("q1"):
+        assert replay.complete(request("same"), "m").content == "one"
+
+
+def test_error_text_is_recorded_without_keys_or_urls(tmp_path: Path) -> None:
+    path = tmp_path / "cassette.jsonl"
+    error = PermanentLLMError(
+        "Incorrect API key provided: sk-proj-abcdefghijklmnopqrstuvwx. "
+        "See https://platform.openai.com/account/api-keys. Consumer api_key:AIzaSyA1234567890abcdef"
+    )
+    with pytest.raises(PermanentLLMError):
+        RecordingAdapter(ScriptedAdapter("groq", [error]), path).complete(request("q"), "m")
+
+    text = path.read_text(encoding="utf-8")
+    for secret in ("sk-proj-abcdefghijklmnopqrstuvwx", "platform.openai.com", "AIzaSyA1234567890"):
+        assert secret not in text
+
+
+def test_a_lone_surrogate_in_tool_arguments_records_and_replays(tmp_path: Path) -> None:
+    path = tmp_path / "cassette.jsonl"
+    odd = LLMResponse(tool_calls=[ToolCall(id="c", name="run_sql", arguments={"sql": "\ud83d"})])
+    req = LLMRequest(messages=[Message(role="assistant", tool_calls=odd.tool_calls)])
+    RecordingAdapter(ScriptedAdapter("groq", [odd]), path).complete(req, "m")
+
+    assert replayer(path).complete(req, "m").tool_calls == odd.tool_calls

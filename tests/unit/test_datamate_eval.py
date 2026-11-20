@@ -9,7 +9,7 @@ import pytest
 
 from da_agent.agent.answer import AgentAnswer, AgentResult
 from da_agent.llm.client import CostLedger, LLMClient, Route
-from da_agent.llm.replay import record_routes
+from da_agent.llm.replay import Cassette, record_routes, replay_routes
 from da_agent.llm.types import LLMRequest, LLMResponse, PermanentLLMError, ToolCall, Usage
 from eval.datamate.adapter import (
     ShopContext,
@@ -957,6 +957,7 @@ def test_a_recorded_run_replays_to_the_same_answers_at_no_cost(
     llm = LLMClient(routes, ledger)
     metrics = run_questions(questions, data_dir, llm, ledger, RunConfig(second, replay=cassette))
 
+    assert {line["run"] for line in read_jsonl(first / "cassette.jsonl")} == {"q1", "q2"}
     assert read_jsonl(second / "submission.jsonl") == read_jsonl(first / "submission.jsonl")
     assert metrics["cost_usd"] == 0
     assert metrics["total_tokens"] == 100
@@ -1000,3 +1001,23 @@ def test_a_replay_cannot_write_into_the_folder_it_reads(tmp_path: Path) -> None:
     (tmp_path / "cassette.jsonl").write_text("", encoding="utf-8")
     with pytest.raises(ValueError, match="another output"):
         eval_routes("groq:m", {}, tmp_path, record=False, replay_dir=tmp_path, replay_miss="stop")
+
+
+def test_a_replay_miss_behind_a_long_error_never_stops_the_run(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    empty = tmp_path / "cassette.jsonl"
+    empty.write_text("", encoding="utf-8")
+    cassette = Cassette.load(empty)
+    long_error = ScriptedAdapter([PermanentLLMError("x" * 600)] * 2)
+    routes = [Route(long_error, "m"), *replay_routes([("vllm", "b")], cassette)]
+    ledger = CostLedger()
+    questions = read_jsonl(data_dir / "questions.jsonl")[:2]
+
+    metrics = run_questions(
+        questions, data_dir, LLMClient(routes, ledger), ledger,
+        RunConfig(tmp_path / "out", replay=cassette, max_consecutive_failures=1),
+    )  # fmt: skip
+
+    assert metrics["stopped"] is None
+    assert metrics["failed"] == ["q1", "q2"]

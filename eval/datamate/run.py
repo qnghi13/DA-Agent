@@ -38,7 +38,7 @@ from da_agent.agent.loop_types import Document
 from da_agent.agent.memory import MemoryNote, memory_documents
 from da_agent.llm.client import CostLedger, LLMClient, Route, RunBudget
 from da_agent.llm.factory import build_routes, parse_route_spec
-from da_agent.llm.replay import Cassette, record_routes, replay_routes
+from da_agent.llm.replay import Cassette, record_routes, replay_routes, replay_scope
 from da_agent.manifest import build_manifest, fingerprint
 from da_agent.reports.html import render_report
 from da_agent.reports.metric import Definition
@@ -398,40 +398,43 @@ class _Run:
                 *_metric_documents(config.metrics[question["business_id"]], id_),
             ]
         started = time.monotonic()
-        if config.agent == "graph":
-            result = run_graph(
-                question["question"],
-                as_of=question["as_of_date"],
-                dataset=shop.dataset,
-                documents=documents,
-                llm=self.llm,
-                run_id=id_,
-                limits=self.limits,
-                checkpointer=self.checkpointer,
-                thread_id=thread_id(config.output_dir, id_),
-                charts=config.reports,
-                agent_version=config.manifest["version"] if config.manifest else None,
-            )
-        else:
-            result = run_agent(
-                question["question"],
-                as_of=question["as_of_date"],
-                dataset=shop.dataset,
-                documents=documents,
-                llm=self.llm,
-                run_id=id_,
-                limits=self.limits,
-            )
+        # Cassette lines name the question and attempt (ADR 0039).
+        with replay_scope(id_):
+            if config.agent == "graph":
+                result = run_graph(
+                    question["question"],
+                    as_of=question["as_of_date"],
+                    dataset=shop.dataset,
+                    documents=documents,
+                    llm=self.llm,
+                    run_id=id_,
+                    limits=self.limits,
+                    checkpointer=self.checkpointer,
+                    thread_id=thread_id(config.output_dir, id_),
+                    charts=config.reports,
+                    agent_version=config.manifest["version"] if config.manifest else None,
+                )
+            else:
+                result = run_agent(
+                    question["question"],
+                    as_of=question["as_of_date"],
+                    dataset=shop.dataset,
+                    documents=documents,
+                    llm=self.llm,
+                    run_id=id_,
+                    limits=self.limits,
+                )
         latency = time.monotonic() - started
         totals = self.ledger.totals(id_)
 
         # A provider failure says nothing about the question, so keep it open for a later run.
         if result.stop_reason == "llm_error":
             with self.lock:
-                self.failed[id_] = (result.error or "unknown provider error")[:MAX_ERROR_CHARS]
+                error = result.error or "unknown provider error"
+                self.failed[id_] = error[:MAX_ERROR_CHARS]
                 self.failed_tokens += totals.total_tokens
                 # A replay miss is a change in what the model is asked, not a provider failure.
-                if REPLAY_MISS not in self.failed[id_]:
+                if REPLAY_MISS not in error:
                     self.consecutive_failures += 1
                 if self.consecutive_failures >= config.max_consecutive_failures:
                     self.stopped = self.stopped or "provider_failures"

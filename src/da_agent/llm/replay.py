@@ -3,13 +3,22 @@
 See docs/design/2026-11-20-record-replay.md and ADR 0039. A cassette is a JSONL file with one line
 per model outcome, keyed by a hash of the provider, model, and whole request. It holds what the
 model saw and said, so it lives with eval reports and is never committed. It never holds keys.
+
+A caller that runs many questions wraps each one in replay_scope(question_id). Lines then name the
+question and the attempt, so two questions with the same request keep their own outcomes, and a
+question retried after a failure replays its latest attempt first.
 """
 
 import hashlib
 import json
+import logging
+import re
 import threading
+import uuid
 from collections import defaultdict, deque
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +32,8 @@ from da_agent.llm.types import (
     PermanentLLMError,
 )
 
+logger = logging.getLogger(__name__)
+
 # Outcomes that depend on the request, so a replay reproduces them. Rate limits, timeouts, and
 # server errors are network events: they are not recorded, and on replay the call succeeds.
 _RECORDED_ERRORS: dict[str, type[PermanentLLMError] | type[InvalidToolCallError]] = {
@@ -33,14 +44,38 @@ _RECORDED_ERRORS: dict[str, type[PermanentLLMError] | type[InvalidToolCallError]
 # One lock for every cassette write in the process, so eval workers never interleave lines.
 _WRITE_LOCK = threading.Lock()
 
+# The question and attempt being run in this thread: (run id, attempt id).
+_SCOPE: ContextVar[tuple[str, str] | None] = ContextVar("replay_scope", default=None)
+
+# Provider error text can echo a masked key or a dashboard URL. Neither is kept.
+_SECRETS = re.compile(
+    r"https?://\S+|\b(?:sk|gsk|pk|rk)[-_][\w\-.*…]+|\bAIza[\w\-]+|[A-Za-z0-9_\-]{32,}"
+)
+
 
 class ReplayMissError(PermanentLLMError):
     """The cassette has no outcome for this request. The agent ends the question with it."""
 
 
+@contextmanager
+def replay_scope(run_id: str) -> Iterator[None]:
+    """Mark the model calls inside as one attempt of one question."""
+    token = _SCOPE.set((run_id, uuid.uuid4().hex))
+    try:
+        yield
+    finally:
+        _SCOPE.reset(token)
+
+
+def _current_run() -> str | None:
+    scope = _SCOPE.get()
+    return scope[0] if scope else None
+
+
 def _hash(value: Any) -> str:
-    text = json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+    # ASCII escapes, so a lone surrogate from a model's "\ud83d" never fails to encode.
+    text = json.dumps(value, sort_keys=True, ensure_ascii=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("ascii")).hexdigest()
 
 
 def request_key(provider: str, model: str, request: LLMRequest) -> str:
@@ -51,10 +86,20 @@ def _message_hashes(messages: Sequence[Message]) -> list[list[str]]:
     return [[message.role, _hash(message.model_dump(mode="json"))[:16]] for message in messages]
 
 
+def _scrub(text: str) -> str:
+    return _SECRETS.sub("<redacted>", text)
+
+
 def _append(path: Path, line: dict[str, Any]) -> None:
-    text = json.dumps(line, ensure_ascii=False) + "\n"
-    with _WRITE_LOCK, path.open("a", encoding="utf-8") as file:
-        file.write(text)
+    """Write one line. A cassette is a record: a failed write is logged, never fails the call."""
+    scope = _SCOPE.get()
+    line = {**line, "run": scope[0] if scope else None, "attempt": scope[1] if scope else None}
+    try:
+        text = json.dumps(line, ensure_ascii=True) + "\n"
+        with _WRITE_LOCK, path.open("a", encoding="utf-8") as file:
+            file.write(text)
+    except (OSError, ValueError) as error:
+        logger.warning("cassette write to %s failed: %s", path, error)
 
 
 def _record(path: Path, provider: str, model: str, request: LLMRequest, outcome: Any) -> None:
@@ -72,7 +117,7 @@ def _record(path: Path, provider: str, model: str, request: LLMRequest, outcome:
     else:
         kind = "invalid_tool_call" if isinstance(outcome, InvalidToolCallError) else "permanent"
         line["outcome"] = kind
-        line["error"] = str(outcome)
+        line["error"] = _scrub(str(outcome))
     _append(path, line)
 
 
@@ -99,15 +144,28 @@ class RecordingAdapter:
 
 
 class Cassette:
-    """The recorded outcomes of one run, served in recorded order per key. Thread-safe."""
+    """The recorded outcomes of a run, served per question and key. Thread-safe.
+
+    For one question and key, outcomes of a later attempt come first, each attempt in recorded
+    order. Earlier attempts stay behind them, for turns that only they recorded (a run resumed
+    from a checkpoint continues where the earlier attempt stopped).
+    """
 
     def __init__(self, lines: list[dict[str, Any]], source: str = "") -> None:
         self.source = source
         self._lock = threading.Lock()
-        self._queues: dict[str, deque[dict[str, Any]]] = defaultdict(deque)
         self._lines = lines
+        rank: dict[Any, int] = {}
         for line in lines:
-            self._queues[line["key"]].append(line)
+            rank.setdefault(line.get("attempt"), len(rank))
+        grouped: dict[tuple[Any, str], list[dict[str, Any]]] = defaultdict(list)
+        for line in lines:
+            grouped[(line.get("run"), line["key"])].append(line)
+        self._queues: dict[tuple[Any, str], deque[dict[str, Any]]] = {
+            slot: deque(sorted(group, key=lambda line: -rank[line.get("attempt")]))
+            for slot, group in grouped.items()
+        }
+        self._missed: set[tuple[Any, str]] = set()
         self.hits = 0
         self.misses = 0
         self.miss_details: list[dict[str, Any]] = []
@@ -124,22 +182,35 @@ class Cassette:
                 lines.append(line)
         return cls(lines, source=str(path))
 
-    def take(self, provider: str, model: str, request: LLMRequest) -> dict[str, Any] | None:
-        """The next recorded outcome for this request, or None after recording the miss."""
-        key = request_key(provider, model, request)
-        with self._lock:
-            queue = self._queues.get(key)
-            if queue:
-                self.hits += 1
-                return queue.popleft()
-            self.misses += 1
-            detail = self._divergence(provider, model, request)
-            self.miss_details.append(detail)
-            return None
+    def _slot(self, provider: str, model: str, request: LLMRequest) -> tuple[Any, str]:
+        return (_current_run(), request_key(provider, model, request))
 
-    def last_miss(self) -> dict[str, Any]:
+    def has(self, provider: str, model: str, request: LLMRequest) -> bool:
+        slot = self._slot(provider, model, request)
         with self._lock:
-            return self.miss_details[-1]
+            return bool(self._queues.get(slot))
+
+    def take(self, provider: str, model: str, request: LLMRequest) -> dict[str, Any] | None:
+        """The next recorded outcome for this request in this question, counted as a hit."""
+        slot = self._slot(provider, model, request)
+        with self._lock:
+            queue = self._queues.get(slot)
+            if not queue:
+                return None
+            self.hits += 1
+            return queue.popleft()
+
+    def miss(self, provider: str, model: str, request: LLMRequest) -> dict[str, Any]:
+        """Count a request no route could answer, once per question and key (retries of a live
+        call repeat it), and say where it differs from the closest recording."""
+        slot = self._slot(provider, model, request)
+        with self._lock:
+            detail = self._divergence(provider, model, request)
+            if slot not in self._missed:
+                self._missed.add(slot)
+                self.misses += 1
+                self.miss_details.append(detail)
+            return detail
 
     def _divergence(self, provider: str, model: str, request: LLMRequest) -> dict[str, Any]:
         """Where this request first differs from the closest recorded one of the same route."""
@@ -157,7 +228,7 @@ class Cassette:
                 common += 1
             if common > best_common:
                 best, best_common = recorded, common
-        detail: dict[str, Any] = {"provider": provider, "model": model}
+        detail: dict[str, Any] = {"run": _current_run(), "provider": provider, "model": model}
         if best is None:
             detail["first_difference"] = None
             detail["reason"] = f"no recorded request for {provider}/{model}"
@@ -165,8 +236,8 @@ class Cassette:
             detail["first_difference"] = None
             detail["reason"] = (
                 "the messages match a recorded request, but tools or options differ, "
+                "or it was called more times than recorded"
             )
-            detail["reason"] += "or it was called more times than recorded"
         else:
             detail["first_difference"] = best_common
             role = hashes[best_common][0] if best_common < len(hashes) else "end"
@@ -182,7 +253,12 @@ def _replayed(line: dict[str, Any]) -> LLMResponse:
 
 class ReplayAdapter:
     """Answers from a cassette. On a miss, raises ReplayMissError, or with a live adapter calls
-    the model and records the outcome to recorder_path."""
+    the model and records the outcome to recorder_path.
+
+    later_routes are the (provider, model) pairs after this one. When one of them has the request
+    recorded, this route steps aside with ReplayMissError, so the client falls back to it as in
+    the recorded run, instead of counting a miss or calling a model.
+    """
 
     def __init__(
         self,
@@ -190,11 +266,13 @@ class ReplayAdapter:
         cassette: Cassette,
         live: LLMAdapter | None = None,
         recorder_path: Path | None = None,
+        later_routes: Sequence[tuple[str, str]] = (),
     ) -> None:
         self.provider = provider
         self._cassette = cassette
         self._live = live
         self._recorder_path = recorder_path
+        self._later_routes = list(later_routes)
 
     @property
     def options(self) -> dict[str, Any]:
@@ -208,9 +286,11 @@ class ReplayAdapter:
             if self._recorder_path is not None:
                 _append(self._recorder_path, line)
             return _replayed(line)
+        if any(self._cassette.has(p, m, request) for p, m in self._later_routes):
+            raise ReplayMissError(f"replay: {self.provider}/{model} failed when recorded")
+        detail = self._cassette.miss(self.provider, model, request)
         if self._live is None:
-            reason = self._cassette.last_miss()["reason"]
-            raise ReplayMissError(f"replay miss for {self.provider}/{model}: {reason}")
+            raise ReplayMissError(f"replay miss for {self.provider}/{model}: {detail['reason']}")
         if self._recorder_path is None:
             return self._live.complete(request, model)
         return RecordingAdapter(self._live, self._recorder_path).complete(request, model)
@@ -230,13 +310,20 @@ def replay_routes(
 ) -> list[Route]:
     """Routes that answer from the cassette. Given (provider, model) pairs, a miss stops the
     question and nothing needs a key. Given real routes, a miss calls that route's model."""
+    pairs = [
+        (route.adapter.provider, route.model) if isinstance(route, Route) else route
+        for route in routes
+    ]
     replay = []
-    for route in routes:
+    for index, route in enumerate(routes):
+        later = pairs[index + 1 :]
         if isinstance(route, Route):
-            adapter = ReplayAdapter(route.adapter.provider, cassette, route.adapter, recorder_path)
+            adapter = ReplayAdapter(
+                route.adapter.provider, cassette, route.adapter, recorder_path, later
+            )
             replay.append(Route(adapter, route.model, route.price))
         else:
             provider, model = route
-            adapter = ReplayAdapter(provider, cassette, recorder_path=recorder_path)
+            adapter = ReplayAdapter(provider, cassette, None, recorder_path, later)
             replay.append(Route(adapter, model, ModelPrice()))
     return replay

@@ -27,7 +27,8 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
    built on a branch and removed (ADR 0037): `gpt-oss-20b` never flagged the ambiguity (4 real
    runs). Users: non-technical first; UI in English.
    Harness track (user, 2026-11-19: learn the parts around the agent, not features). Done: run
-   manifest (ADR 0038, note 17); record/replay (`--record`, `--replay`, ADR 0039, note 18), $0.
+   manifest (ADR 0038, note 17); record/replay (`--record`, `--replay`, ADR 0039, note 18): 3 Groq questions
+   replayed 17/17 with the same answers ($0.012).
    Next: pass^k; circuit breaker, outbound rate limit, idempotent calls on resume; cancel,
    deadline, time travel; feedback to dataset, online eval; alerts and SLOs.
 1. v0.1.0 released (ADR 0028); holdout ran once (+44, never rerun). Open: run 97d7bc1f guessed
@@ -49,7 +50,7 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
 - No rows, questions, rulebook, or answers in any commit or image (organiser rules). When the
   challenge ends: delete `train/`, `eval/reports/`, and Docker volumes with eval data.
 
-## Spend so far: about $2.84 (agent runs $2.25, spec proposals $0.57, demos $0.006).
+## Spend so far: about $2.85 (agent runs $2.26, spec proposals $0.57, demos $0.006).
 
 ## Watch out
 
