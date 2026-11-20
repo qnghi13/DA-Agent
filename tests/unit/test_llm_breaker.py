@@ -92,3 +92,27 @@ def test_only_one_of_many_threads_gets_the_probe() -> None:
         thread.join()
 
     assert results.count(True) == 1
+
+
+def test_a_returned_probe_lets_the_next_caller_probe() -> None:
+    breaker, clock = make(failures=1)
+    breaker.record_failure()
+    clock.now = 30.0
+    assert breaker.allow()
+
+    breaker.release_probe()
+
+    assert breaker.state == "open"
+    assert breaker.allow()
+
+
+def test_a_probe_that_never_reports_back_expires_after_a_cooldown() -> None:
+    breaker, clock = make(failures=1)
+    breaker.record_failure()
+    clock.now = 30.0
+    assert breaker.allow()
+
+    clock.now = 59.9
+    assert not breaker.allow()
+    clock.now = 60.0
+    assert breaker.allow()

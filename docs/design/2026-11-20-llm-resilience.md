@@ -53,8 +53,9 @@ Harness track, step 3 (learning, not score). Today `LLMClient` only reacts:
 - **States:** closed, open, half-open. Defaults: 5 consecutive failed attempts and a 30-second
   cooldown. After the cooldown, exactly one caller gets a probe. A success closes the breaker; a
   failure opens it again.
-- **What counts:** only `RateLimitedError` and `TransientLLMError` attempts. Any success resets
-  the count. Permanent errors, invalid tool calls, and our own throttling never count.
+- **What counts:** only `RateLimitedError` and `TransientLLMError` attempts. Any answer from
+  the provider resets the count, including permanent errors and invalid tool calls; our own
+  throttling never counts.
 - **In `LLMClient`:**
   - A route whose breaker refuses is skipped, with "circuit open" in the failure list and a span
     event.

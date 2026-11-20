@@ -7,3 +7,8 @@ CREATE TABLE rate_buckets (
     updated_at timestamptz NOT NULL,
     PRIMARY KEY (route_key, kind)
 );
+
+-- A call our own limit refused is kept in the ledger with its own kind.
+ALTER TABLE llm_calls DROP CONSTRAINT llm_calls_error_kind_check;
+ALTER TABLE llm_calls ADD CONSTRAINT llm_calls_error_kind_check
+    CHECK (error_kind IN ('rate_limited', 'transient', 'permanent', 'invalid_tool_call', 'throttled'));

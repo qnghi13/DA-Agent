@@ -29,6 +29,7 @@ class CircuitBreaker:
         self._state: State = "closed"
         self._failures = 0
         self._opened_at = 0.0
+        self._probe_at = 0.0
 
     @property
     def state(self) -> State:
@@ -43,9 +44,22 @@ class CircuitBreaker:
             if self._state == "open":
                 if self._clock() - self._opened_at >= self._policy.cooldown_seconds:
                     self._state = "half_open"
+                    self._probe_at = self._clock()
                     return True
                 return False
-            return False  # A probe is already out.
+            # A probe is out. One that never reported back expires after a cooldown.
+            if self._clock() - self._probe_at >= self._policy.cooldown_seconds:
+                self._probe_at = self._clock()
+                return True
+            return False
+
+    def release_probe(self) -> None:
+        """Give back a probe that learned nothing about the provider, such as one our own limit
+        refused: the next caller probes at once."""
+        with self._lock:
+            if self._state == "half_open":
+                self._state = "open"
+                self._opened_at = self._clock() - self._policy.cooldown_seconds
 
     def record_success(self) -> None:
         with self._lock:

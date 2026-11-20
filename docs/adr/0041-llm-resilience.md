@@ -13,16 +13,22 @@ brake, and eval worker threads met it together.
   Any answer from the provider closes it, including permanent errors and invalid tool calls,
   which are the request's fault, not the provider's health. An open route is skipped with a
   `circuit_open` span event; retries stop when the breaker opens; every route open fails at once.
+  A probe that learns nothing (our own limit refused it, or a bug raised) is given back, so the
+  next caller probes; a probe that never reports back expires after one cooldown.
 - **Outbound limits** (`da_agent.llm.ratelimit`), two token buckets per route: requests and tokens
   per minute. A call reserves its estimated tokens (characters / 4 plus its output cap) and
   `settle` replaces them with the real usage. A bucket may go negative, so callers queue in order;
-  a wait above `max_wait` reserves nothing and raises `ThrottledError`, which falls back to the next
-  route, is never retried on the same route, never counts toward the breaker, and is recorded in
-  the ledger as `throttled`.
+  a wait above the route's limit reserves nothing and raises `ThrottledError`, which falls back to
+  the next route, is never retried on the same route, never counts toward the breaker, and is
+  recorded in the ledger as `throttled` (migration 0014 widens `llm_calls.error_kind`). Routes
+  with a fallback wait at most `max_wait` (30 s); the last route waits up to `max_throttle_wait`
+  (300 s), since queueing beats failing the run when nothing is left to fall back to.
 - **Two limiter backends.** Memory, the default and the only one for eval runs. Postgres
   (`rate_buckets`, migration 0014) for worker replicas sharing a key: one transaction locks the
   requests row then the tokens row, refills from the database clock, and rolls back when the wait
-  is too long. A database error lets the call through (fail open) and marks the span.
+  is too long. Its connection gives up within 2 seconds (connect, lock, and statement timeouts).
+  Any limiter error lets the call through (fail open) and marks the span; after a failure the
+  limiter skips the database for 10 seconds instead of reconnecting on every call.
 - **Configuration:** `DA_AGENT_ROUTE_LIMITS` (JSON by route; unset means no limits),
   `DA_AGENT_RATE_LIMITER` (`memory` or `postgres`; Compose uses `postgres`),
   `DA_AGENT_BREAKER_FAILURES`, `DA_AGENT_BREAKER_COOLDOWN_SECONDS`. Strict replays get no limits.
@@ -45,3 +51,9 @@ brake, and eval worker threads met it together.
 - Limits are set by hand from the provider's published quota. Reading `x-ratelimit-*` response
   headers to follow the real remaining quota is a later add-on.
 - Breaker state is lost on restart; the first calls after a restart probe the provider again.
+- A bucket holds one minute's limit, so after an idle minute a burst of `rpm` calls goes out at
+  once and up to twice `rpm` can fall in one 60-second window. A provider that enforces a sliding
+  window may then answer 429, which retries and fallback handle. Set limits below the provider's
+  quota (half of it for a strict sliding window).
+- Any provider answer resets the breaker's failure count, so a provider that alternates 503s with
+  request errors never opens it.

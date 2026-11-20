@@ -111,3 +111,46 @@ def test_concurrent_callers_never_reserve_beyond_the_quota(
 
     assert sum(wait < 0.5 for wait in waits) == 10
     assert max(waits) == pytest.approx(36.0, abs=1.0)
+
+
+def test_any_limiter_error_lets_calls_through() -> None:
+    def broken() -> psycopg.Connection:
+        raise RuntimeError("bad driver")
+
+    limits = PostgresRateLimiter({KEY: RouteLimit(rpm=1)}, connect=broken)
+
+    assert limits.acquire(KEY, 10, max_wait=30) == 0.0
+    limits.settle(KEY, reserved=10, used=5)
+
+
+def test_after_a_failure_the_limiter_waits_before_reconnecting() -> None:
+    attempts: list[float] = []
+    now = [0.0]
+
+    def down() -> psycopg.Connection:
+        attempts.append(now[0])
+        raise psycopg.OperationalError("connection refused")
+
+    limits = PostgresRateLimiter(
+        {KEY: RouteLimit(rpm=1)}, connect=down, clock=lambda: now[0], retry_seconds=10.0
+    )
+    limits.acquire(KEY, 10, max_wait=30)
+    now[0] = 9.9
+    limits.acquire(KEY, 10, max_wait=30)
+    now[0] = 10.0
+    limits.acquire(KEY, 10, max_wait=30)
+
+    assert attempts == [0.0, 10.0]
+
+
+def test_the_limiter_connection_gives_up_quickly(schema: str) -> None:
+    from da_agent.llm.pg_ratelimit import limiter_connection
+
+    assert POSTGRES_URL is not None
+    with limiter_connection(POSTGRES_URL, schema=schema) as conn:
+        settings = {
+            name: conn.execute(f"SHOW {name}").fetchone()[0]  # type: ignore[index]
+            for name in ("statement_timeout", "lock_timeout", "search_path")
+        }
+
+    assert settings == {"statement_timeout": "2s", "lock_timeout": "2s", "search_path": schema}

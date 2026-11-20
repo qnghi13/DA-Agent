@@ -179,6 +179,11 @@ def test_model_call_limits_are_read() -> None:
         ("DA_AGENT_RATE_LIMITER", "redis"),
         ("DA_AGENT_BREAKER_FAILURES", "0"),
         ("DA_AGENT_BREAKER_COOLDOWN_SECONDS", "-1"),
+        ("DA_AGENT_BREAKER_COOLDOWN_SECONDS", "nan"),
+        ("DA_AGENT_BREAKER_COOLDOWN_SECONDS", "inf"),
+        ("DA_AGENT_BREAKER_FAILURES", "inf"),
+        ("DA_AGENT_BREAKER_FAILURES", "1e400"),
+        ("DA_AGENT_BREAKER_FAILURES", "2.5"),
     ],
 )
 def test_bad_model_call_limits_name_the_variable(name: str, value: str) -> None:

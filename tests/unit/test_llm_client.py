@@ -464,3 +464,68 @@ def test_the_span_records_the_throttle_wait() -> None:
 
     (span,) = exporter.get_finished_spans()
     assert span.attributes["llm.throttle_wait_seconds"] == 1.5
+
+
+def test_a_throttled_probe_does_not_leave_the_breaker_half_open() -> None:
+    from da_agent.llm.breaker import BreakerPolicy
+    from da_agent.llm.types import ThrottledError
+
+    now = [0.0]
+    primary = ScriptedAdapter("groq", [TransientLLMError("down"), reply("back")])
+    backup = ScriptedAdapter(
+        "gemini", [reply("backup"), PermanentLLMError("no"), PermanentLLMError("no")]
+    )
+    limiter = FakeLimiter([0.0, 0.0, ThrottledError("busy"), 0.0, 0.0, 0.0])
+    client, _, _ = make_client(
+        primary, backup, max_retries=0, limiter=limiter,
+        breaker_policy=BreakerPolicy(1, 30.0), clock=lambda: now[0],
+    )  # fmt: skip
+    client.complete(REQUEST, run_id="r")  # primary fails and opens, backup answers
+    now[0] = 30.0
+    with pytest.raises(AllRoutesFailedError):
+        client.complete(REQUEST, run_id="r")  # the probe is throttled; no backup reply left
+
+    assert client.complete(REQUEST, run_id="r").content == "back"
+
+
+def test_an_unexpected_error_in_a_probe_does_not_leave_the_breaker_half_open() -> None:
+    from da_agent.llm.breaker import BreakerPolicy
+
+    now = [0.0]
+    primary = ScriptedAdapter("groq", [TransientLLMError("down"), RuntimeError("bug"), reply()])
+    client, _, _ = make_client(
+        primary, max_retries=0, breaker_policy=BreakerPolicy(1, 30.0), clock=lambda: now[0]
+    )
+    with pytest.raises(AllRoutesFailedError):
+        client.complete(REQUEST, run_id="r")
+    now[0] = 30.0
+    with pytest.raises(RuntimeError):
+        client.complete(REQUEST, run_id="r")
+
+    assert client.complete(REQUEST, run_id="r").content == "ok"
+
+
+def test_the_last_route_waits_longer_for_its_limit_instead_of_failing() -> None:
+    from da_agent.llm.ratelimit import MemoryRateLimiter, RouteLimit
+
+    limiter = MemoryRateLimiter({"groq:groq-model": RouteLimit(rpm=1)}, clock=lambda: 0.0)
+    client, _, waits = make_client(
+        ScriptedAdapter("groq", [reply(), reply()]), limiter=limiter, max_throttle_wait=300.0
+    )
+    client.complete(REQUEST, run_id="r")
+
+    client.complete(REQUEST, run_id="r")
+
+    assert waits == [pytest.approx(60.0)]
+
+
+def test_a_route_with_a_fallback_still_falls_back_after_the_short_wait() -> None:
+    from da_agent.llm.ratelimit import MemoryRateLimiter, RouteLimit
+
+    limiter = MemoryRateLimiter({"groq:groq-model": RouteLimit(rpm=1)}, clock=lambda: 0.0)
+    primary = ScriptedAdapter("groq", [reply("primary")])
+    backup = ScriptedAdapter("gemini", [reply("backup")])
+    client, _, _ = make_client(primary, backup, limiter=limiter, max_throttle_wait=300.0)
+    client.complete(REQUEST, run_id="r")
+
+    assert client.complete(REQUEST, run_id="r").content == "backup"

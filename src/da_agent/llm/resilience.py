@@ -8,6 +8,7 @@ Errors are ValueErrors that name the variable.
 """
 
 import json
+import math
 from collections.abc import Callable, Mapping
 from typing import Literal
 
@@ -63,8 +64,8 @@ def _positive(env: Mapping[str, str], name: str, default: float) -> float:
         value = float(raw)
     except ValueError as error:
         raise ValueError(f"{name} must be a number") from error
-    if value <= 0:
-        raise ValueError(f"{name} must be above zero")
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name} must be a finite number above zero")
     return value
 
 

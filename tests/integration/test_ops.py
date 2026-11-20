@@ -263,3 +263,12 @@ def test_long_errors_are_cut(conn: psycopg.Connection, shop: UUID) -> None:
 def test_unknown_windows_are_refused(conn: psycopg.Connection) -> None:
     with pytest.raises(ValueError, match="window"):
         summary(conn, "1y")
+
+
+def test_a_throttled_attempt_is_kept_in_the_ledger(conn: psycopg.Connection, shop: UUID) -> None:
+    first = job(conn, shop, status="succeeded", result=answered())
+    ledger = PostgresCostLedger(conn)
+
+    ledger.record(call(first, "gpt-oss-20b", 0.0, 0.0, error="throttled"))
+
+    assert summary(conn, "24h")["model_errors"]["by_kind"] == {"throttled": 1}

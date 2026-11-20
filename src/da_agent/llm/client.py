@@ -162,6 +162,7 @@ class LLMClient:
         breaker_policy: BreakerPolicy | None = DEFAULT_BREAKER,
         clock: Callable[[], float] = time.monotonic,
         limiter: RateLimiter | None = None,
+        max_throttle_wait: float = 300.0,
     ) -> None:
         if not routes:
             raise ValueError("LLMClient needs at least one route")
@@ -179,6 +180,9 @@ class LLMClient:
         self._record_content = record_content
         # Outbound requests and tokens per minute per route (ADR 0041). None sets no limit.
         self._limiter = limiter
+        # How long the last route waits for its limit. Earlier routes wait only max_wait and then
+        # fall back; the last has nothing to fall back to, so queueing beats failing the run.
+        self._max_throttle_wait = max(max_throttle_wait, max_wait)
 
     def complete(
         self, request: LLMRequest, *, run_id: str, budget: RunBudget | None = None
@@ -190,13 +194,15 @@ class LLMClient:
         """
         self._check_budget(run_id, budget)
         failures: list[str] = []
-        for route, breaker in zip(self._routes, self._breakers, strict=True):
+        for index, (route, breaker) in enumerate(zip(self._routes, self._breakers, strict=True)):
+            last = index == len(self._routes) - 1
+            throttle_wait = self._max_throttle_wait if last else self._max_wait
             if breaker is not None and not breaker.allow():
                 self._skip(route, run_id)
                 failures.append(f"{route.adapter.provider}/{route.model}: circuit open")
                 continue
             try:
-                return self._complete_with_retries(route, breaker, request, run_id)
+                return self._complete_with_retries(route, breaker, request, run_id, throttle_wait)
             except InvalidToolCallError:
                 raise
             except LLMError as error:
@@ -220,14 +226,22 @@ class LLMClient:
             span.add_event("circuit_open")
 
     def _complete_with_retries(
-        self, route: Route, breaker: CircuitBreaker | None, request: LLMRequest, run_id: str
+        self,
+        route: Route,
+        breaker: CircuitBreaker | None,
+        request: LLMRequest,
+        run_id: str,
+        throttle_wait: float,
     ) -> LLMResponse:
         attempt = 0
         while True:
             try:
-                response = self._attempt(route, request, run_id)
+                response = self._attempt(route, request, run_id, throttle_wait)
             except ThrottledError:
-                # Our own limit, not the provider's health: fall back, never retry or count it.
+                # Our own limit, not the provider's health: fall back, never retry or count it. A
+                # half-open probe it stopped learned nothing, so the next caller probes.
+                if breaker is not None:
+                    breaker.release_probe()
                 raise
             except (PermanentLLMError, InvalidToolCallError):
                 # The provider answered: the request or the configuration is at fault, not the
@@ -245,6 +259,11 @@ class LLMClient:
                     raise
                 self._sleep(wait)
                 attempt += 1
+            except Exception:
+                # A bug or an interruption says nothing about the provider either.
+                if breaker is not None:
+                    breaker.release_probe()
+                raise
             else:
                 if breaker is not None:
                     breaker.record_success()
@@ -255,7 +274,9 @@ class LLMClient:
         retry_after = getattr(error, "retry_after", None)
         return retry_after if retry_after is not None else BASE_WAIT_SECONDS * 2**attempt
 
-    def _attempt(self, route: Route, request: LLMRequest, run_id: str) -> LLMResponse:
+    def _attempt(
+        self, route: Route, request: LLMRequest, run_id: str, throttle_wait: float
+    ) -> LLMResponse:
         with self._tracer.start_as_current_span("llm.complete") as span:
             span.set_attribute("openinference.span.kind", "LLM")
             span.set_attribute("llm.provider", route.adapter.provider)
@@ -270,7 +291,7 @@ class LLMClient:
             try:
                 if self._limiter is not None:
                     tokens = estimate_tokens(request)
-                    wait = self._limiter.acquire(key, tokens, self._max_wait)
+                    wait = self._limiter.acquire(key, tokens, throttle_wait)
                     reserved = tokens
                     span.set_attribute("llm.throttle_wait_seconds", wait)
                     if wait > 0:
