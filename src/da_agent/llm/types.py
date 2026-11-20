@@ -52,6 +52,8 @@ class LLMResponse(BaseModel):
     usage: Usage = Field(default_factory=Usage)
     provider: str = ""
     model: str = ""
+    # Served from a recording (da_agent.llm.replay), so it cost nothing.
+    replayed: bool = False
 
 
 class LLMError(Exception):

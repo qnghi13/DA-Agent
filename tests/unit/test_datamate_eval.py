@@ -9,6 +9,7 @@ import pytest
 
 from da_agent.agent.answer import AgentAnswer, AgentResult
 from da_agent.llm.client import CostLedger, LLMClient, Route
+from da_agent.llm.replay import record_routes
 from da_agent.llm.types import LLMRequest, LLMResponse, PermanentLLMError, ToolCall, Usage
 from eval.datamate.adapter import (
     ShopContext,
@@ -20,6 +21,7 @@ from eval.datamate.adapter import (
 )
 from eval.datamate.run import (
     RunConfig,
+    eval_routes,
     load_metrics,
     run_questions,
     score_run,
@@ -934,3 +936,67 @@ def test_a_metric_is_not_shown_to_the_question_it_was_saved_from(
 def test_select_questions_keeps_only_the_given_ids(data_dir: Path, splits: Path) -> None:
     rows = select_questions(data_dir, splits, "good", ids=["q2", "q7"])
     assert [row["id"] for row in rows] == ["q2"]
+
+
+def test_a_recorded_run_replays_to_the_same_answers_at_no_cost(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    questions = read_jsonl(data_dir / "questions.jsonl")[:2]
+    first = tmp_path / "first"
+    first.mkdir()
+    adapter = ScriptedAdapter([answer(1), answer(99)])
+    routes = record_routes([Route(adapter, "m")], first / "cassette.jsonl")
+    ledger = CostLedger()
+    run_questions(questions, data_dir, LLMClient(routes, ledger), ledger, RunConfig(first))
+
+    second = tmp_path / "second"
+    routes, cassette = eval_routes(
+        "fake:m", {}, second, record=False, replay_dir=first, replay_miss="stop"
+    )
+    ledger = CostLedger()
+    llm = LLMClient(routes, ledger)
+    metrics = run_questions(questions, data_dir, llm, ledger, RunConfig(second, replay=cassette))
+
+    assert read_jsonl(second / "submission.jsonl") == read_jsonl(first / "submission.jsonl")
+    assert metrics["cost_usd"] == 0
+    assert metrics["total_tokens"] == 100
+    assert metrics["replay"]["hits"] == 2
+    assert metrics["replay"]["misses"] == 0
+
+
+def test_a_replay_miss_ends_the_question_and_is_counted(data_dir: Path, tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    first.mkdir()
+    (first / "cassette.jsonl").write_text("", encoding="utf-8")
+    routes, cassette = eval_routes(
+        "groq:m", {}, tmp_path / "second", record=False, replay_dir=first, replay_miss="stop"
+    )
+    ledger = CostLedger()
+    questions = read_jsonl(data_dir / "questions.jsonl")[:2]
+
+    metrics = run_questions(
+        questions, data_dir, LLMClient(routes, ledger), ledger,
+        RunConfig(tmp_path / "second", replay=cassette, max_consecutive_failures=1),
+    )  # fmt: skip
+
+    # Misses stay open for a later run, and never stop the run as provider failures would.
+    assert metrics["failed"] == ["q1", "q2"]
+    assert "replay miss" in metrics["failure_details"]["q1"]
+    assert metrics["stopped"] is None
+    assert metrics["replay"]["misses"] == 2
+
+
+def test_recording_writes_a_cassette_in_the_output_folder(tmp_path: Path) -> None:
+    routes, cassette = eval_routes(
+        "groq:m", {"GROQ_API_KEY": "k"}, tmp_path, record=True, replay_dir=None, replay_miss="stop"
+    )
+
+    assert cassette is None
+    assert routes[0].adapter.provider == "groq"
+    assert type(routes[0].adapter).__name__ == "RecordingAdapter"
+
+
+def test_a_replay_cannot_write_into_the_folder_it_reads(tmp_path: Path) -> None:
+    (tmp_path / "cassette.jsonl").write_text("", encoding="utf-8")
+    with pytest.raises(ValueError, match="another output"):
+        eval_routes("groq:m", {}, tmp_path, record=False, replay_dir=tmp_path, replay_miss="stop")

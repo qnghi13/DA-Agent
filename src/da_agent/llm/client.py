@@ -238,7 +238,8 @@ class LLMClient:
             response = response.model_copy(
                 update={"provider": route.adapter.provider, "model": route.model}
             )
-            cost = route.price.cost(response.usage)
+            # A replayed response keeps its tokens, so budgets behave as in the recorded run.
+            cost = 0.0 if response.replayed else route.price.cost(response.usage)
             self._ledger.record(
                 CostRecord(
                     run_id=run_id,

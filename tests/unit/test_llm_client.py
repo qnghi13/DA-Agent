@@ -286,3 +286,15 @@ def test_invalid_tool_call_goes_back_to_the_caller_without_retry_or_fallback() -
     with pytest.raises(InvalidToolCallError):
         client.complete(REQUEST, run_id="r1")
     assert (primary.calls, fallback.calls, waits) == (1, 0, [])
+
+
+def test_a_replayed_response_costs_nothing_but_keeps_its_tokens() -> None:
+    replayed = reply().model_copy(update={"replayed": True})
+    ledger = CostLedger()
+    price = ModelPrice(input_per_million=1.0, output_per_million=2.0)
+    client = LLMClient([Route(ScriptedAdapter("groq", [replayed]), "m", price)], ledger)
+
+    client.complete(REQUEST, run_id="r1")
+
+    totals = ledger.totals("r1")
+    assert (totals.input_tokens, totals.output_tokens, totals.cost_usd) == (100, 50, 0.0)

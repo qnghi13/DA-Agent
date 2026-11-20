@@ -43,3 +43,4 @@ decision, add a new ADR and mark the old one as superseded.
 | [0036](0036-metric-definitions.md) | Metric definitions are saved from an answer's SQL and read as approved memory | Accepted |
 | [0037](0037-alternative-readings-rejected.md) | Other readings of a business word are not offered with the answer | Rejected |
 | [0038](0038-run-manifest.md) | Every job attempt records the agent version that ran it | Accepted |
+| [0039](0039-record-replay.md) | Eval runs can record model outcomes and replay them at no cost | Accepted |

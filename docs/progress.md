@@ -1,6 +1,6 @@
 # Progress
 
-Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-19 (run manifest)
+Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-20 (record/replay)
 **Phase:** optimisation. Challenge rules: ≤15B params in total, offline Docker, 2×5090, 6 h,
 re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for the submission.
 
@@ -27,15 +27,15 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
    built on a branch and removed (ADR 0037): `gpt-oss-20b` never flagged the ambiguity (4 real
    runs). Users: non-technical first; UI in English.
    Harness track (user, 2026-11-19: learn the parts around the agent, not features). Done: run
-   manifest (`feat/run-manifest`, ADR 0038, note 17), $0. Next: record/replay with pass^k; circuit
-   breaker, outbound rate limit, idempotent calls on resume; cancel, deadline, time travel;
-   feedback to dataset, online eval; alerts and SLOs.
+   manifest (ADR 0038, note 17); record/replay (`--record`, `--replay`, ADR 0039, note 18), $0.
+   Next: pass^k; circuit breaker, outbound rate limit, idempotent calls on resume; cancel,
+   deadline, time travel; feedback to dataset, online eval; alerts and SLOs.
 1. v0.1.0 released (ADR 0028); holdout ran once (+44, never rerun). Open: run 97d7bc1f guessed
    an absent `product_id` (audit: a UI guardrail, not a score fix); `\uXXXX` escapes written into
    SQL text (2 runs in all reports).
 ## Baselines (Groq `gpt-oss-20b`, before 559f88a): `regression` +53 (93/40/17), holdout +44.
 ## Done
-- ADRs 0001–0038, notes 01–17. Scorer 3000/3000; splits in `eval/splits/splits.json`.
+- ADRs 0001–0039, notes 01–18. Scorer 3000/3000; splits in `eval/splits/splits.json`.
 - Agent: `LLMClient`, SQL guard, LangGraph with checkpoints and verify, Groq `gpt-oss-20b`.
   Sandbox: all escape tests pass; ingestion and agent SQL run in it (ADRs 0009–0012).
   `datasets-dev/`: 24/24 ok, parse 99.98%+, exclusion precision and recall 100%.

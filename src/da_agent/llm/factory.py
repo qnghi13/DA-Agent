@@ -110,10 +110,18 @@ def build_routes(
     spec: str, env: Mapping[str, str], http_client: httpx2.Client | None = None
 ) -> list[Route]:
     routes = []
+    for provider, model in parse_route_spec(spec):
+        price = PRICES.get((provider, model), ModelPrice())
+        routes.append(Route(_build_adapter(provider, env, http_client), model, price))
+    return routes
+
+
+def parse_route_spec(spec: str) -> list[tuple[str, str]]:
+    """The (provider, model) pairs of a spec such as "groq:openai/gpt-oss-20b,vllm:gemma"."""
+    pairs = []
     for entry in spec.split(","):
         provider, _, model = entry.strip().partition(":")
         if not provider or not model:
             raise ValueError(f"route {entry!r} must look like provider:model")
-        price = PRICES.get((provider, model), ModelPrice())
-        routes.append(Route(_build_adapter(provider, env, http_client), model, price))
-    return routes
+        pairs.append((provider, model))
+    return pairs

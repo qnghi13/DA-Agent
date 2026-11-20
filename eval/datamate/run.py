@@ -22,7 +22,7 @@ import sys
 import threading
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import asdict, dataclass, field
@@ -37,7 +37,8 @@ from da_agent.agent.loop import AgentLimits, run_agent
 from da_agent.agent.loop_types import Document
 from da_agent.agent.memory import MemoryNote, memory_documents
 from da_agent.llm.client import CostLedger, LLMClient, Route, RunBudget
-from da_agent.llm.factory import build_routes
+from da_agent.llm.factory import build_routes, parse_route_spec
+from da_agent.llm.replay import Cassette, record_routes, replay_routes
 from da_agent.manifest import build_manifest, fingerprint
 from da_agent.reports.html import render_report
 from da_agent.reports.metric import Definition
@@ -55,6 +56,8 @@ from eval.splits.make_splits import HOLDOUT_SET, holdout_question_ids
 
 DEFAULT_SPLITS = Path("eval/splits/splits.json")
 MAX_ERROR_CHARS = 500
+MAX_MISS_DETAILS = 20
+REPLAY_MISS = "replay miss"
 
 
 @dataclass(frozen=True)
@@ -76,6 +79,40 @@ class RunConfig:
     metrics: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     # The agent manifest (ADR 0038), written into metrics.json so results name their version.
     manifest: dict[str, Any] | None = None
+    # The cassette a replay run reads (ADR 0039); its hits and misses go into metrics.json.
+    replay: Cassette | None = None
+
+
+CASSETTE = "cassette.jsonl"
+
+
+def eval_routes(
+    spec: str,
+    env: Mapping[str, str],
+    output_dir: Path,
+    *,
+    record: bool,
+    replay_dir: Path | None,
+    replay_miss: Literal["stop", "live"],
+) -> tuple[list[Route], Cassette | None]:
+    """The model routes of a run, and the cassette it replays (ADR 0039).
+
+    Recording writes every model outcome to output_dir/cassette.jsonl. A replay answers from
+    replay_dir/cassette.jsonl: a miss stops the question and no key is needed, or with live it calls
+    the model, and the whole new cassette, replayed and live, goes to output_dir."""
+    if replay_dir is None:
+        routes = build_routes(spec, env)
+        return (record_routes(routes, output_dir / CASSETTE) if record else routes), None
+    if replay_dir.resolve() == output_dir.resolve():
+        raise ValueError("a replay must write to another output folder than the one it reads")
+    cassette = Cassette.load(replay_dir / CASSETTE)
+    if replay_miss == "live":
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return replay_routes(build_routes(spec, env), cassette, output_dir / CASSETTE), cassette
+    recorder = output_dir / CASSETTE if record else None
+    if recorder is not None:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    return replay_routes(parse_route_spec(spec), cassette, recorder), cassette
 
 
 def eval_manifest(args: argparse.Namespace, routes: list[Route]) -> dict[str, Any]:
@@ -277,6 +314,13 @@ def run_questions(
     metrics["workers"] = config.workers
     if config.manifest is not None:
         metrics["manifest"] = config.manifest
+    if config.replay is not None:
+        metrics["replay"] = {
+            "source": config.replay.source,
+            "hits": config.replay.hits,
+            "misses": config.replay.misses,
+            "miss_details": config.replay.miss_details[:MAX_MISS_DETAILS],
+        }
     metrics["wall_seconds"] = wall_seconds
     (config.output_dir / "metrics.json").write_text(
         json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8"
@@ -386,7 +430,9 @@ class _Run:
             with self.lock:
                 self.failed[id_] = (result.error or "unknown provider error")[:MAX_ERROR_CHARS]
                 self.failed_tokens += totals.total_tokens
-                self.consecutive_failures += 1
+                # A replay miss is a change in what the model is asked, not a provider failure.
+                if REPLAY_MISS not in self.failed[id_]:
+                    self.consecutive_failures += 1
                 if self.consecutive_failures >= config.max_consecutive_failures:
                     self.stopped = self.stopped or "provider_failures"
             return
@@ -517,6 +563,21 @@ def main() -> int:
         action="store_true",
         help="graph agent: offer charts, write reports/<id>.html; not comparable with baselines",
     )
+    parser.add_argument(
+        "--record", action="store_true", help="write every model outcome to cassette.jsonl"
+    )
+    parser.add_argument(
+        "--replay",
+        type=Path,
+        metavar="RUN_DIR",
+        help="answer from RUN_DIR/cassette.jsonl instead of the model, at no cost",
+    )
+    parser.add_argument(
+        "--replay-miss",
+        choices=["stop", "live"],
+        default="stop",
+        help="a request not in the cassette: stop the question, or call the model (costs money)",
+    )
     args = parser.parse_args()
 
     provider = None
@@ -525,7 +586,10 @@ def main() -> int:
     try:
         args.output_dir.mkdir(parents=True, exist_ok=True)
         ledger = CostLedger(args.output_dir / "ledger.jsonl")
-        routes = build_routes(args.routes, os.environ)
+        routes, cassette = eval_routes(
+            args.routes, os.environ, args.output_dir, record=args.record,
+            replay_dir=args.replay, replay_miss=args.replay_miss,
+        )  # fmt: skip
         llm = LLMClient(routes, ledger, record_content=args.record_content)
         manifest = eval_manifest(args, routes)
         print(f"agent {manifest['version']}", flush=True)
@@ -551,6 +615,7 @@ def main() -> int:
                 else {}
             ),
             manifest=manifest,
+            replay=cassette,
         )
         opener = None
         if args.datasets_dir:

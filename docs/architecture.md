@@ -105,6 +105,11 @@ browser ─127.0.0.1:8080─> web (nginx: UI files, /v1 proxy)
   worker, the version, and the trace id, and spans carry `gen_ai.agent.version`. Run checkpoints
   carry the version in their metadata, so a run continued by another version is marked
   `resumed_from_version`. Eval runs write a manifest of the same form into `metrics.json`.
+- **Record and replay** ([ADR 0039](adr/0039-record-replay.md)): `da_agent.llm.replay` wraps
+  adapters. An eval run with `--record` writes each model outcome to a JSONL cassette keyed by a
+  hash of the request; `--replay` answers from it at $0, so changes after the model are measured
+  without model noise. A request not in the cassette stops the question and names the first message
+  that differs. Only eval wires it; cassettes stay in gitignored reports.
 
 ## Request flow
 
