@@ -1021,3 +1021,27 @@ def test_a_replay_miss_behind_a_long_error_never_stops_the_run(
 
     assert metrics["stopped"] is None
     assert metrics["failed"] == ["q1", "q2"]
+
+
+def test_the_eval_client_limits_calls_from_the_environment_unless_replaying() -> None:
+    from eval.datamate.run import eval_client
+
+    env = {"DA_AGENT_ROUTE_LIMITS": '{"fake:m": {"rpm": 5}}', "DA_AGENT_BREAKER_FAILURES": "2"}
+    routes = [Route(ScriptedAdapter([]), "m")]
+
+    live = eval_client(routes, CostLedger(), env, record_content=False, replaying=False)
+    replay = eval_client(routes, CostLedger(), env, record_content=False, replaying=True)
+    plain = eval_client(routes, CostLedger(), {}, record_content=False, replaying=False)
+
+    assert type(live._limiter).__name__ == "MemoryRateLimiter"
+    assert replay._limiter is None
+    assert plain._limiter is None
+    assert live._breakers[0]._policy.failures == 2
+
+
+def test_bad_eval_limits_are_refused(tmp_path: Path) -> None:
+    from eval.datamate.run import eval_client
+
+    with pytest.raises(ValueError, match="DA_AGENT_ROUTE_LIMITS"):
+        eval_client([], CostLedger(), {"DA_AGENT_ROUTE_LIMITS": "{"}, record_content=False,
+                    replaying=False)  # fmt: skip

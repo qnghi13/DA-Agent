@@ -39,6 +39,7 @@ from da_agent.agent.memory import MemoryNote, memory_documents
 from da_agent.llm.client import CostLedger, LLMClient, Route, RunBudget
 from da_agent.llm.factory import build_routes, parse_route_spec
 from da_agent.llm.replay import Cassette, record_routes, replay_routes, replay_scope
+from da_agent.llm.resilience import breaker_from_env, build_limiter, route_limits_from_env
 from da_agent.manifest import build_manifest, fingerprint
 from da_agent.reports.html import render_report
 from da_agent.reports.metric import Definition
@@ -84,6 +85,23 @@ class RunConfig:
 
 
 CASSETTE = "cassette.jsonl"
+
+
+def eval_client(
+    routes: list[Route],
+    ledger: CostLedger,
+    env: Mapping[str, str],
+    *,
+    record_content: bool,
+    replaying: bool,
+) -> LLMClient:
+    """The model client of a run, with the breaker and outbound limits the environment sets
+    (ADR 0041). Limits stay in this process, and a strict replay calls no model, so it has none."""
+    limits = {} if replaying else route_limits_from_env(env)
+    return LLMClient(
+        routes, ledger, record_content=record_content, breaker_policy=breaker_from_env(env),
+        limiter=build_limiter("memory", limits),
+    )  # fmt: skip
 
 
 def eval_routes(
@@ -593,7 +611,10 @@ def main() -> int:
             args.routes, os.environ, args.output_dir, record=args.record,
             replay_dir=args.replay, replay_miss=args.replay_miss,
         )  # fmt: skip
-        llm = LLMClient(routes, ledger, record_content=args.record_content)
+        llm = eval_client(
+            routes, ledger, os.environ, record_content=args.record_content,
+            replaying=args.replay is not None and args.replay_miss == "stop",
+        )  # fmt: skip
         manifest = eval_manifest(args, routes)
         print(f"agent {manifest['version']}", flush=True)
         if args.all_questions:

@@ -19,6 +19,7 @@ from da_agent.agent.loop_types import AgentLimits
 from da_agent.config import ConfigError, Settings
 from da_agent.llm.client import LLMClient
 from da_agent.llm.factory import build_routes
+from da_agent.llm.resilience import build_limiter
 from da_agent.manifest import build_manifest
 from da_agent.runner.client import RunnerClient
 from da_agent.runner.runner import Runner, RunnerConfig, SandboxRunner
@@ -67,7 +68,14 @@ def build_worker(
         )
     conn = ledger_conn or connect(settings.database_url, schema=settings.schema)
     routes = build_routes(settings.routes, env)
-    llm = LLMClient(routes, PostgresCostLedger(conn))
+    # The breaker stays in this process; limits are shared through Postgres when configured.
+    limiter = build_limiter(
+        settings.rate_limiter, settings.route_limits,
+        connect=lambda: connect(settings.database_url, schema=settings.schema),
+    )  # fmt: skip
+    llm = LLMClient(
+        routes, PostgresCostLedger(conn), breaker_policy=settings.breaker_policy, limiter=limiter
+    )
     # Which agent this worker runs, recorded on every attempt (ADR 0038).
     limits = {
         "agent": asdict(AgentLimits()), "daily_usd": settings.daily_budget_usd,

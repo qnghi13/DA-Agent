@@ -66,6 +66,11 @@ class RateLimitedError(LLMError):
         self.retry_after = retry_after
 
 
+class ThrottledError(RateLimitedError):
+    """Our own outbound limit refused the call before it went out (ADR 0041). The client falls back
+    to the next route; it never counts toward a circuit breaker."""
+
+
 class TransientLLMError(LLMError):
     """A timeout, connection failure, or server error that may pass on retry."""
 

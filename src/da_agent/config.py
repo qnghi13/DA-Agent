@@ -28,13 +28,33 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from da_agent.llm.breaker import BreakerPolicy
+from da_agent.llm.ratelimit import RouteLimit
+from da_agent.llm.resilience import (
+    LimiterKind,
+    breaker_from_env,
+    limiter_kind_from_env,
+    route_limits_from_env,
+)
 
 if TYPE_CHECKING:
     from da_agent.runner.runner import RunnerConfig
 
 MIN_TOKEN_CHARS = 32
 DEFAULT_SANDBOX_USER = "65534:65534"
+
+
+def _resilience(env: Mapping[str, str]) -> dict[str, Any]:
+    try:
+        return {
+            "route_limits": route_limits_from_env(env),
+            "rate_limiter": limiter_kind_from_env(env),
+            "breaker_policy": breaker_from_env(env),
+        }
+    except ValueError as error:
+        raise ConfigError(str(error)) from error
 
 
 class ConfigError(ValueError):
@@ -101,6 +121,10 @@ class Settings:
     runner_url: str | None = None
     runner_token: str | None = field(default=None, repr=False)
     sandbox_user: str = DEFAULT_SANDBOX_USER
+    # Model call resilience (ADR 0041): limits by route, where they are kept, and the breaker.
+    route_limits: dict[str, RouteLimit] = field(default_factory=dict)
+    rate_limiter: LimiterKind = "memory"
+    breaker_policy: BreakerPolicy = field(default_factory=BreakerPolicy)
     # For tests: confine every query to one Postgres schema.
     schema: str | None = None
 
@@ -136,6 +160,7 @@ class Settings:
             runner_url=(runner_url := _http_url(env, "DA_AGENT_RUNNER_URL")),
             runner_token=_token(env, "DA_AGENT_RUNNER_TOKEN") if runner_url else None,
             sandbox_user=_sandbox_user(env),
+            **_resilience(env),
             schema=schema,
         )
 

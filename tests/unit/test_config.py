@@ -137,3 +137,50 @@ def test_the_runner_service_needs_no_database_or_provider_keys() -> None:
 def test_bad_runner_service_settings_name_the_variable(env: dict[str, str], message: str) -> None:
     with pytest.raises(ConfigError, match=message):
         RunnerSettings.from_env(env)
+
+
+def test_model_call_limits_are_off_by_default() -> None:
+    from da_agent.llm.breaker import BreakerPolicy
+
+    settings = Settings.from_env(REQUIRED)
+
+    assert settings.route_limits == {}
+    assert settings.rate_limiter == "memory"
+    assert settings.breaker_policy == BreakerPolicy()
+
+
+def test_model_call_limits_are_read() -> None:
+    from da_agent.llm.breaker import BreakerPolicy
+    from da_agent.llm.ratelimit import RouteLimit
+
+    env = REQUIRED | {
+        "DA_AGENT_ROUTE_LIMITS": '{"groq:openai/gpt-oss-20b": {"rpm": 30, "tpm": 8000}}',
+        "DA_AGENT_RATE_LIMITER": "postgres",
+        "DA_AGENT_BREAKER_FAILURES": "3",
+        "DA_AGENT_BREAKER_COOLDOWN_SECONDS": "12.5",
+    }
+
+    settings = Settings.from_env(env)
+
+    assert settings.route_limits == {"groq:openai/gpt-oss-20b": RouteLimit(rpm=30, tpm=8000)}
+    assert settings.rate_limiter == "postgres"
+    assert settings.breaker_policy == BreakerPolicy(failures=3, cooldown_seconds=12.5)
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("DA_AGENT_ROUTE_LIMITS", "{not json"),
+        ("DA_AGENT_ROUTE_LIMITS", '["groq:m"]'),
+        ("DA_AGENT_ROUTE_LIMITS", '{"groq:m": {"rps": 3}}'),
+        ("DA_AGENT_ROUTE_LIMITS", '{"groq:m": {"rpm": 0}}'),
+        ("DA_AGENT_ROUTE_LIMITS", '{"groq:m": {"tpm": "many"}}'),
+        ("DA_AGENT_ROUTE_LIMITS", '{"groq": {"rpm": 3}}'),
+        ("DA_AGENT_RATE_LIMITER", "redis"),
+        ("DA_AGENT_BREAKER_FAILURES", "0"),
+        ("DA_AGENT_BREAKER_COOLDOWN_SECONDS", "-1"),
+    ],
+)
+def test_bad_model_call_limits_name_the_variable(name: str, value: str) -> None:
+    with pytest.raises(ConfigError, match=name):
+        Settings.from_env(REQUIRED | {name: value})

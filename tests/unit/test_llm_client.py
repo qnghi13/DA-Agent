@@ -298,3 +298,169 @@ def test_a_replayed_response_costs_nothing_but_keeps_its_tokens() -> None:
 
     totals = ledger.totals("r1")
     assert (totals.input_tokens, totals.output_tokens, totals.cost_usd) == (100, 50, 0.0)
+
+
+def test_an_open_breaker_skips_its_route_without_calling_or_waiting() -> None:
+    from da_agent.llm.breaker import BreakerPolicy
+
+    primary = ScriptedAdapter("groq", [TransientLLMError("down")] * 4)
+    backup = ScriptedAdapter("gemini", [reply("one"), reply("two"), reply("three")])
+    client, _, waits = make_client(
+        primary, backup, max_retries=1, breaker_policy=BreakerPolicy(failures=4)
+    )
+    client.complete(REQUEST, run_id="r")
+    client.complete(REQUEST, run_id="r")
+    calls, slept = primary.calls, len(waits)
+
+    response = client.complete(REQUEST, run_id="r")
+
+    assert response.content == "three"
+    assert (primary.calls, len(waits)) == (calls, slept)
+
+
+def test_every_route_open_fails_at_once() -> None:
+    from da_agent.llm.breaker import BreakerPolicy
+
+    primary = ScriptedAdapter("groq", [TransientLLMError("down")])
+    client, _, _ = make_client(primary, max_retries=0, breaker_policy=BreakerPolicy(failures=1))
+    with pytest.raises(AllRoutesFailedError):
+        client.complete(REQUEST, run_id="r")
+
+    with pytest.raises(AllRoutesFailedError, match="circuit open"):
+        client.complete(REQUEST, run_id="r")
+    assert primary.calls == 1
+
+
+def test_retries_stop_when_the_breaker_opens() -> None:
+    from da_agent.llm.breaker import BreakerPolicy
+
+    primary = ScriptedAdapter("groq", [TransientLLMError("down")] * 6)
+    client, _, _ = make_client(primary, max_retries=5, breaker_policy=BreakerPolicy(failures=2))
+
+    with pytest.raises(AllRoutesFailedError):
+        client.complete(REQUEST, run_id="r")
+
+    assert primary.calls == 2
+
+
+def test_model_mistakes_and_permanent_errors_never_open_the_breaker() -> None:
+    from da_agent.llm.breaker import BreakerPolicy
+
+    script = [InvalidToolCallError("bad"), PermanentLLMError("413")] * 3 + [reply("ok")]
+    primary = ScriptedAdapter("groq", script)
+    client, _, _ = make_client(primary, breaker_policy=BreakerPolicy(failures=1))
+    for _ in range(6):
+        with pytest.raises((InvalidToolCallError, AllRoutesFailedError)):
+            client.complete(REQUEST, run_id="r")
+
+    assert client.complete(REQUEST, run_id="r").content == "ok"
+
+
+def test_a_skipped_route_leaves_a_span_event() -> None:
+    from da_agent.llm.breaker import BreakerPolicy
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    primary = ScriptedAdapter("groq", [TransientLLMError("down")])
+    backup = ScriptedAdapter("gemini", [reply(), reply()])
+    client, _, _ = make_client(
+        primary, backup, max_retries=0, breaker_policy=BreakerPolicy(failures=1),
+        tracer=provider.get_tracer("t"),
+    )  # fmt: skip
+    client.complete(REQUEST, run_id="r")
+
+    client.complete(REQUEST, run_id="r")
+
+    events = [event.name for span in exporter.get_finished_spans() for event in span.events]
+    assert "circuit_open" in events
+
+
+def test_a_probe_answered_with_a_request_error_closes_the_breaker() -> None:
+    from da_agent.llm.breaker import BreakerPolicy
+
+    now = [0.0]
+    primary = ScriptedAdapter(
+        "groq", [TransientLLMError("down"), PermanentLLMError("413"), reply()]
+    )
+    client, _, _ = make_client(
+        primary, max_retries=0, breaker_policy=BreakerPolicy(1, 30.0), clock=lambda: now[0]
+    )
+    with pytest.raises(AllRoutesFailedError):
+        client.complete(REQUEST, run_id="r")
+    now[0] = 30.0
+    with pytest.raises(AllRoutesFailedError, match="413"):
+        client.complete(REQUEST, run_id="r")
+
+    assert client.complete(REQUEST, run_id="r").content == "ok"
+
+
+class FakeLimiter:
+    def __init__(self, waits: list) -> None:
+        self.waits = list(waits)
+        self.acquired: list[tuple[str, int]] = []
+        self.settled: list[tuple[str, int, int]] = []
+
+    def acquire(self, route_key: str, tokens: int, max_wait: float) -> float:
+        self.acquired.append((route_key, tokens))
+        step = self.waits.pop(0)
+        if isinstance(step, Exception):
+            raise step
+        return step
+
+    def settle(self, route_key: str, reserved: int, used: int) -> None:
+        self.settled.append((route_key, reserved, used))
+
+
+def test_the_client_waits_as_the_limiter_says_then_settles_real_usage() -> None:
+    limiter = FakeLimiter([2.5])
+    client, _, waits = make_client(ScriptedAdapter("groq", [reply()]), limiter=limiter)
+
+    client.complete(REQUEST, run_id="r")
+
+    assert waits == [2.5]
+    ((key, reserved),) = limiter.acquired
+    assert key == "groq:groq-model"
+    assert limiter.settled == [("groq:groq-model", reserved, 150)]
+
+
+def test_a_throttled_route_falls_back_without_touching_its_breaker() -> None:
+    from da_agent.llm.breaker import BreakerPolicy
+    from da_agent.llm.types import ThrottledError
+
+    limiter = FakeLimiter([ThrottledError("busy"), 0.0, ThrottledError("busy"), 0.0, 0.0])
+    primary = ScriptedAdapter("groq", [reply("primary")])
+    backup = ScriptedAdapter("gemini", [reply("backup"), reply("backup")])
+    client, ledger, _ = make_client(
+        primary, backup, limiter=limiter, breaker_policy=BreakerPolicy(failures=1)
+    )
+
+    assert client.complete(REQUEST, run_id="r").content == "backup"
+    assert client.complete(REQUEST, run_id="r").content == "backup"
+    assert client.complete(REQUEST, run_id="r").content == "primary"
+    assert [r.error for r in ledger.records()].count("throttled") == 2
+
+
+def test_a_failed_call_settles_to_zero() -> None:
+    limiter = FakeLimiter([0.0])
+    client, _, _ = make_client(ScriptedAdapter("groq", [PermanentLLMError("no")]), limiter=limiter)
+    with pytest.raises(AllRoutesFailedError):
+        client.complete(REQUEST, run_id="r")
+
+    ((_, reserved, used),) = limiter.settled
+    assert used == 0 and reserved > 0
+
+
+def test_the_span_records_the_throttle_wait() -> None:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    client, _, _ = make_client(
+        ScriptedAdapter("groq", [reply()]), limiter=FakeLimiter([1.5]),
+        tracer=provider.get_tracer("t"),
+    )  # fmt: skip
+
+    client.complete(REQUEST, run_id="r")
+
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes["llm.throttle_wait_seconds"] == 1.5

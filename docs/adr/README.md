@@ -45,3 +45,4 @@ decision, add a new ADR and mark the old one as superseded.
 | [0038](0038-run-manifest.md) | Every job attempt records the agent version that ran it | Accepted |
 | [0039](0039-record-replay.md) | Eval runs can record model outcomes and replay them at no cost | Accepted |
 | [0040](0040-pass-k.md) | pass^k measures how stable eval answers are across runs | Accepted |
+| [0041](0041-llm-resilience.md) | A circuit breaker per process and outbound limits per route for model calls | Accepted |

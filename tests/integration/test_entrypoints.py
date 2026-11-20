@@ -164,3 +164,32 @@ def test_the_run_handler_stamps_the_worker_version(
     worker = build_worker(settings(tmp_path, schema, **ROUTES), ROUTES, ledger_conn=conn)
 
     assert worker.handlers["run"].agent_version == worker.config.agent_version  # type: ignore[attr-defined]
+
+
+def test_the_worker_shares_limits_through_postgres_when_configured(
+    tmp_path: Path, schema: str, conn: psycopg.Connection
+) -> None:
+    env = {
+        "DA_AGENT_ROUTES": "groq:openai/gpt-oss-20b", "GROQ_API_KEY": "test-key",
+        "DA_AGENT_ROUTE_LIMITS": '{"groq:openai/gpt-oss-20b": {"rpm": 30}}',
+        "DA_AGENT_RATE_LIMITER": "postgres",
+    }  # fmt: skip
+
+    worker = build_worker(settings(tmp_path, schema, **env), env)
+
+    llm = worker.handlers["run"].llm  # type: ignore[attr-defined]
+    assert type(llm._limiter).__name__ == "PostgresRateLimiter"
+
+
+def test_the_worker_limits_in_memory_by_default(
+    tmp_path: Path, schema: str, conn: psycopg.Connection
+) -> None:
+    env = {
+        "DA_AGENT_ROUTES": "groq:openai/gpt-oss-20b", "GROQ_API_KEY": "test-key",
+        "DA_AGENT_ROUTE_LIMITS": '{"groq:openai/gpt-oss-20b": {"rpm": 30}}',
+    }  # fmt: skip
+
+    worker = build_worker(settings(tmp_path, schema, **env), env)
+
+    llm = worker.handlers["run"].llm  # type: ignore[attr-defined]
+    assert type(llm._limiter).__name__ == "MemoryRateLimiter"

@@ -32,7 +32,7 @@ checkpointer, DuckDB, sqlglot, Vega-Lite, React + Vite + TypeScript.
 | Web (React) | Upload, spec approval, chat, chart and trace views | Hold provider keys, or render model output as trusted HTML |
 | API (FastAPI) | Auth, workspace scoping, enqueueing jobs, SSE, rate limits | Run generated code or call LLMs in request handlers |
 | Worker | Claiming jobs, ingestion pipeline, running the graph | Run generated code, or hold the Docker socket |
-| LLMClient | Provider calls, retries, fallback, caching, cost records | Be bypassed: nodes never call provider SDKs directly |
+| LLMClient | Provider calls, retries, fallback, circuit breakers, outbound limits, caching, cost records | Be bypassed: nodes never call provider SDKs directly |
 | Runner | Starting sandboxes, enforcing limits, returning bounded results | Accept anything other than a run request for a known dataset |
 | Sandbox | Running one SQL query or Python snippet | Have network access, secrets, other datasets, or eval answers |
 | Postgres | Jobs, checkpoints, datasets, audit log, cost ledger | Store large results: those are artifacts on the volume |
@@ -47,7 +47,7 @@ checkpointer, DuckDB, sqlglot, Vega-Lite, React + Vite + TypeScript.
 | `src/da_agent/runner/` | Runner service and sandbox lifecycle |
 | `src/da_agent/agent/` | Graph, nodes, state, tools, verification |
 | `src/da_agent/ingestion/` | Readers, table detection, profiling, `DatasetSpec`, loader |
-| `src/da_agent/llm/` | `LLMClient`, provider adapters, price table |
+| `src/da_agent/llm/` | `LLMClient`, provider adapters, price table, breaker, rate limiters, replay |
 | `src/da_agent/reports/` | Standalone HTML reports of a run; plain explanations of its SQL |
 | `src/da_agent/storage/` | Postgres access and the artifact store |
 | `src/da_agent/security/` | SQL guard and masking |
@@ -110,6 +110,10 @@ browser ─127.0.0.1:8080─> web (nginx: UI files, /v1 proxy)
   hash of the request; `--replay` answers from it at $0, so changes after the model are measured
   without model noise. A request not in the cassette stops the question and names the first message
   that differs. Only eval wires it; cassettes stay in gitignored reports.
+- **Model call resilience** ([ADR 0041](adr/0041-llm-resilience.md)): each process keeps a
+  circuit breaker per route, so a failing provider is skipped for a cooldown instead of retried
+  by every request. Outbound requests and tokens per minute per route are limited before a call,
+  in memory or, for worker replicas sharing a key, in Postgres `rate_buckets` (fail open).
 
 ## Request flow
 

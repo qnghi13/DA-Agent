@@ -13,6 +13,8 @@ from pathlib import Path
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode, Tracer
 
+from da_agent.llm.breaker import BreakerPolicy, CircuitBreaker
+from da_agent.llm.ratelimit import RateLimiter, estimate_tokens, route_key
 from da_agent.llm.types import (
     AllRoutesFailedError,
     BudgetExceededError,
@@ -23,11 +25,13 @@ from da_agent.llm.types import (
     LLMResponse,
     PermanentLLMError,
     RateLimitedError,
+    ThrottledError,
     TransientLLMError,
     Usage,
 )
 
 BASE_WAIT_SECONDS = 1.0
+DEFAULT_BREAKER = BreakerPolicy()
 
 
 @dataclass(frozen=True)
@@ -83,6 +87,8 @@ class CostRecord:
 
 
 def error_kind(error: LLMError) -> str:
+    if isinstance(error, ThrottledError):
+        return "throttled"
     if isinstance(error, RateLimitedError):
         return "rate_limited"
     if isinstance(error, TransientLLMError):
@@ -153,16 +159,26 @@ class LLMClient:
         sleep: Callable[[float], None] = time.sleep,
         tracer: Tracer | None = None,
         record_content: bool = False,
+        breaker_policy: BreakerPolicy | None = DEFAULT_BREAKER,
+        clock: Callable[[], float] = time.monotonic,
+        limiter: RateLimiter | None = None,
     ) -> None:
         if not routes:
             raise ValueError("LLMClient needs at least one route")
         self._routes = list(routes)
+        # One breaker per route, in this process (ADR 0041). None turns them off.
+        self._breakers = [
+            CircuitBreaker(breaker_policy, clock) if breaker_policy is not None else None
+            for _ in self._routes
+        ]
         self._ledger = ledger
         self._max_retries = max_retries
         self._max_wait = max_wait
         self._sleep = sleep
         self._tracer = tracer or trace.get_tracer("da_agent.llm")
         self._record_content = record_content
+        # Outbound requests and tokens per minute per route (ADR 0041). None sets no limit.
+        self._limiter = limiter
 
     def complete(
         self, request: LLMRequest, *, run_id: str, budget: RunBudget | None = None
@@ -174,9 +190,13 @@ class LLMClient:
         """
         self._check_budget(run_id, budget)
         failures: list[str] = []
-        for route in self._routes:
+        for route, breaker in zip(self._routes, self._breakers, strict=True):
+            if breaker is not None and not breaker.allow():
+                self._skip(route, run_id)
+                failures.append(f"{route.adapter.provider}/{route.model}: circuit open")
+                continue
             try:
-                return self._complete_with_retries(route, request, run_id)
+                return self._complete_with_retries(route, breaker, request, run_id)
             except InvalidToolCallError:
                 raise
             except LLMError as error:
@@ -192,19 +212,43 @@ class LLMClient:
         if budget.max_cost_usd is not None and totals.cost_usd >= budget.max_cost_usd:
             raise BudgetExceededError(f"run {run_id} spent ${totals.cost_usd:.4f}")
 
-    def _complete_with_retries(self, route: Route, request: LLMRequest, run_id: str) -> LLMResponse:
+    def _skip(self, route: Route, run_id: str) -> None:
+        with self._tracer.start_as_current_span("llm.route_skipped") as span:
+            span.set_attribute("llm.provider", route.adapter.provider)
+            span.set_attribute("llm.model_name", route.model)
+            span.set_attribute("da_agent.run_id", run_id)
+            span.add_event("circuit_open")
+
+    def _complete_with_retries(
+        self, route: Route, breaker: CircuitBreaker | None, request: LLMRequest, run_id: str
+    ) -> LLMResponse:
         attempt = 0
         while True:
             try:
-                return self._attempt(route, request, run_id)
+                response = self._attempt(route, request, run_id)
+            except ThrottledError:
+                # Our own limit, not the provider's health: fall back, never retry or count it.
+                raise
             except (PermanentLLMError, InvalidToolCallError):
+                # The provider answered: the request or the configuration is at fault, not the
+                # provider's health. A half-open probe that gets this answer closes the breaker.
+                if breaker is not None:
+                    breaker.record_success()
                 raise
             except (RateLimitedError, TransientLLMError) as error:
+                if breaker is not None:
+                    breaker.record_failure()
                 wait = self._wait_before_retry(error, attempt)
                 if attempt >= self._max_retries or wait > self._max_wait:
                     raise
+                if breaker is not None and not breaker.allow():
+                    raise
                 self._sleep(wait)
                 attempt += 1
+            else:
+                if breaker is not None:
+                    breaker.record_success()
+                return response
 
     @staticmethod
     def _wait_before_retry(error: LLMError, attempt: int) -> float:
@@ -220,10 +264,22 @@ class LLMClient:
             if self._record_content:
                 span.set_attribute("input.value", request.model_dump_json(exclude={"tools"}))
 
+            key = route_key(route.adapter.provider, route.model)
+            reserved = 0
             started = time.monotonic()
             try:
+                if self._limiter is not None:
+                    tokens = estimate_tokens(request)
+                    wait = self._limiter.acquire(key, tokens, self._max_wait)
+                    reserved = tokens
+                    span.set_attribute("llm.throttle_wait_seconds", wait)
+                    if wait > 0:
+                        self._sleep(wait)
+                    started = time.monotonic()
                 response = route.adapter.complete(request, route.model)
             except LLMError as error:
+                if self._limiter is not None and reserved:
+                    self._limiter.settle(key, reserved, 0)
                 span.set_status(Status(StatusCode.ERROR, type(error).__name__))
                 self._ledger.record(
                     CostRecord(
@@ -234,6 +290,8 @@ class LLMClient:
                 )  # fmt: skip
                 raise
             latency = time.monotonic() - started
+            if self._limiter is not None:
+                self._limiter.settle(key, reserved, response.usage.total_tokens)
 
             response = response.model_copy(
                 update={"provider": route.adapter.provider, "model": route.model}
