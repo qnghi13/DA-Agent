@@ -45,3 +45,25 @@ describe("cancelling a run", () => {
     }
   });
 });
+
+describe("the composer while a run is active", () => {
+  it("offers Stop only for the latest run of the conversation being written in", async () => {
+    const { composerStops } = await import("./run");
+    const latest = { id: "r2", conversation_id: "c1" };
+
+    expect(composerStops(latest, "c1", { r2: "running" })).toBe(true);
+    expect(composerStops(latest, "c1", { r2: "succeeded" })).toBe(false);
+    expect(composerStops(latest, "c2", { r2: "running" })).toBe(false);
+    expect(composerStops(latest, null, { r2: "running" })).toBe(false);
+    expect(composerStops(undefined, "c1", {})).toBe(false);
+  });
+
+  it("offers query actions only on runs that finished", async () => {
+    const { canActOnQueries } = await import("./run");
+
+    expect(canActOnQueries("succeeded")).toBe(true);
+    for (const status of ["queued", "running", "failed", "cancelled"] as const) {
+      expect(canActOnQueries(status)).toBe(false);
+    }
+  });
+});

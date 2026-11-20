@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { waitForJob } from "@/export";
+import { canActOnQueries } from "@/run";
 import { StepLine, type Evidence } from "./run-message";
 
 const PREVIEW_ROWS = 20;
@@ -15,6 +16,8 @@ export function EvidenceContent({ api, evidence }: { api: Api; evidence: Evidenc
   const { run, trail } = evidence;
   const queries = run.result?.queries ?? [];
   const canReport = run.status === "succeeded" && Boolean(run.result);
+  // A stopped run keeps its queries to read, but the API exports and reruns only finished runs.
+  const actions = canActOnQueries(run.status);
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <Tabs defaultValue="steps" className="flex min-h-0 flex-1 flex-col gap-0">
@@ -59,7 +62,14 @@ export function EvidenceContent({ api, evidence }: { api: Api; evidence: Evidenc
           <TabsContent value="sql" className="flex flex-col gap-3 p-4">
             {queries.length ? (
               queries.map((query, index) => (
-                <SqlBlock key={index} api={api} runId={run.id} index={index} query={query} />
+                <SqlBlock
+                  key={index}
+                  api={api}
+                  runId={run.id}
+                  index={index}
+                  query={query}
+                  actions={actions}
+                />
               ))
             ) : (
               <Empty>The agent ran no queries.</Empty>
@@ -68,7 +78,14 @@ export function EvidenceContent({ api, evidence }: { api: Api; evidence: Evidenc
           <TabsContent value="data" className="flex flex-col gap-5 p-4">
             {queries.length ? (
               queries.map((query, index) => (
-                <QueryRows key={index} api={api} runId={run.id} index={index} query={query} />
+                <QueryRows
+                  key={index}
+                  api={api}
+                  runId={run.id}
+                  index={index}
+                  query={query}
+                  actions={actions}
+                />
               ))
             ) : (
               <Empty>No query results.</Empty>
@@ -129,11 +146,13 @@ function SqlBlock({
   runId,
   index,
   query,
+  actions,
 }: {
   api: Api;
   runId: string;
   index: number;
   query: QueryRecord;
+  actions: boolean;
 }) {
   const [copied, copy] = useCopy();
   const [editing, setEditing] = useState(false);
@@ -180,7 +199,7 @@ function SqlBlock({
           Query {index + 1}
           {editing && draft !== query.sql ? " · edited" : ""}
         </span>
-        {!editing && (
+        {actions && !editing && (
           <Button
             variant="ghost"
             size="sm"
@@ -278,11 +297,13 @@ function QueryRows({
   runId,
   index,
   query,
+  actions,
 }: {
   api: Api;
   runId: string;
   index: number;
   query: QueryRecord;
+  actions: boolean;
 }) {
   const shown = query.rows.slice(0, PREVIEW_ROWS);
   return (
@@ -293,11 +314,13 @@ function QueryRows({
           {query.rows.length.toLocaleString()} row
           {query.rows.length === 1 ? "" : "s"}
         </h3>
-        <ExportButton
-          start={() => api.startExport(runId, index)}
-          getExport={(id) => api.getExport(id)}
-          label={`query ${index + 1}`}
-        />
+        {actions && (
+          <ExportButton
+            start={() => api.startExport(runId, index)}
+            getExport={(id) => api.getExport(id)}
+            label={`query ${index + 1}`}
+          />
+        )}
       </div>
       {shown.length ? (
         <DataTable columns={query.columns} rows={shown.map((row) => row.map(cell))} />

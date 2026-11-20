@@ -27,7 +27,7 @@ import { Button } from "./components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "./components/ui/sheet";
 import { useMediaQuery } from "./hooks/use-media-query";
 import { conversationStarts, loadConversation, saveConversation } from "./memory";
-import { isRunActive } from "./run";
+import { composerStops } from "./run";
 import { suggestQuestions } from "./suggestions";
 
 type Panel =
@@ -146,8 +146,17 @@ export function Conversation({ api, dataset }: { api: Api; dataset: Dataset }) {
     try {
       await api.cancelRun(id);
     } catch (caught) {
-      setError(errorMessage(caught));
       setStopping(null);
+      if (caught instanceof ApiError && caught.status === 409) {
+        // It ended just before the click: show how it ended instead of an error.
+        try {
+          onStatus(id, (await api.getRun(id)).status);
+        } catch {
+          // The run's own message refreshes it.
+        }
+        return;
+      }
+      setError(errorMessage(caught));
     }
   }
 
@@ -193,12 +202,12 @@ export function Conversation({ api, dataset }: { api: Api; dataset: Dataset }) {
   }
 
   const activeRun = panel?.kind === "run" ? panel.evidence.run.id : null;
-  const latestId = runs?.at(-1)?.id;
-  const latestStatus = latestId ? statuses[latestId] : undefined;
-  // While the latest question runs, the send button stops it, as in other chat assistants.
-  const running = latestStatus !== undefined && isRunActive(latestStatus);
   const starts = conversationStarts(runs ?? []);
   const last = runs?.at(-1);
+  const latestId = last?.id;
+  // While the latest question of this conversation runs, the send button stops it, as in other
+  // chat assistants. A new conversation can always send.
+  const running = composerStops(last, conversation, statuses);
   const startsFresh = last !== undefined && last.conversation_id !== conversation;
   const panelTitle =
     panel?.kind === "run"

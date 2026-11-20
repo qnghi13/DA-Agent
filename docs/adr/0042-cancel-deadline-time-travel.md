@@ -44,6 +44,17 @@ another worker had taken over. Postgres kept a checkpoint after every node, but 
 - Time travel in the UI: frontend work, and forks spend a workspace's budget.
 
 **Consequences:**
-- A stop waits for the model call or query in flight, so it takes up to that call's timeout.
+- A stop waits for the model call or query in flight, so it takes up to that call's timeout. It
+  never starts another call: the client checks before each route and attempt, and during waits.
+  Tried in the UI while a run waited on its rate limit: the job ended `cancelled` in 1.4 s.
+- The deadline counts per attempt: a job retried after a provider failure, or resumed after a
+  lost lease, gets a fresh `max_seconds`.
+- Eval runs get the same 300 s default. Questions that used to queue longer behind a rate limit
+  now end `deadline_exceeded`, and a recorded run that hit the deadline does not replay the same
+  way (ADR 0039); compare with older baselines knowing this. `max_seconds` is in the manifest.
+- A stopped run keeps the queries it ran, to read; exporting or rerunning them needs a finished
+  run, so the UI hides those actions.
+- A paused run (`needs_clarification`) ends its job `succeeded`, so it cannot be cancelled. If
+  resuming with a reply is wired later, cancelling a paused run needs its own rule.
 - A cancelled run cannot be resumed; the question can be asked again.
 - A fork reads the job's current dataset and memory, not a snapshot from when it ran.

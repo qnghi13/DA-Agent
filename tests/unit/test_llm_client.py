@@ -560,3 +560,35 @@ def test_a_retry_wait_ends_early_when_the_run_is_stopped() -> None:
 
     assert waits == [1.0, 1.0]
     assert (primary.calls, backup.calls) == (1, 0)
+
+
+def test_a_stopped_call_never_falls_back_to_another_route() -> None:
+    from da_agent.llm.types import CallInterruptedError
+
+    stopped = [False]
+
+    class Failing(ScriptedAdapter):
+        def complete(self, request: LLMRequest, model: str) -> LLMResponse:
+            stopped[0] = True  # the run stops while this call is in flight
+            return super().complete(request, model)
+
+    primary = Failing("groq", [TransientLLMError("down")])
+    backup = ScriptedAdapter("gemini", [reply("backup")])
+    client, _, _ = make_client(primary, backup, max_retries=0)
+
+    with pytest.raises(CallInterruptedError):
+        client.complete(REQUEST, run_id="r", interrupted=lambda: stopped[0])
+
+    assert backup.calls == 0
+
+
+def test_a_call_asked_after_a_stop_never_goes_out() -> None:
+    from da_agent.llm.types import CallInterruptedError
+
+    primary = ScriptedAdapter("groq", [reply()])
+    client, ledger, _ = make_client(primary)
+
+    with pytest.raises(CallInterruptedError):
+        client.complete(REQUEST, run_id="r", interrupted=lambda: True)
+
+    assert primary.calls == 0 and ledger.records() == []

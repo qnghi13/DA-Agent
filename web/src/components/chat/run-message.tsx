@@ -84,7 +84,9 @@ export function RunMessage({
     return () => controller.abort();
   }, [api, runId]);
 
-  const status = run?.status;
+  // The stream's end status counts too, so a failed final fetch never leaves the run "running".
+  const ended = trail.status === "running" ? undefined : trail.status;
+  const status = run && isRunActive(run.status) && ended ? ended : run?.status;
   useEffect(() => {
     if (status) onStatus?.(runId, status);
   }, [onStatus, runId, status]);

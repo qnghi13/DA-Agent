@@ -163,6 +163,25 @@ export function isRunActive(status: RunStatus): boolean {
   return status === "queued" || status === "running";
 }
 
+/**
+ * Whether the composer's button stops a run instead of sending: only while the latest run of the
+ * conversation being written in is active. A new conversation can always send.
+ */
+export function composerStops(
+  latest: { id: string; conversation_id: string | null } | undefined,
+  conversation: string | null,
+  statuses: Record<string, RunStatus>,
+): boolean {
+  if (!latest || conversation === null || latest.conversation_id !== conversation) return false;
+  const status = statuses[latest.id];
+  return status !== undefined && isRunActive(status);
+}
+
+/** Exporting or rerunning a run's queries needs a finished run; the API refuses the others. */
+export function canActOnQueries(status: RunStatus): boolean {
+  return status === "succeeded";
+}
+
 export function stopReasonText(reason: string | undefined): string | undefined {
   return reason ? (STOP_REASONS[reason] ?? reason) : undefined;
 }

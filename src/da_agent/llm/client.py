@@ -151,6 +151,11 @@ class CostLedger:
         )
 
 
+def _stop_if_asked(interrupted: Callable[[], bool] | None) -> None:
+    if interrupted is not None and interrupted():
+        raise CallInterruptedError("the run stopped before the model was called")
+
+
 class LLMClient:
     def __init__(
         self,
@@ -207,6 +212,8 @@ class LLMClient:
         for index, (route, breaker) in enumerate(zip(self._routes, self._breakers, strict=True)):
             last = index == len(self._routes) - 1
             throttle_wait = self._max_throttle_wait if last else self._max_wait
+            # A stop during the previous route's call must not start a call on the next one.
+            _stop_if_asked(interrupted)
             if breaker is not None and not breaker.allow():
                 self._skip(route, run_id)
                 failures.append(f"{route.adapter.provider}/{route.model}: circuit open")
@@ -248,6 +255,7 @@ class LLMClient:
     ) -> LLMResponse:
         attempt = 0
         while True:
+            _stop_if_asked(interrupted)
             try:
                 response = self._attempt(route, request, run_id, throttle_wait, interrupted)
             except ThrottledError:
@@ -294,8 +302,7 @@ class LLMClient:
             return
         left = seconds
         while left > 0:
-            if interrupted():
-                raise CallInterruptedError("the run stopped while waiting to call the model")
+            _stop_if_asked(interrupted)
             step = min(WAIT_SLICE_SECONDS, left)
             self._sleep(step)
             left -= step
