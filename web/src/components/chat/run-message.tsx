@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useReducer, useRef, useState } from "react";
 import { type Api, type Explanation, type Run, type RunStatus, errorMessage } from "@/api";
+import { RunFeedbackControl } from "@/components/chat/run-feedback";
 import { type MetricChoice, SaveMetricDialog } from "@/components/chat/save-metric-dialog";
 import { DataTable } from "@/components/data-table";
 import { StatusBadge } from "@/components/status-badge";
@@ -341,6 +342,7 @@ function Answer({
             Correct
           </Button>
         )}
+        {run.status === "succeeded" && <RunFeedbackControl api={api} run={run} />}
       </div>
     </div>
   );

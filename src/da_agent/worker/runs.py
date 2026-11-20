@@ -105,6 +105,24 @@ class RunHandler:
             )
         return result_to_json(result)
 
+    def rerun(self, job: Job, run_id: str) -> dict[str, Any]:
+        """Answer the job's question again with this handler's code, in this process and with no
+        checkpoint (ADR 0043). Same dataset, documents, memory, and limits as the job; costs go
+        under run_id. No job is created, so the rerun stays out of the user's history."""
+        limits, dataset, documents = self._prepare(job)
+        result = run_graph(
+            job.payload["question"],
+            as_of=job.payload["as_of"],
+            dataset=dataset,
+            documents=documents,
+            llm=self.llm,
+            run_id=run_id,
+            limits=limits,
+            charts=bool(job.payload.get("charts", True)),
+            agent_version=self.agent_version,
+        )
+        return result_to_json(result)
+
     def __call__(self, job: Job, lost: threading.Event) -> dict[str, Any]:
         payload = job.payload
         limits, dataset, documents = self._prepare(job)

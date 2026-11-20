@@ -47,3 +47,4 @@ decision, add a new ADR and mark the old one as superseded.
 | [0040](0040-pass-k.md) | pass^k measures how stable eval answers are across runs | Accepted |
 | [0041](0041-llm-resilience.md) | A circuit breaker per process and outbound limits per route for model calls | Accepted |
 | [0042](0042-cancel-deadline-time-travel.md) | Runs stop cooperatively on a cancel, a deadline, or a lost lease; operators time travel | Accepted |
+| [0043](0043-feedback-goldens.md) | User feedback, golden cases from thumbs-ups, and feedback rates per agent version | Accepted |

@@ -253,6 +253,57 @@ def _cost_panel(conn: psycopg.Connection, params: dict[str, Any]) -> dict[str, A
     }
 
 
+def _feedback_panel(conn: psycopg.Connection, params: dict[str, Any]) -> dict[str, Any]:
+    """User ratings of the window's finished runs (ADR 0043): counts, the fixed reason words, and
+    the thumbs-up rate per agent version (ADR 0038). Notes are user text and never read here."""
+    # A run's version is the one of its latest attempt; runs from before attempts were recorded
+    # count as "unknown".
+    rated = """
+        FROM jobs j JOIN run_feedback f ON f.job_id = j.id
+        LEFT JOIN LATERAL (
+            SELECT agent_version FROM job_attempts a WHERE a.job_id = j.id
+            ORDER BY a.attempt DESC LIMIT 1
+        ) v ON true
+        WHERE j.kind = 'run' AND j.created_at >= now() - %(span)s
+    """
+    totals = _one(
+        conn,
+        "SELECT count(*) FILTER (WHERE f.rating = 'up') AS up, "
+        "count(*) FILTER (WHERE f.rating = 'down') AS down " + rated,
+        params,
+    )
+    finished = _one(
+        conn,
+        "SELECT count(*) AS n FROM jobs WHERE kind = 'run' AND status = 'succeeded' "
+        "AND created_at >= now() - %(span)s",
+        params,
+    )["n"]
+    reasons = _rows(
+        conn,
+        "SELECT reason, count(*) AS n FROM jobs j JOIN run_feedback f ON f.job_id = j.id, "
+        "unnest(f.reasons) AS reason "
+        "WHERE j.kind = 'run' AND j.created_at >= now() - %(span)s GROUP BY 1",
+        params,
+    )
+    versions = _rows(
+        conn,
+        "SELECT coalesce(v.agent_version, 'unknown') AS version, "
+        "count(*) FILTER (WHERE f.rating = 'up') AS up, "
+        "count(*) FILTER (WHERE f.rating = 'down') AS down " + rated + " GROUP BY 1 ORDER BY 1",
+        params,
+    )
+    rated_count = totals["up"] + totals["down"]
+    return {
+        "up": totals["up"],
+        "down": totals["down"],
+        "rated_share": rated_count / finished if finished else None,
+        "reasons": {row["reason"]: row["n"] for row in reasons},
+        "by_version": [
+            {**row, "up_rate": row["up"] / (row["up"] + row["down"])} for row in versions
+        ],
+    }
+
+
 def _quality_panel(conn: psycopg.Connection, params: dict[str, Any]) -> dict[str, Any]:
     events = _one(
         conn,
@@ -343,6 +394,7 @@ def summary(conn: psycopg.Connection, window: str) -> dict[str, Any]:
         **_model_panels(conn, params),
         "cost": _cost_panel(conn, params),
         "quality": _quality_panel(conn, params),
+        "feedback": _feedback_panel(conn, params),
         "security": _security_panel(conn, params),
     }
 

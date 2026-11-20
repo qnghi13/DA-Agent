@@ -73,6 +73,14 @@ export interface OpsSummary {
     runs_saved: number;
   };
   security: { auth_failed: number; sign_ins: number; series: { bucket: string; count: number }[] };
+  /** User ratings of the window's runs (docs/adr/0043). Counts and fixed reason words only. */
+  feedback: {
+    up: number;
+    down: number;
+    rated_share: number | null;
+    reasons: Record<string, number>;
+    by_version: { version: string; up: number; down: number; up_rate: number }[];
+  };
 }
 
 export interface FailureRow {

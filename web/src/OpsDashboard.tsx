@@ -520,6 +520,32 @@ function Panels({
         </p>
       </Section>
 
+      <Section title="User feedback">
+        <div className={TILES}>
+          <Tile label="Good answers" value={formatCount(summary.feedback.up)} />
+          <Tile
+            label="Bad answers"
+            value={formatCount(summary.feedback.down)}
+            tone={summary.feedback.down > summary.feedback.up ? "warning" : undefined}
+          />
+          <Tile label="Finished runs rated" value={formatPercent(summary.feedback.rated_share)} />
+        </div>
+        <KindLine title="Why answers were bad" counts={summary.feedback.reasons} />
+        {summary.feedback.by_version.length > 0 && (
+          <div>
+            <h4 className="mb-1 text-sm font-medium">Good answers by agent version</h4>
+            <ul className="text-muted-foreground flex flex-col gap-0.5 text-sm">
+              {summary.feedback.by_version.map((row) => (
+                <li key={row.version} className="font-mono text-xs">
+                  {row.version}: {formatPercent(row.up_rate)} good ({formatCount(row.up)} of{" "}
+                  {formatCount(row.up + row.down)})
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </Section>
+
       <Section title="Sign-ins">
         <div className={TILES}>
           <Tile

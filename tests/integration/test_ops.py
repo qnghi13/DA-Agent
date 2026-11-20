@@ -1,5 +1,6 @@
 """Operator dashboard aggregates over fixed rows (ADR 0026). Needs Postgres."""
 
+import json
 from typing import Any
 from uuid import UUID
 
@@ -276,3 +277,42 @@ def test_a_throttled_attempt_is_kept_in_the_ledger(conn: psycopg.Connection, sho
     ledger.record(call(first, "gpt-oss-20b", 0.0, 0.0, error="throttled"))
 
     assert summary(conn, "24h")["model_errors"]["by_kind"] == {"throttled": 1}
+
+
+def rate(
+    conn: psycopg.Connection, job_id: UUID, workspace: UUID, rating: str, reasons: list[str],
+    note: str | None = None,
+) -> None:  # fmt: skip
+    conn.execute(
+        "INSERT INTO run_feedback (job_id, workspace_id, rating, reasons, note, author) "
+        "VALUES (%s, %s, %s, %s, %s, 'member')",
+        (job_id, workspace, rating, reasons, note),
+    )
+
+
+def test_feedback_by_reason_and_agent_version(conn: psycopg.Connection, shop: UUID) -> None:
+    from da_agent.storage.versions import record_attempt, register_version
+
+    register_version(conn, "v1", {})
+    register_version(conn, "v2", {})
+    runs = [job(conn, shop, status="succeeded", result=answered()) for _ in range(5)]
+    for run, version in zip(runs, ["v1", "v1", "v2", "v2", None], strict=True):
+        if version:
+            record_attempt(conn, run, 1, "w", version, None)
+    rate(conn, runs[0], shop, "up", [])
+    rate(conn, runs[1], shop, "down", ["wrong_number", "unclear"], "SECRET-NOTE")
+    rate(conn, runs[2], shop, "up", [])
+    rate(conn, runs[3], shop, "up", [])
+    rate(conn, runs[4], shop, "down", ["wrong_number"])
+
+    data = summary(conn, "24h")
+
+    panel = data["feedback"]
+    assert (panel["up"], panel["down"]) == (3, 2)
+    assert panel["rated_share"] == pytest.approx(5 / 5)
+    assert panel["reasons"] == {"wrong_number": 2, "unclear": 1}
+    by_version = {row["version"]: row for row in panel["by_version"]}
+    assert (by_version["v1"]["up"], by_version["v1"]["down"]) == (1, 1)
+    assert by_version["v2"]["up_rate"] == pytest.approx(1.0)
+    assert (by_version["unknown"]["up"], by_version["unknown"]["down"]) == (0, 1)
+    assert "SECRET-NOTE" not in json.dumps(data, default=str)

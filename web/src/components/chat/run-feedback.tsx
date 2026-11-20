@@ -1,0 +1,155 @@
+import { ThumbsDown, ThumbsUp } from "lucide-react";
+import { useState } from "react";
+import { type Api, type Run, errorMessage } from "@/api";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  FEEDBACK_REASONS,
+  type FeedbackReason,
+  type Rating,
+  type RunFeedback,
+  nextFeedback,
+} from "@/feedback";
+
+const MAX_NOTE = 1000;
+
+/**
+ * Thumbs on a finished answer (docs/adr/0043). A thumbs-up says the answer is right; a thumbs-down
+ * opens optional reasons and a note. Clicking the chosen thumb again takes the rating back.
+ */
+export function RunFeedbackControl({ api, run }: { api: Api; run: Run }) {
+  const [feedback, setFeedback] = useState<RunFeedback | null>(run.feedback ?? null);
+  const [asking, setAsking] = useState(false);
+  const [reasons, setReasons] = useState<FeedbackReason[]>([]);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [thanks, setThanks] = useState(false);
+
+  async function save(change: () => Promise<RunFeedback | null>) {
+    setBusy(true);
+    setError(null);
+    try {
+      setFeedback(await change());
+      return true;
+    } catch (caught) {
+      setError(errorMessage(caught));
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function rate(clicked: Rating) {
+    const next = nextFeedback(feedback?.rating ?? null, clicked);
+    setThanks(false);
+    if (next === null) {
+      setAsking(false);
+      await save(async () => {
+        await api.clearFeedback(run.id);
+        return null;
+      });
+      return;
+    }
+    // The rating counts at once; reasons for a thumbs-down are optional extras.
+    const saved = await save(() => api.setFeedback(run.id, { rating: next }));
+    if (saved && next === "down") {
+      setReasons([]);
+      setNote("");
+      setAsking(true);
+    } else {
+      setAsking(false);
+      if (saved) setThanks(true);
+    }
+  }
+
+  async function send() {
+    const text = note.trim();
+    const saved = await save(() =>
+      api.setFeedback(run.id, { rating: "down", reasons, ...(text ? { note: text } : {}) }),
+    );
+    if (saved) {
+      setAsking(false);
+      setThanks(true);
+    }
+  }
+
+  function toggle(reason: FeedbackReason) {
+    setReasons((current) =>
+      current.includes(reason) ? current.filter((r) => r !== reason) : [...current, reason],
+    );
+  }
+
+  const rating = feedback?.rating ?? null;
+  return (
+    <>
+      <div className="ml-auto flex items-center gap-1">
+        {thanks && <span className="text-muted-foreground text-xs">Thanks</span>}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-8"
+          aria-label="Good answer"
+          aria-pressed={rating === "up"}
+          title={rating === "up" ? "Take back" : "Good answer: keep it as a check for later versions"}
+          disabled={busy}
+          onClick={() => rate("up")}
+        >
+          <ThumbsUp className={rating === "up" ? "fill-current" : undefined} />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-8"
+          aria-label="Bad answer"
+          aria-pressed={rating === "down"}
+          title={rating === "down" ? "Take back" : "Bad answer"}
+          disabled={busy}
+          onClick={() => rate("down")}
+        >
+          <ThumbsDown className={rating === "down" ? "fill-current" : undefined} />
+        </Button>
+      </div>
+      {asking && (
+        <div className="bg-card flex basis-full flex-col gap-3 rounded-xl border p-3">
+          <p className="text-sm font-medium">What was wrong? (optional)</p>
+          <div className="flex flex-wrap gap-2" role="group" aria-label="Reasons">
+            {FEEDBACK_REASONS.map((reason) => (
+              <Button
+                key={reason.value}
+                type="button"
+                variant={reasons.includes(reason.value) ? "secondary" : "outline"}
+                size="sm"
+                aria-pressed={reasons.includes(reason.value)}
+                onClick={() => toggle(reason.value)}
+              >
+                {reason.label}
+              </Button>
+            ))}
+          </div>
+          <Textarea
+            aria-label="Note"
+            placeholder="Anything else? For example, the right figure."
+            maxLength={MAX_NOTE}
+            rows={2}
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+          />
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" size="sm" onClick={() => setAsking(false)}>
+              Skip
+            </Button>
+            <Button type="button" size="sm" disabled={busy} onClick={send}>
+              Send
+            </Button>
+          </div>
+        </div>
+      )}
+      {error && (
+        <p role="alert" className="text-danger basis-full text-sm">
+          {error}
+        </p>
+      )}
+    </>
+  );
+}

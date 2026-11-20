@@ -1,6 +1,7 @@
 // Typed client for the DA-Agent HTTP API (docs/adr/0020-http-api.md).
 
 import type { Me } from "./auth";
+import type { FeedbackReason, Rating, RunFeedback } from "./feedback";
 import type { FailureRow, OpsSummary, Window } from "./ops";
 import type { Answer } from "./run";
 import { type SseEvent, streamEvents } from "./sse";
@@ -273,6 +274,22 @@ export class Api {
     return this.request(`/v1/runs/${encodeURIComponent(id)}`);
   }
 
+  /** Rate a finished run; a thumbs-up on an answer makes it a golden case (ADR 0043). */
+  setFeedback(
+    id: string,
+    feedback: { rating: Rating; reasons?: FeedbackReason[]; note?: string },
+  ): Promise<RunFeedback> {
+    return this.request(`/v1/runs/${encodeURIComponent(id)}/feedback`, {
+      method: "PUT",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(feedback),
+    });
+  }
+
+  clearFeedback(id: string): Promise<void> {
+    return this.request(`/v1/runs/${encodeURIComponent(id)}/feedback`, { method: "DELETE" });
+  }
+
   /** Stop a run. A queued run ends at once; a running one stops within a few seconds. */
   cancelRun(id: string): Promise<{ id: string; status: "cancelled" | "cancelling" }> {
     return this.request(`/v1/runs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
@@ -430,6 +447,8 @@ export interface Run {
   traces: { attempt: number; url: string }[];
   /** How the answer was calculated, read from its SQL (ADR 0035). Only in a single run's view. */
   explanations?: Explanation[];
+  /** The member's rating (ADR 0043). Only in a single run's view. */
+  feedback?: RunFeedback | null;
 }
 
 /** A value in a query: a column, an aggregate, arithmetic, a number, or every column. */

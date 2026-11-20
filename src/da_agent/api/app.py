@@ -53,7 +53,7 @@ from da_agent.reports.metric import (
 )
 from da_agent.runner.runner import MAX_SQL_CHARS
 from da_agent.security.sql_guard import SqlRejectedError, validate_select
-from da_agent.storage import audit, ops
+from da_agent.storage import audit, feedback, ops
 from da_agent.storage.datasets import (
     DatasetNotFoundError,
     DatasetRecord,
@@ -166,6 +166,16 @@ class MemoryRequest(BaseModel):
     text: str = Field(min_length=1, max_length=MAX_TEXT)
     sql: str | None = Field(default=None, max_length=MAX_SQL, description="Required for examples.")
     source_run_id: str | None = Field(default=None, description="The run this note corrects.")
+
+
+class FeedbackRequest(BaseModel):
+    """A rating of a finished run (ADR 0043). Reasons and the note count only with "down"."""
+
+    rating: Literal["up", "down"]
+    reasons: list[
+        Literal["wrong_number", "misunderstood", "should_abstain", "unclear", "other"]
+    ] = Field(default_factory=list, max_length=5)
+    note: str | None = Field(default=None, max_length=feedback.MAX_NOTE_CHARS)
 
 
 class MemoryEditRequest(BaseModel):
@@ -868,8 +878,36 @@ def list_runs(
 def get_run(run_id: str, conn: Db, caller: Caller, settings: Settings) -> dict[str, Any]:
     job = run_job(run_id, conn, caller)
     return _run_view(job, settings.trace_ui_url) | {
-        "explanations": _explanations(job, conn, caller.workspace_id)
+        "explanations": _explanations(job, conn, caller.workspace_id),
+        "feedback": _feedback_view(feedback.feedback_of(conn, job.id, caller.workspace_id)),
     }
+
+
+def _feedback_view(found: feedback.Feedback | None) -> dict[str, Any] | None:
+    if found is None:
+        return None
+    return {"rating": found.rating, "reasons": found.reasons, "note": found.note}
+
+
+@router.put("/runs/{run_id}/feedback")
+def rate_run(run_id: str, body: FeedbackRequest, conn: Db, caller: Caller) -> dict[str, Any]:
+    """Rate a finished run (ADR 0043). A thumbs-up on an answer makes it a golden case, which
+    operators rerun against later code; rating again replaces the earlier rating."""
+    job = run_job(run_id, conn, caller)
+    if job.status != "succeeded":
+        raise HTTPException(status_code=409, detail=f"the run is {job.status}")
+    feedback.set_feedback(conn, job, body.rating, list(body.reasons), body.note, _author(caller))
+    # The rating only: notes are the user's words and stay out of the audit log.
+    log(conn, caller, "run.feedback", run_id, rating=body.rating)
+    return _feedback_view(feedback.feedback_of(conn, job.id, caller.workspace_id)) or {}
+
+
+@router.delete("/runs/{run_id}/feedback", status_code=204)
+def unrate_run(run_id: str, conn: Db, caller: Caller) -> Response:
+    job = run_job(run_id, conn, caller)
+    feedback.clear_feedback(conn, job.id, caller.workspace_id)
+    log(conn, caller, "run.feedback", run_id, rating=None)
+    return Response(status_code=204)
 
 
 def _explanations(job: Job, conn: psycopg.Connection, workspace: uuid.UUID) -> list[dict]:

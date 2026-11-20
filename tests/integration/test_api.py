@@ -562,3 +562,60 @@ def test_the_event_stream_of_a_cancelled_run_ends(
     received = stream_events(client, run_id, key)
 
     assert received[-1][1:] == ("end", {"status": "cancelled"})
+
+
+def answered_run(client: TestClient, conn: psycopg.Connection, key: str) -> str:
+    dataset_id = ready_dataset(client, conn, key)
+    run_id = ask(client, key, dataset_id, "Total?")
+    result = AgentResult(answer=AgentAnswer("number", 350))
+    queue = JobQueue(conn)
+    while (job := queue.claim("w", lease_seconds=30)) is not None:
+        queue.complete(job.id, "w", result_to_json(result) if job.kind == "run" else {})
+    return run_id
+
+
+def test_a_member_rates_a_run_and_can_take_it_back(
+    client: TestClient, conn: psycopg.Connection, key: str
+) -> None:
+    run_id = answered_run(client, conn, key)
+    body = {"rating": "down", "reasons": ["wrong_number"], "note": "June is missing"}
+
+    rated = client.put(f"/v1/runs/{run_id}/feedback", headers=auth(key), json=body)
+
+    assert rated.status_code == 200
+    assert rated.json() == {
+        "rating": "down",
+        "reasons": ["wrong_number"],
+        "note": "June is missing",
+    }
+    shown = client.get(f"/v1/runs/{run_id}", headers=auth(key)).json()
+    assert shown["feedback"] == rated.json()
+    assert client.delete(f"/v1/runs/{run_id}/feedback", headers=auth(key)).status_code == 204
+    assert client.get(f"/v1/runs/{run_id}", headers=auth(key)).json()["feedback"] is None
+    rows = conn.execute(
+        "SELECT detail FROM audit_log WHERE action = 'run.feedback' ORDER BY created_at"
+    ).fetchall()
+    assert [row[0] for row in rows] == [{"rating": "down"}, {"rating": None}]
+
+
+def test_feedback_needs_a_finished_run_of_the_workspace_and_a_short_note(
+    client: TestClient, conn: psycopg.Connection, key: str
+) -> None:
+    run_id = answered_run(client, conn, key)
+    dataset_id = ready_dataset(client, conn, key)
+    queued = ask(client, key, dataset_id, "Total?")
+    intruder = auth(create_key(conn, create_workspace(conn, "intruder")))
+    up = {"rating": "up"}
+
+    assert client.put(f"/v1/runs/{queued}/feedback", headers=auth(key), json=up).status_code == 409
+    assert client.put(f"/v1/runs/{run_id}/feedback", headers=intruder, json=up).status_code == 404
+    too_long = {"rating": "down", "note": "x" * 1001}
+    assert (
+        client.put(f"/v1/runs/{run_id}/feedback", headers=auth(key), json=too_long).status_code
+        == 422
+    )
+    unknown = {"rating": "down", "reasons": ["rude"]}
+    assert (
+        client.put(f"/v1/runs/{run_id}/feedback", headers=auth(key), json=unknown).status_code
+        == 422
+    )

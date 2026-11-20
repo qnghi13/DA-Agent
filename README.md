@@ -214,6 +214,14 @@ uv run python -m da_agent.timetravel show $RUN $CHECKPOINT   # the state at one 
 uv run python -m da_agent.timetravel fork $RUN $CHECKPOINT   # run on from there in a new thread
 ```
 
+Answers users rated 👍 become golden cases, which operators rerun after a change
+([ADR 0043](docs/adr/0043-feedback-goldens.md)); `run` spends only with `--yes`:
+
+```bash
+uv run python -m da_agent.goldens list --workspace $WORKSPACE      # cases and runs rated 👎
+uv run python -m da_agent.goldens run --workspace $WORKSPACE --yes # same / changed / error
+```
+
 Traces go to any OpenTelemetry (OTLP) endpoint set in `DA_AGENT_OTLP_ENDPOINT`, such as a local
 Phoenix (`http://127.0.0.1:6006/v1/traces`). Setting `DA_AGENT_TRACE_UI_URL=http://127.0.0.1:6006`
 on the API adds an "Open trace" link to each run in the UI. Phoenix shows every workspace's

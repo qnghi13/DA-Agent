@@ -119,6 +119,11 @@ browser ─127.0.0.1:8080─> web (nginx: UI files, /v1 proxy)
   status `cancelled`), the run deadline (`deadline_exceeded`, 300 s), or a lost lease ends the run
   and keeps its checkpoints. Operators read and fork those checkpoints with
   `python -m da_agent.timetravel`.
+- **Feedback and golden cases** ([ADR 0043](adr/0043-feedback-goldens.md)): members rate finished
+  answers 👍 or 👎, with fixed reasons and an optional note on 👎. A 👍 on an answer makes a golden
+  case, which operators rerun against current code with `python -m da_agent.goldens`, in-process
+  and outside the job queue. The ops summary shows feedback counts, reasons, and the 👍 rate per
+  agent version; notes never leave the workspace's own views.
 
 ## Request flow
 
