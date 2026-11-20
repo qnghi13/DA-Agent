@@ -38,7 +38,7 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from da_agent.agent.answer import AgentResult, result_from_json
 from da_agent.agent.verify import evidence_indices
@@ -176,6 +176,14 @@ class FeedbackRequest(BaseModel):
         Literal["wrong_number", "misunderstood", "should_abstain", "unclear", "other"]
     ] = Field(default_factory=list, max_length=5)
     note: str | None = Field(default=None, max_length=feedback.MAX_NOTE_CHARS)
+
+    @field_validator("note")
+    @classmethod
+    def _no_nul(cls, note: str | None) -> str | None:
+        # Postgres text cannot hold NUL; refuse it instead of failing on the insert.
+        if note is not None and "\x00" in note:
+            raise ValueError("the note must not contain NUL characters")
+        return note
 
 
 class MemoryEditRequest(BaseModel):

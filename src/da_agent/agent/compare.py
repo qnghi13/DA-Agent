@@ -2,18 +2,17 @@
 
 Product code, not the DataMate scorer: answers match when they have the same kind and the same
 value. Numbers may differ by a relative 0.01%, text compares trimmed and case-folded, lists ignore
-order, and tables match by column name with rows in any order. A malformed value never raises; it
-is "changed", so a rerun report always completes.
+order, and tables match by column name with rows in any order. Inside lists and tables only real
+JSON numbers get the tolerance, and whole numbers must be equal: strings such as ids, codes, and
+phone numbers ("0912345678", "007") compare as text. A malformed value never raises; it is
+"changed", so a rerun report always completes.
 """
 
 import math
-from collections import Counter
 from typing import Any, Literal
 
 Outcome = Literal["same", "changed", "no_answer"]
 RELATIVE_TOLERANCE = 1e-4
-# Numbers inside lists and tables are rounded to this many significant digits before matching.
-SIGNIFICANT_DIGITS = 5
 
 
 def _number(value: Any) -> float | None:
@@ -27,14 +26,37 @@ def _number(value: Any) -> float | None:
         return None
 
 
-def _key(value: Any) -> Any:
-    """A form of one cell or list item that compares equal when the values match."""
-    number = _number(value)
-    if number is not None and math.isfinite(number):
-        return ("n", float(f"{number:.{SIGNIFICANT_DIGITS}g}"))
-    if isinstance(value, bool) or value is None:
-        return ("v", value)
-    return ("s", str(value).strip().casefold())
+def _is_number(value: Any) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool)
+
+
+def _same_cell(expected: Any, actual: Any) -> bool:
+    """One list item or table cell. Whole numbers match exactly, other numbers within the
+    tolerance, and everything else, numeric-looking strings included, as trimmed text."""
+    if _is_number(expected) and _is_number(actual):
+        if isinstance(expected, int) and isinstance(actual, int):
+            return expected == actual
+        return math.isclose(expected, actual, rel_tol=RELATIVE_TOLERANCE, abs_tol=1e-9)
+    if expected is None or actual is None or isinstance(expected, bool) or isinstance(actual, bool):
+        return expected is actual or (expected == actual and type(expected) is type(actual))
+    return str(expected).strip().casefold() == str(actual).strip().casefold()
+
+
+def _same_bag(expected: list[Any], actual: list[Any], same: Any) -> bool:
+    """Whether every expected item pairs with its own actual item, in any order."""
+    if len(expected) != len(actual):
+        return False
+    left = list(actual)
+    for item in expected:
+        match = next((i for i, other in enumerate(left) if same(item, other)), None)
+        if match is None:
+            return False
+        left.pop(match)
+    return True
+
+
+def _same_row(expected: list[Any], actual: list[Any]) -> bool:
+    return len(expected) == len(actual) and all(map(_same_cell, expected, actual))
 
 
 def _same_scalar(kind: str, expected: Any, actual: Any) -> bool:
@@ -64,8 +86,9 @@ def _same_table(expected: Any, actual: Any) -> bool:
         reordered = [[row[i] for i in order] for row in other_rows]
     except (IndexError, TypeError):
         return False
-    as_keys = lambda table: Counter(tuple(_key(cell) for cell in row) for row in table)  # noqa: E731
-    return as_keys(rows) == as_keys(reordered)
+    if not all(isinstance(row, list) for row in rows):
+        return False
+    return _same_bag(rows, reordered, _same_row)
 
 
 def compare_answers(expected: dict[str, Any], actual: dict[str, Any] | None) -> Outcome:
@@ -80,7 +103,7 @@ def compare_answers(expected: dict[str, Any], actual: dict[str, Any] | None) -> 
     if kind == "list":
         if not isinstance(value, list) or not isinstance(other, list):
             return "changed"
-        same = Counter(map(_key, value)) == Counter(map(_key, other))
+        same = _same_bag(value, other, _same_cell)
     elif kind == "table":
         same = _same_table(value, other)
     else:

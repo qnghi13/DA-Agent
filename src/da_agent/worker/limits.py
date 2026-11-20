@@ -18,10 +18,12 @@ class WorkspaceBudgets:
     run_tokens: int | None = None
     schema: str | None = None
 
-    def for_job(self, job: Job) -> RunBudget:
+    def for_job(self, job: Job, run_id: str | None = None) -> RunBudget:
         """The budget for one job, or PermanentJobError if the workspace has nothing left today.
 
-        The run's own earlier spending, from attempts before a retry, counts toward its limit."""
+        The run's own earlier spending, from attempts before a retry, counts toward its limit.
+        run_id names a run started from the job, such as a golden rerun (ADR 0043): its limit is
+        what the workspace has left, without the job's past spending."""
         with connect(self.url, schema=self.schema) as conn:
             limit = daily_budget(conn, job.workspace_id, self.daily_usd)
             left = limit - spent_today(conn, job.workspace_id)
@@ -30,7 +32,7 @@ class WorkspaceBudgets:
                     f"the workspace has reached its daily model budget (${limit:.2f}); "
                     "try again tomorrow"
                 )
-            spent = PostgresCostLedger(conn).totals(str(job.id)).cost_usd
+            spent = PostgresCostLedger(conn).totals(run_id or str(job.id)).cost_usd
         return RunBudget(
             max_total_tokens=self.run_tokens, max_cost_usd=min(self.run_usd, spent + left)
         )

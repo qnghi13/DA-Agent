@@ -35,12 +35,23 @@ from da_agent.worker.runs import RunHandler
 
 
 def rerun_cases(
-    conn: psycopg.Connection, cases: Sequence[GoldenCase], handler: RunHandler
+    conn: psycopg.Connection,
+    cases: Sequence[GoldenCase],
+    handler: RunHandler,
+    on_row: Callable[[dict[str, Any]], None] | None = None,
 ) -> list[dict[str, Any]]:
-    """Rerun each case and compare. A case that fails is reported as "error"; the rest go on."""
-    rows = []
+    """Rerun each case and compare. A case that fails is reported as "error"; the rest go on.
+    on_row gets each row as soon as its case finishes, so a stopped rerun keeps what it paid for."""
+    rows: list[dict[str, Any]] = []
+
+    def done(finished: dict[str, Any]) -> None:
+        rows.append(finished)
+        if on_row is not None:
+            on_row(finished)
+
     for case in cases:
-        run_id = f"golden-{case.id}-{uuid.uuid4().hex[:8]}"
+        # Named after the source run, so the ledger charges the rerun to its workspace.
+        run_id = f"golden-{case.source_run_id}-{uuid.uuid4().hex[:8]}"
         row: dict[str, Any] = {
             "case_id": str(case.id), "source_run_id": str(case.source_run_id), "run_id": run_id,
             "question": case.question, "expected": case.expected,
@@ -51,11 +62,11 @@ def rerun_cases(
                 raise LookupError("the run this case came from is gone")
             result = handler.rerun(job, run_id)
         except Exception as error:  # One broken case must not stop the others.
-            rows.append({**row, "outcome": "error", "actual": None, "error": str(error)[:500]})
+            done({**row, "outcome": "error", "actual": None, "error": str(error)[:500]})
             continue
         actual = result.get("answer")
         outcome = compare_answers(case.expected, actual)
-        rows.append(
+        done(
             {**row, "outcome": outcome, "actual": actual, "stop_reason": result.get("stop_reason")}
         )
     return rows
@@ -87,7 +98,9 @@ def main(
     run = commands.choices["run"]
     run.add_argument("--limit", type=int)
     run.add_argument("--yes", action="store_true", help="rerun them; this calls the model")
-    run.add_argument("--output", type=Path, help="report file; default goldens-<time>.json")
+    run.add_argument(
+        "--output", type=Path, help="JSONL report; default DATA_DIR/goldens/goldens-<time>.jsonl"
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -113,14 +126,24 @@ def main(
             if not args.yes:
                 print("each one calls the model; add --yes to run them")
                 return 0
-            handler = handler_factory() if handler_factory else _worker_handler(settings, conn)
-            rows = rerun_cases(conn, cases, handler)
-    except (ConfigError, ValueError, LookupError, psycopg.Error) as error:
+            # The report holds users' questions and answers, so by default it goes with their
+            # other data, outside the repository. It is opened before anything is spent.
+            stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ")
+            output = args.output or settings.data_dir / "goldens" / f"goldens-{stamp}.jsonl"
+            if args.output is None:
+                output.parent.mkdir(parents=True, exist_ok=True)
+            with output.open("x", encoding="utf-8") as report:
+                handler = handler_factory() if handler_factory else _worker_handler(settings, conn)
+
+                def write(row: dict[str, Any]) -> None:
+                    report.write(json.dumps(row, ensure_ascii=False, default=str) + "\n")
+                    report.flush()
+                    print(f"{row['outcome']:<9} {row['question']}", flush=True)
+
+                rows = rerun_cases(conn, cases, handler, on_row=write)
+    except (ConfigError, ValueError, LookupError, OSError, psycopg.Error) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
-    stamp = dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%SZ")
-    output = args.output or Path(f"goldens-{stamp}.json")
-    output.write_text(json.dumps(rows, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
     counts = Counter(row["outcome"] for row in rows)
     print(", ".join(f"{name} {counts[name]}" for name in ("same", "changed", "no_answer", "error")))
     print(f"report: {output}")

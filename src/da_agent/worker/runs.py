@@ -73,11 +73,14 @@ class RunHandler:
             conninfo, autocommit=True, prepare_threshold=0, row_factory=dict_row
         )
 
-    def _prepare(self, job: Job) -> tuple[AgentLimits, Dataset, list[Document]]:
-        """The limits, dataset, and documents a run of this job uses."""
+    def _prepare(
+        self, job: Job, run_id: str | None = None
+    ) -> tuple[AgentLimits, Dataset, list[Document]]:
+        """The limits, dataset, and documents a run of this job uses. run_id names a run started
+        from the job (a fork or a golden rerun), whose budget does not include the job's."""
         limits = self.limits
         if self.budgets is not None:
-            limits = replace(limits, budget=self.budgets.for_job(job))
+            limits = replace(limits, budget=self.budgets.for_job(job, run_id))
         dataset, documents = self.datasets(job.workspace_id, job.payload["dataset_id"])
         if self.memory is not None:
             visible = {t.name: {c.name for c in t.columns} for t in dataset.describe()}
@@ -88,7 +91,7 @@ class RunHandler:
         """Run on in thread fork_id, which time travel started from one of the job's checkpoints
         (ADR 0042). Same dataset, documents, and limits as the job; costs go under fork_id. The
         job and its own thread are not written."""
-        limits, dataset, documents = self._prepare(job)
+        limits, dataset, documents = self._prepare(job, fork_id)
         with self.checkpoint_connection() as conn:
             result = run_graph(
                 job.payload["question"],
@@ -109,7 +112,7 @@ class RunHandler:
         """Answer the job's question again with this handler's code, in this process and with no
         checkpoint (ADR 0043). Same dataset, documents, memory, and limits as the job; costs go
         under run_id. No job is created, so the rerun stays out of the user's history."""
-        limits, dataset, documents = self._prepare(job)
+        limits, dataset, documents = self._prepare(job, run_id)
         result = run_graph(
             job.payload["question"],
             as_of=job.payload["as_of"],

@@ -27,9 +27,10 @@ another worker had taken over. Postgres kept a checkpoint after every node, but 
 - **UI:** the send button becomes Stop while the latest question is queued or running, as in other
   chat assistants (user, 2026-11-20); Enter does not send meanwhile. A stopped run shows "Stopped".
 - **Time travel CLI** (`python -m da_agent.timetravel list | show | fork`), for operators. `fork`
-  copies one checkpoint, without its pending writes, into a new thread `fork-<uuid>` and runs on
+  copies one checkpoint, without its pending writes, into a new thread `fork-<run>-<suffix>` and runs on
   with the current code, through `RunHandler.fork`, so the dataset, documents, routes, and limits
-  are the worker's. Costs go to the ledger under the fork's id.
+  are the worker's. Costs go to the ledger under the fork's id, `fork-<run>-<suffix>`, which the
+  ledger charges to the run's workspace (ADR 0043).
 
 **Rejected:**
 - Killing the run's thread: Python cannot. A process per run: too heavy here.

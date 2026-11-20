@@ -195,7 +195,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
                 print(json.dumps(state, indent=2, ensure_ascii=False, default=str))
             else:
-                fork_id = f"fork-{uuid.uuid4()}"
+                # Named after the run, so the ledger charges the fork to its workspace.
+                fork_id = f"fork-{args.run_id}-{uuid.uuid4().hex[:8]}"
                 copy_checkpoint(saver, args.run_id, args.checkpoint_id, fork_id)
                 print(f"fork {fork_id}", file=sys.stderr, flush=True)
                 result = _run_fork(settings, args.run_id, fork_id)

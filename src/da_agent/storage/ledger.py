@@ -10,8 +10,18 @@ import psycopg
 
 from da_agent.llm.client import CostLedger, CostRecord, CostTotals
 
+# Runs an operator starts from a job (ADR 0042, ADR 0043) name it, so their cost counts toward the
+# job's workspace: "golden-<job id>-<suffix>" and "fork-<job id>-<suffix>".
+_DERIVED = ("golden-", "fork-")
+_UUID_CHARS = 36
+
 
 def _job_id(run_id: str) -> UUID | None:
+    """The job a run id belongs to: a job's own id, or the job a rerun or fork came from."""
+    for prefix in _DERIVED:
+        if run_id.startswith(prefix):
+            run_id = run_id[len(prefix) : len(prefix) + _UUID_CHARS]
+            break
     try:
         return UUID(run_id)
     except ValueError:

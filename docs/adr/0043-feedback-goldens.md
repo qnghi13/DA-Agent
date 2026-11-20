@@ -19,13 +19,18 @@ answer was right, and nothing turned real questions into regression checks.
 - **Reruns:** `python -m da_agent.goldens run --workspace W --yes` answers each active case again
   through `RunHandler.rerun`, in this process, with the source run's job: the same dataset,
   documents, memory snapshot, and earlier conversation turns, and the worker's routes and limits.
-  No job is created, so reruns stay out of the user's history; costs go under `golden-<case>-…`.
-  Without `--yes` it only counts. Each case is `same`, `changed`, `no_answer`, or `error`, in a JSON
-  report; a broken case never stops the others. `goldens list` shows the cases and the runs rated
+  No job is created, so reruns stay out of the user's history. Costs go under
+  `golden-<source run>-<suffix>`, which the ledger charges to the run's workspace, so reruns count
+  toward its daily budget; each rerun may spend what the workspace has left, up to the per-run
+  limit, without the source run's past spending. Without `--yes` it only counts. Each case is
+  `same`, `changed`, `no_answer`, or `error`, printed as it finishes and written line by line to a
+  JSONL report under `DATA_DIR/goldens/` (users' questions and answers stay outside the repository;
+  a stopped rerun keeps what it paid for); a broken case never stops the others. `goldens list` shows the cases and the runs rated
   down with their reasons and notes, for an operator to review.
 - **Comparison** (`da_agent.agent.compare`, core, not the DataMate scorer): same kind; numbers
   within a relative 0.01%; text trimmed and case-folded; lists in any order; tables by column name
-  with rows in any order; numbers inside lists and tables at five significant digits.
+  with rows in any order. Inside lists and tables, whole numbers must be equal and only other JSON
+  numbers get the tolerance; strings such as ids, codes, and phone numbers compare as text.
 - **Online signals:** the ops summary's feedback panel shows 👍 and 👎 counts, the share of finished
   runs rated, 👎 reasons by count, and the 👍 rate per agent version (the latest attempt's,
   ADR 0038). Counts and the fixed reason words only, never notes.

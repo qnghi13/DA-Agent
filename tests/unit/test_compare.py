@@ -54,3 +54,27 @@ def test_a_malformed_answer_is_changed_not_an_error() -> None:
         compare_answers(answer("table", {"columns": ["a"]}), answer("table", "oops")) == "changed"
     )
     assert compare_answers(answer("number", "abc"), answer("number", 1)) == "changed"
+
+
+@pytest.mark.parametrize(
+    ("expected", "actual"),
+    [
+        (answer("list", [100231, 100234]), answer("list", [100232, 100233])),
+        (answer("list", ["0912345678"]), answer("list", ["0912349999"])),
+        (answer("list", ["007"]), answer("list", ["7"])),
+        (
+            answer("table", {"columns": ["order_id"], "rows": [[1000001]]}),
+            answer("table", {"columns": ["order_id"], "rows": [[1000004]]}),
+        ),
+    ],
+)
+def test_ids_codes_and_phone_numbers_must_match_exactly(expected: dict, actual: dict) -> None:
+    assert compare_answers(expected, actual) == "changed"
+
+
+def test_floats_in_lists_and_tables_match_within_the_tolerance() -> None:
+    assert compare_answers(answer("list", [1.23455]), answer("list", [1.234549])) == "same"
+    assert compare_answers(answer("list", [1.2345]), answer("list", [1.2400])) == "changed"
+    table = {"columns": ["product", "share"], "rows": [["Tea", 0.333333], ["Coffee", 0.666667]]}
+    close = {"columns": ["product", "share"], "rows": [["Coffee", 0.6666671], ["Tea", 0.3333331]]}
+    assert compare_answers(answer("table", table), answer("table", close)) == "same"

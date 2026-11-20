@@ -224,3 +224,32 @@ def test_a_workspace_over_its_daily_budget_cannot_start_jobs(
     assert response.status_code == 429
     assert "budget" in response.json()["detail"]
     assert client.get("/v1/datasets", headers=auth(key)).status_code == 200
+
+
+def test_reruns_and_forks_of_a_run_count_toward_its_workspace(
+    conn: psycopg.Connection, workspace: UUID
+) -> None:
+    job_id = JobQueue(conn).enqueue(workspace, "run", {})
+    ledger = PostgresCostLedger(conn)
+
+    ledger.record(call(f"golden-{job_id}-ab12cd34", 0.02))
+    ledger.record(call(f"fork-{job_id}-ab12cd34", 0.03))
+    ledger.record(call("golden-not-a-run", 0.5))
+
+    assert spent_today(conn, workspace) == pytest.approx(0.05)
+
+
+def test_a_rerun_gets_what_the_workspace_has_left_not_the_runs_past_spending(
+    schema: str, conn: psycopg.Connection, workspace: UUID
+) -> None:
+    set_daily_budget(conn, workspace, 1.0)
+    job_id = JobQueue(conn).enqueue(workspace, "run", {})
+    PostgresCostLedger(conn).record(call(str(job_id), 0.99))
+    job = JobQueue(conn).get(job_id, workspace)
+    assert job is not None and POSTGRES_URL is not None
+    budgets = WorkspaceBudgets(url=POSTGRES_URL, schema=schema, daily_usd=5.0, run_usd=0.25)
+
+    assert budgets.for_job(job).max_cost_usd == pytest.approx(0.25)
+    rerun = budgets.for_job(job, run_id=f"golden-{job_id}-ab12cd34")
+
+    assert rerun.max_cost_usd == pytest.approx(0.01)

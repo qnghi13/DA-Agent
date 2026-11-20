@@ -619,3 +619,15 @@ def test_feedback_needs_a_finished_run_of_the_workspace_and_a_short_note(
         client.put(f"/v1/runs/{run_id}/feedback", headers=auth(key), json=unknown).status_code
         == 422
     )
+
+
+def test_a_note_with_a_nul_character_is_refused_not_a_server_error(
+    client: TestClient, conn: psycopg.Connection, key: str
+) -> None:
+    run_id = answered_run(client, conn, key)
+
+    response = client.put(
+        f"/v1/runs/{run_id}/feedback", headers=auth(key), json={"rating": "down", "note": "a\x00b"}
+    )
+
+    assert response.status_code == 422
