@@ -27,3 +27,4 @@ Mỗi cột mốc có một ghi chú tiếng Việt, theo khung sau:
 | [16. Định nghĩa chỉ số](16-dinh-nghia-chi-so.md) | Semantic layer nhỏ: lưu từ SQL của câu trả lời, so khớp bằng code, bỏ qua định nghĩa cũ |
 | [17. Run manifest](17-run-manifest.md) | Harness: phiên bản agent theo từng attempt, fingerprint của prompt, đánh dấu chạy tiếp qua phiên bản |
 | [18. Record/replay](18-record-replay.md) | Harness: ghi output của model rồi phát lại để đo code sau model với $0, không nhiễu |
+| [19. pass^k](19-pass-k.md) | Harness: chạy mỗi câu k lần, đo độ ổn định và sàn nhiễu của điểm |

@@ -44,3 +44,4 @@ decision, add a new ADR and mark the old one as superseded.
 | [0037](0037-alternative-readings-rejected.md) | Other readings of a business word are not offered with the answer | Rejected |
 | [0038](0038-run-manifest.md) | Every job attempt records the agent version that ran it | Accepted |
 | [0039](0039-record-replay.md) | Eval runs can record model outcomes and replay them at no cost | Accepted |
+| [0040](0040-pass-k.md) | pass^k measures how stable eval answers are across runs | Accepted |

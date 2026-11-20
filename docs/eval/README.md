@@ -84,6 +84,26 @@ saved definition in the SQL. Three still-wrong answers used one and failed elsew
 column that does not exist, which customer to rank). One run each, so +6 is a direction, not a
 measurement; the standard eval reads no memory and is unchanged.
 
+## Run-to-run noise: pass^k (2026-11-20)
+
+`smoke` (30 questions) run 3 times on the same code (`eval.datamate.passk`, ADR 0040), Groq
+`openai/gpt-oss-20b`, graph agent, $0.205 in all.
+
+| Run | Correct | Wrong | Abstained | Score |
+|---|---|---|---|---|
+| 1 | 20 | 4 | 6 | +16 |
+| 2 | 18 | 6 | 6 | +12 |
+| 3 | 16 | 6 | 8 | +10 |
+
+- **Score:** mean +12.7, standard deviation 3.1, range +10 to +16, on the same code.
+- **pass^3** (right in all 3 runs) 50%, **pass@3** (right at least once) 67%, mean accuracy 60%.
+  5 questions are flaky (right in some runs only), 3 always wrong, 4 always abstained.
+- **What it means:** the difference between two single runs has a standard deviation of about
+  3.1 x 1.41 = 4.3 points on 30 questions. A change measured with one run each needs about +9
+  points on `smoke` to be told from noise at two standard deviations. Earlier single-run gains of a
+  few points on 20 to 30 questions (such as metric definitions, +1 to +7) are within this noise.
+  Changes after the model can be measured without it by replay (ADR 0039).
+
 ## Caveats
 
 - One model, one run per set. Run-to-run variance of `gpt-oss-20b` is several points on 30
