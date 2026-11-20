@@ -92,3 +92,13 @@ describe("formatting", () => {
     expect(formatPercent(0.333)).toBe("33%");
   });
 });
+
+describe("stopped runs", () => {
+  it("groups cancelled and timed-out runs as stopped, with their own labels", async () => {
+    const { groupOf, OUTCOME_LABELS } = await import("./ops");
+    expect(groupOf("cancelled")).toBe("Stopped");
+    expect(groupOf("deadline_exceeded")).toBe("Stopped");
+    expect(OUTCOME_LABELS.cancelled).toBe("Stopped by the user");
+    expect(OUTCOME_LABELS.deadline_exceeded).toBe("Stopped: the run ran out of time");
+  });
+});

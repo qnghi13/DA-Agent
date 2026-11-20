@@ -12,6 +12,8 @@ class AgentLimits:
     # Verification failures sent back to the tool loop before the answer is withheld.
     max_repairs: int = 2
     budget: RunBudget | None = None
+    # Wall time for one run, from its start (ADR 0042). None sets no deadline.
+    max_seconds: float | None = 300.0
 
 
 @dataclass(frozen=True)

@@ -87,6 +87,11 @@ class InvalidToolCallError(LLMError):
     """
 
 
+class CallInterruptedError(LLMError):
+    """The caller asked to stop while the client waited for a limit or a retry (ADR 0042). It
+    goes straight back to the caller: no retry, no fallback, and no ledger row."""
+
+
 class AllRoutesFailedError(LLMError):
     """Every configured provider failed."""
 

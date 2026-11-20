@@ -636,7 +636,8 @@ def test_a_rate_limited_turn_waits_and_the_run_finishes(dataset: SqliteDataset) 
     result, _ = run(dataset, [], client=client)
 
     assert result.stop_reason == "answered"
-    assert waits == [7]
+    # The run waits the provider's retry-after, in one-second slices so a stop can end it.
+    assert sum(waits) == 7
 
 
 def test_a_provider_that_keeps_timing_out_falls_back_to_the_next(dataset: SqliteDataset) -> None:
@@ -940,3 +941,124 @@ def test_guard_signals_survive_a_job_row_and_old_rows_still_load(dataset: Sqlite
     assert again.steps[0].error_kind == "rejected"
     old = result_from_json({"stop_reason": "answered", "steps": [{"tool": "run_sql", "ok": True}]})
     assert old.verify_log == [] and old.steps[0].error_kind is None
+
+
+class StoppingAdapter(ScriptedAdapter):
+    """Runs a hook after a given model call, such as a cancel or a clock jump."""
+
+    def __init__(self, script: list, after_call: int, hook: Any) -> None:
+        super().__init__(script)
+        self.after_call, self.hook = after_call, hook
+
+    def complete(self, request: LLMRequest, model: str) -> LLMResponse:
+        try:
+            return super().complete(request, model)
+        finally:
+            if len(self.requests) == self.after_call:
+                self.hook()
+
+
+def run_stoppable(dataset: SqliteDataset, adapter: ScriptedAdapter, stop: Any, **kwargs: Any):
+    client = LLMClient([Route(adapter, "m")], CostLedger(), sleep=lambda _: None, max_retries=0)
+    return run_graph(
+        "Total revenue?", as_of="2026-06-28", dataset=dataset,
+        documents=[Document("rules", "Revenue excludes cancelled orders.")], llm=client,
+        run_id="r1", stop=stop, **kwargs,
+    )  # fmt: skip
+
+
+def test_a_cancelled_run_stops_before_its_next_model_call(dataset: SqliteDataset) -> None:
+    from da_agent.agent.stop import StopToken
+
+    stop = StopToken()
+    script = [plan(), sql(), sql(), submit("number", 350)]
+    # The query the third call asks for never runs: the run stops before the tools node.
+    adapter = StoppingAdapter(script, 3, lambda: stop.cancel("cancelled"))
+
+    result = run_stoppable(dataset, adapter, stop)
+
+    assert result.stop_reason == "cancelled"
+    assert result.answer is None
+    assert len(adapter.requests) == 3
+    assert [step.sql for step in result.steps if step.sql] == [TOTAL_SQL]
+
+
+def test_a_run_past_its_deadline_stops(dataset: SqliteDataset) -> None:
+    from da_agent.agent.stop import StopToken
+
+    now = [0.0]
+    stop = StopToken(deadline_seconds=300, clock=lambda: now[0])
+    adapter = StoppingAdapter(
+        [plan(), sql(), submit("number", 350)], 1, lambda: now.__setitem__(0, 301.0)
+    )
+
+    result = run_stoppable(dataset, adapter, stop)
+
+    assert result.stop_reason == "deadline_exceeded"
+    assert len(adapter.requests) == 1
+
+
+def test_a_stopped_run_keeps_its_checkpoints(dataset: SqliteDataset) -> None:
+    from da_agent.agent.stop import StopToken
+
+    saver = InMemorySaver()
+    stop = StopToken()
+    script = [plan(), sql(), sql(), submit("number", 350)]
+    # The query the third call asks for never runs: the run stops before the tools node.
+    adapter = StoppingAdapter(script, 3, lambda: stop.cancel("cancelled"))
+
+    result = run_stoppable(dataset, adapter, stop, checkpointer=saver)
+
+    assert result.stop_reason == "cancelled"
+    assert [step.sql for step in result.steps if step.sql] == [TOTAL_SQL]
+    assert list(saver.list({"configurable": {"thread_id": "r1"}}))
+
+
+def test_a_deadline_inside_model_retries_is_not_a_provider_failure(dataset: SqliteDataset) -> None:
+    from da_agent.agent.stop import StopToken
+
+    now = [0.0]
+    stop = StopToken(deadline_seconds=300, clock=lambda: now[0])
+
+    def slow_failure() -> None:
+        now[0] = 400.0
+
+    adapter = StoppingAdapter([plan(), TransientLLMError("timeout")], 2, slow_failure)
+
+    result = run_stoppable(dataset, adapter, stop)
+
+    assert result.stop_reason == "deadline_exceeded"
+
+
+def test_limits_set_a_deadline_when_no_token_is_given(dataset: SqliteDataset) -> None:
+    result, adapter = run(dataset, [plan(), sql(), submit("number", 350)], max_seconds=0.0)
+
+    assert result.stop_reason == "deadline_exceeded"
+    assert adapter.requests == []
+
+
+def test_a_cancel_during_a_throttle_wait_stops_the_run_at_once(dataset: SqliteDataset) -> None:
+    from da_agent.agent.stop import StopToken
+    from da_agent.llm.ratelimit import MemoryRateLimiter, RouteLimit
+
+    stop = StopToken()
+    waits: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        waits.append(seconds)
+        if len(waits) == 3:
+            stop.cancel("cancelled")
+
+    limiter = MemoryRateLimiter({"fake:m": RouteLimit(rpm=1)}, clock=lambda: 0.0)
+    adapter = ScriptedAdapter([plan(), sql(), submit("number", 350)])
+    client = LLMClient(
+        [Route(adapter, "m")], CostLedger(), sleep=sleep, max_retries=0, limiter=limiter
+    )
+    result = run_graph(
+        "Total revenue?", as_of="2026-06-28", dataset=dataset, documents=[], llm=client,
+        run_id="r1", stop=stop,
+    )  # fmt: skip
+
+    assert result.stop_reason == "cancelled"
+    assert len(adapter.requests) == 1
+    assert len(waits) == 3

@@ -11,7 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useReducer, useRef, useState } from "react";
-import { type Api, type Explanation, type Run, errorMessage } from "@/api";
+import { type Api, type Explanation, type Run, type RunStatus, errorMessage } from "@/api";
 import { type MetricChoice, SaveMetricDialog } from "@/components/chat/save-metric-dialog";
 import { DataTable } from "@/components/data-table";
 import { StatusBadge } from "@/components/status-badge";
@@ -24,6 +24,7 @@ import {
   answerSummary,
   formatAnswer,
   initialTrail,
+  isRunActive,
   reduceTrail,
   stopReasonText,
   toolLabel,
@@ -46,10 +47,13 @@ export function RunMessage({
   onShowWork,
   onCorrect,
   onOpenMemory,
+  onStatus,
 }: {
   api: Api;
   runId: string;
   active: boolean;
+  /** Called with the run's status whenever it changes, so the composer can offer Stop. */
+  onStatus?: (runId: string, status: RunStatus) => void;
   onShowWork: (evidence: Evidence, trigger: HTMLElement) => void;
   /** Opens memory to write a correction linked to this run. */
   onCorrect?: (run: Run, trigger: HTMLElement) => void;
@@ -80,6 +84,11 @@ export function RunMessage({
     return () => controller.abort();
   }, [api, runId]);
 
+  const status = run?.status;
+  useEffect(() => {
+    if (status) onStatus?.(runId, status);
+  }, [onStatus, runId, status]);
+
   if (!run) {
     return error ? (
       <p role="alert" className="text-danger text-sm">
@@ -90,7 +99,7 @@ export function RunMessage({
     );
   }
 
-  const finished = run.status === "succeeded" || run.status === "failed";
+  const finished = !isRunActive(run.status);
   return (
     <article className="flex flex-col gap-3" aria-busy={!finished && !error}>
       <div className="flex justify-end">
@@ -287,7 +296,9 @@ function Answer({
         </>
       ) : (
         <p className="text-muted-foreground text-[15px]">
-          {stopReasonText(result?.stop_reason) ?? result?.error ?? "No answer."}
+          {stopReasonText(result?.stop_reason ?? (run.status === "cancelled" ? "cancelled" : undefined)) ??
+            result?.error ??
+            "No answer."}
         </p>
       )}
 

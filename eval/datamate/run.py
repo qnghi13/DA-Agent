@@ -65,6 +65,8 @@ REPLAY_MISS = "replay miss"
 class RunConfig:
     output_dir: Path
     max_iterations: int = 10
+    # Wall time per question (ADR 0042).
+    max_seconds: float = 300.0
     max_tokens_per_question: int | None = None
     max_total_tokens: int | None = None
     delay_seconds: float = 0.0
@@ -138,7 +140,11 @@ def eval_manifest(args: argparse.Namespace, routes: list[Route]) -> dict[str, An
     model sees: the agent, reports (which offer make_chart), and metric definitions."""
     budget = RunBudget(max_total_tokens=args.max_tokens_per_question)
     limits = {
-        "agent": asdict(AgentLimits(max_iterations=args.max_iterations, budget=budget)),
+        "agent": asdict(
+            AgentLimits(
+                max_iterations=args.max_iterations, budget=budget, max_seconds=args.max_seconds
+            )
+        ),
         "max_total_tokens": args.max_total_tokens,
         "agent_kind": args.agent,
         "reports": bool(args.report),
@@ -369,7 +375,9 @@ class _Run:
         done = {row["id"] for row in self.results}
         self.pending = iter([q for q in questions if q["id"] not in done])
         budget = RunBudget(max_total_tokens=config.max_tokens_per_question)
-        self.limits = AgentLimits(max_iterations=config.max_iterations, budget=budget)
+        self.limits = AgentLimits(
+            max_iterations=config.max_iterations, budget=budget, max_seconds=config.max_seconds
+        )
         self.shops: dict[str, ShopContext | None] = {}
         self.skipped: list[str] = []
         self.failed: dict[str, str] = {}
@@ -560,6 +568,7 @@ def main() -> int:
         "--holdout", action="store_true", help="allow --set holdout: the one run at the end"
     )
     parser.add_argument("--max-iterations", type=int, default=10)
+    parser.add_argument("--max-seconds", type=float, default=300.0, help="wall time per question")
     parser.add_argument("--max-tokens-per-question", type=int, default=60_000)
     parser.add_argument("--max-total-tokens", type=int, required=True)
     parser.add_argument("--delay", type=float, default=0.0, help="seconds between questions")
@@ -627,6 +636,7 @@ def main() -> int:
         config = RunConfig(
             output_dir=args.output_dir,
             max_iterations=args.max_iterations,
+            max_seconds=args.max_seconds,
             max_tokens_per_question=args.max_tokens_per_question,
             max_total_tokens=args.max_total_tokens,
             delay_seconds=args.delay,

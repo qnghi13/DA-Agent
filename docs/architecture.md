@@ -114,6 +114,11 @@ browser ─127.0.0.1:8080─> web (nginx: UI files, /v1 proxy)
   circuit breaker per route, so a failing provider is skipped for a cooldown instead of retried
   by every request. Outbound requests and tokens per minute per route are limited before a call,
   in memory or, for worker replicas sharing a key, in Postgres `rate_buckets` (fail open).
+- **Stopping runs** ([ADR 0042](adr/0042-cancel-deadline-time-travel.md)): each run has a stop
+  token checked before model calls, between nodes, and during client waits. A user cancel (job
+  status `cancelled`), the run deadline (`deadline_exceeded`, 300 s), or a lost lease ends the run
+  and keeps its checkpoints. Operators read and fork those checkpoints with
+  `python -m da_agent.timetravel`.
 
 ## Request flow
 

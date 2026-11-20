@@ -839,7 +839,7 @@ def test_graph_checkpoints_carry_the_manifest_version(data_dir: Path, tmp_path: 
 def _manifest_args(metrics_file: Path | None) -> argparse.Namespace:
     return argparse.Namespace(
         max_tokens_per_question=60000, max_iterations=10, max_total_tokens=None,
-        agent="graph", report=False, metrics_file=metrics_file,
+        agent="graph", report=False, metrics_file=metrics_file, max_seconds=300.0,
     )  # fmt: skip
 
 
@@ -1045,3 +1045,22 @@ def test_bad_eval_limits_are_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="DA_AGENT_ROUTE_LIMITS"):
         eval_client([], CostLedger(), {"DA_AGENT_ROUTE_LIMITS": "{"}, record_content=False,
                     replaying=False)  # fmt: skip
+
+
+def test_the_run_deadline_reaches_the_agent_and_the_manifest(
+    data_dir: Path, tmp_path: Path
+) -> None:
+    from eval.datamate.run import eval_manifest
+
+    llm, ledger, adapter = make_llm([answer(1)])
+    questions = read_jsonl(data_dir / "questions.jsonl")[:1]
+
+    run_questions(questions, data_dir, llm, ledger, RunConfig(tmp_path / "out", max_seconds=0.0))
+
+    assert adapter.requests == []
+    row = read_jsonl(tmp_path / "out" / "results.jsonl")[0]
+    assert row["stop_reason"] == "deadline_exceeded"
+    args = _manifest_args(None)
+    args.max_seconds = 120.0
+    manifest = eval_manifest(args, [Route(ScriptedAdapter([]), "m")])
+    assert manifest["limits"]["agent"]["max_seconds"] == 120.0

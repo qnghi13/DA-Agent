@@ -18,6 +18,7 @@ from da_agent.llm.ratelimit import RateLimiter, estimate_tokens, route_key
 from da_agent.llm.types import (
     AllRoutesFailedError,
     BudgetExceededError,
+    CallInterruptedError,
     InvalidToolCallError,
     LLMAdapter,
     LLMError,
@@ -32,6 +33,8 @@ from da_agent.llm.types import (
 
 BASE_WAIT_SECONDS = 1.0
 DEFAULT_BREAKER = BreakerPolicy()
+# How often a wait asks whether its caller stopped.
+WAIT_SLICE_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -185,12 +188,19 @@ class LLMClient:
         self._max_throttle_wait = max(max_throttle_wait, max_wait)
 
     def complete(
-        self, request: LLMRequest, *, run_id: str, budget: RunBudget | None = None
+        self,
+        request: LLMRequest,
+        *,
+        run_id: str,
+        budget: RunBudget | None = None,
+        interrupted: Callable[[], bool] | None = None,
     ) -> LLMResponse:
         """Try each route in order.
 
         Raises BudgetExceededError, AllRoutesFailedError, or InvalidToolCallError. The last one is
         the model's mistake, so it goes straight back to the caller without a fallback.
+        interrupted is asked during waits for a limit or a retry; when it says yes, the wait ends
+        with CallInterruptedError, so a stopped run never sits out a long wait (ADR 0042).
         """
         self._check_budget(run_id, budget)
         failures: list[str] = []
@@ -202,8 +212,10 @@ class LLMClient:
                 failures.append(f"{route.adapter.provider}/{route.model}: circuit open")
                 continue
             try:
-                return self._complete_with_retries(route, breaker, request, run_id, throttle_wait)
-            except InvalidToolCallError:
+                return self._complete_with_retries(
+                    route, breaker, request, run_id, throttle_wait, interrupted
+                )
+            except (InvalidToolCallError, CallInterruptedError):
                 raise
             except LLMError as error:
                 failures.append(f"{route.adapter.provider}/{route.model}: {error}")
@@ -232,11 +244,12 @@ class LLMClient:
         request: LLMRequest,
         run_id: str,
         throttle_wait: float,
+        interrupted: Callable[[], bool] | None,
     ) -> LLMResponse:
         attempt = 0
         while True:
             try:
-                response = self._attempt(route, request, run_id, throttle_wait)
+                response = self._attempt(route, request, run_id, throttle_wait, interrupted)
             except ThrottledError:
                 # Our own limit, not the provider's health: fall back, never retry or count it. A
                 # half-open probe it stopped learned nothing, so the next caller probes.
@@ -257,7 +270,7 @@ class LLMClient:
                     raise
                 if breaker is not None and not breaker.allow():
                     raise
-                self._sleep(wait)
+                self._wait(wait, interrupted)
                 attempt += 1
             except Exception:
                 # A bug or an interruption says nothing about the provider either.
@@ -274,8 +287,26 @@ class LLMClient:
         retry_after = getattr(error, "retry_after", None)
         return retry_after if retry_after is not None else BASE_WAIT_SECONDS * 2**attempt
 
+    def _wait(self, seconds: float, interrupted: Callable[[], bool] | None) -> None:
+        """Sleep, in one-second slices when the caller may stop, checking before each."""
+        if interrupted is None:
+            self._sleep(seconds)
+            return
+        left = seconds
+        while left > 0:
+            if interrupted():
+                raise CallInterruptedError("the run stopped while waiting to call the model")
+            step = min(WAIT_SLICE_SECONDS, left)
+            self._sleep(step)
+            left -= step
+
     def _attempt(
-        self, route: Route, request: LLMRequest, run_id: str, throttle_wait: float
+        self,
+        route: Route,
+        request: LLMRequest,
+        run_id: str,
+        throttle_wait: float,
+        interrupted: Callable[[], bool] | None = None,
     ) -> LLMResponse:
         with self._tracer.start_as_current_span("llm.complete") as span:
             span.set_attribute("openinference.span.kind", "LLM")
@@ -295,13 +326,15 @@ class LLMClient:
                     reserved = tokens
                     span.set_attribute("llm.throttle_wait_seconds", wait)
                     if wait > 0:
-                        self._sleep(wait)
+                        self._wait(wait, interrupted)
                     started = time.monotonic()
                 response = route.adapter.complete(request, route.model)
             except LLMError as error:
                 if self._limiter is not None and reserved:
                     self._limiter.settle(key, reserved, 0)
                 span.set_status(Status(StatusCode.ERROR, type(error).__name__))
+                if isinstance(error, CallInterruptedError):
+                    raise  # No call went out, so the ledger has nothing to record.
                 self._ledger.record(
                     CostRecord(
                         run_id=run_id, provider=route.adapter.provider, model=route.model,

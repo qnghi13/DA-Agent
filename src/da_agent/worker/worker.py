@@ -23,6 +23,7 @@ from typing import Any
 import psycopg
 from opentelemetry import trace
 
+from da_agent.agent.stop import CANCELLED
 from da_agent.storage.db import connect
 from da_agent.storage.jobs import Job, JobQueue
 from da_agent.storage.versions import record_attempt
@@ -134,7 +135,15 @@ class Worker:
                 message = f"the job failed unexpectedly ({type(error).__name__})"
                 queue.fail(job.id, self.worker_id, message, retry_in_seconds=None)
                 return
-            if not queue.complete(job.id, self.worker_id, result):
+            if lost.is_set():
+                # Another worker may own the job now; its result is the one that counts.
+                trace.get_current_span().set_attribute("da_agent.job_lost", True)
+                return
+            if result.get("stop_reason") == CANCELLED:
+                finished = queue.finish_cancelled(job.id, self.worker_id, result)
+            else:
+                finished = queue.complete(job.id, self.worker_id, result)
+            if not finished:
                 trace.get_current_span().set_attribute("da_agent.job_lost", True)
         finally:
             done.set()

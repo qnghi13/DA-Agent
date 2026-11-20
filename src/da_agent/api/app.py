@@ -236,6 +236,7 @@ def _run_view(job: Job, trace_ui_url: str | None = None) -> dict[str, Any]:
         "as_of": job.payload.get("as_of"),
         "conversation_id": job.payload.get("conversation_id"),
         "status": job.status,
+        "cancel_requested": job.cancel_requested,
         "attempts": job.attempts,
         "error": job.last_error,
         "result": job.result,
@@ -919,6 +920,20 @@ def _metric_facts(
     }
 
 
+@router.post("/runs/{run_id}/cancel", status_code=202)
+def cancel_run(run_id: str, conn: Db, caller: Caller) -> dict[str, str]:
+    """Stop a run (ADR 0042). A queued run ends at once; a running one stops within a few
+    seconds, after the model call or query it is waiting on. Asking again changes nothing."""
+    job = run_job(run_id, conn, caller)
+    outcome = JobQueue(conn).request_cancel(job.id, caller.workspace_id)
+    if outcome is None:
+        raise _not_found()
+    if outcome == "finished":
+        raise HTTPException(status_code=409, detail=f"the run already ended ({job.status})")
+    log(conn, caller, "run.cancel", run_id, outcome=outcome)
+    return {"id": run_id, "status": outcome}
+
+
 @router.get("/runs/{run_id}/report", response_class=HTMLResponse)
 def get_report(run_id: str, conn: Db, caller: Caller) -> HTMLResponse:
     """The run as a standalone HTML report, where every number links to its query cell."""
@@ -1097,7 +1112,7 @@ def create_query_export(
     return {"id": str(export_id), "status": "queued"}
 
 
-FINISHED = ("succeeded", "failed")
+FINISHED = ("succeeded", "failed", "cancelled")
 
 
 def _sse(event: RunEvent) -> str:

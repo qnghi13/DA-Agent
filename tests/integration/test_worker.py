@@ -3,6 +3,7 @@
 Needs a Postgres server. Set DA_AGENT_TEST_POSTGRES_URL, or the tests are skipped.
 """
 
+import json
 import os
 import sqlite3
 import time
@@ -475,3 +476,108 @@ def test_a_run_job_gives_the_model_its_memory_after_the_dataset_documents(
     assert system.index("Revenue is the sum of totals.") < system.index(
         "Revenue excludes cancelled orders."
     )
+
+
+def test_a_run_cancelled_while_running_stops_and_ends_cancelled(
+    schema: str, conn: psycopg.Connection, workspace: UUID, dataset: SqliteDataset
+) -> None:
+    from tests.unit.test_agent_graph import StoppingAdapter
+
+    job_id = enqueue_run(conn, workspace)
+    script = [plan(), sql(), sql(), submit("number", 350)]
+    adapter = StoppingAdapter(script, 3, lambda: JobQueue(conn).request_cancel(job_id, workspace))
+    handler = run_handler(adapter, dataset, schema)
+    handler.cancel_poll_seconds = 0.0
+
+    assert Worker(config(schema, "w1"), {"run": handler}).run_once()
+
+    done = job(conn, job_id, workspace)
+    assert done.status == "cancelled" and done.result is not None
+    assert result_from_json(done.result).stop_reason == "cancelled"
+    assert len(adapter.requests) == 3
+
+
+def test_a_run_whose_lease_is_lost_stops_without_calling_the_model(
+    schema: str, conn: psycopg.Connection, workspace: UUID, dataset: SqliteDataset
+) -> None:
+    import threading
+
+    job_id = enqueue_run(conn, workspace)
+    claimed = JobQueue(conn).claim("w1", lease_seconds=30)
+    assert claimed is not None and claimed.id == job_id
+    adapter = ScriptedAdapter([plan(), sql(), submit("number", 350)])
+    lost = threading.Event()
+    lost.set()
+
+    result = run_handler(adapter, dataset, schema)(claimed, lost)
+
+    assert result["stop_reason"] == "lease_lost"
+    assert adapter.requests == []
+
+
+def test_a_worker_that_lost_its_lease_does_not_complete_the_job(
+    schema: str, conn: psycopg.Connection, workspace: UUID
+) -> None:
+    job_id = JobQueue(conn).enqueue(workspace, "run", {})
+
+    def lost_it(job: Job, lost: Any) -> dict[str, Any]:
+        lost.set()
+        return {"stop_reason": "lease_lost"}
+
+    Worker(config(schema, "w1"), {"run": lost_it}, tracer=trace.NoOpTracer()).run_once()
+
+    assert job(conn, job_id, workspace).status == "running"
+
+
+def test_an_operator_forks_a_finished_run_from_one_of_its_steps(
+    schema: str, conn: psycopg.Connection, workspace: UUID, dataset: SqliteDataset
+) -> None:
+    from langgraph.checkpoint.postgres import PostgresSaver
+
+    from da_agent.timetravel import copy_checkpoint, list_checkpoints
+
+    job_id = enqueue_run(conn, workspace)
+    first = ScriptedAdapter([plan(), sql(), submit("number", 350)])
+    Worker(config(schema, "w1"), {"run": run_handler(first, dataset, schema)}).run_once()
+    before = job(conn, job_id, workspace)
+    second = ScriptedAdapter([sql(), submit("number", 350)])
+    handler = run_handler(second, dataset, schema)
+
+    with handler.checkpoint_connection() as saver_conn:
+        saver = PostgresSaver(saver_conn)
+        rows = list_checkpoints(saver, str(job_id))
+        after_plan = next(row for row in rows if "plan" in row.ran)
+        copy_checkpoint(saver, str(job_id), after_plan.checkpoint_id, "fork-1")
+        result = handler.fork(before, "fork-1")
+        assert list_checkpoints(saver, str(job_id))[-1].checkpoint_id == rows[-1].checkpoint_id
+
+    assert result["stop_reason"] == "answered"
+    assert len(second.requests) == 2
+    assert job(conn, job_id, workspace) == before
+
+
+def test_the_time_travel_cli_lists_and_shows_a_run(
+    schema: str, conn: psycopg.Connection, workspace: UUID, dataset: SqliteDataset,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:  # fmt: skip
+    from psycopg.conninfo import make_conninfo
+
+    from da_agent.timetravel import main
+
+    job_id = enqueue_run(conn, workspace)
+    adapter = ScriptedAdapter([plan(), sql(), submit("number", 350)])
+    Worker(config(schema, "w1"), {"run": run_handler(adapter, dataset, schema)}).run_once()
+    assert URL is not None
+    monkeypatch.setenv(
+        "DA_AGENT_DATABASE_URL", make_conninfo(URL, options=f"-c search_path={schema}")
+    )
+    monkeypatch.setenv("DA_AGENT_DATA_DIR", str(tmp_path))
+
+    assert main(["list", str(job_id), "--json"]) == 0
+    rows = json.loads(capsys.readouterr().out)
+    assert rows[-1]["stop_reason"] == "answered"
+    assert main(["show", str(job_id), rows[-1]["checkpoint_id"], "--max-chars", "30"]) == 0
+    assert json.loads(capsys.readouterr().out)["stop_reason"] == "answered"
+    assert main(["show", str(job_id), "missing"]) == 1
+    assert "no checkpoint" in capsys.readouterr().err
+    assert main(["list", "no-such-run"]) == 1

@@ -1,7 +1,7 @@
 // Run progress and answers: turning SSE events into the evidence trail, and answers into text.
 // Event shapes come from node_events in src/da_agent/agent/graph.py.
 
-import type { RunResult } from "./api";
+import type { RunResult, RunStatus } from "./api";
 import type { SseEvent } from "./sse";
 import type { Tone } from "./status";
 
@@ -23,7 +23,7 @@ export interface Trail {
   steps: TrailStep[];
   seen: string[];
   turns: number;
-  status: "running" | "succeeded" | "failed";
+  status: "running" | "succeeded" | "failed" | "cancelled";
   stopReason?: string;
   question?: string;
 }
@@ -79,7 +79,11 @@ export function reduceTrail(trail: Trail, event: SseEvent): Trail {
     case "question":
       return { ...next, question: typeof data.question === "string" ? data.question : undefined };
     case "end":
-      return { ...next, status: data.status === "succeeded" ? "succeeded" : "failed" };
+      return {
+        ...next,
+        status:
+          data.status === "succeeded" || data.status === "cancelled" ? data.status : "failed",
+      };
     default:
       return next;
   }
@@ -106,9 +110,15 @@ export function activity(trail: Trail): string {
  * only after verification passes. Runs carry no duration or cost for members, so it shows neither.
  */
 export function answerSummary(
-  status: "queued" | "running" | "succeeded" | "failed",
+  status: RunStatus,
   result: RunResult | null,
 ): { label: string; tone: Tone; detail: string | null } {
+  if (status === "cancelled") {
+    const detail = result?.queries.length
+      ? plural(result.queries.length, "query", "queries")
+      : null;
+    return { label: "Stopped", tone: "neutral", detail };
+  }
   if (status === "failed" || !result) return { label: "Failed", tone: "danger", detail: null };
   const detail = result.queries.length
     ? plural(result.queries.length, "query", "queries")
@@ -144,7 +154,14 @@ const STOP_REASONS: Record<string, string> = {
   llm_error: "The language model could not be reached.",
   invalid_tool_call: "The model kept making invalid tool calls.",
   no_tool_call: "The model stopped without answering.",
+  cancelled: "You stopped this question.",
+  deadline_exceeded: "Stopped: this question ran out of time.",
 };
+
+/** Whether a run may still change: the UI follows it and offers to stop it. */
+export function isRunActive(status: RunStatus): boolean {
+  return status === "queued" || status === "running";
+}
 
 export function stopReasonText(reason: string | undefined): string | undefined {
   return reason ? (STOP_REASONS[reason] ?? reason) : undefined;

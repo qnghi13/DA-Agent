@@ -1,4 +1,13 @@
-import { ArrowUp, BookMarked, CalendarDays, Database, Loader2, MessageSquarePlus, X } from "lucide-react";
+import {
+  ArrowUp,
+  BookMarked,
+  CalendarDays,
+  Database,
+  Loader2,
+  MessageSquarePlus,
+  Square,
+  X,
+} from "lucide-react";
 import {
   type FormEvent,
   type KeyboardEvent,
@@ -9,7 +18,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { type Api, ApiError, type Dataset, errorMessage } from "./api";
+import { type Api, ApiError, type Dataset, type RunStatus, errorMessage } from "./api";
 import { EvidenceContent } from "./components/chat/evidence";
 import { type Evidence, RunMessage } from "./components/chat/run-message";
 import { DatasetSummary } from "./components/dataset-summary";
@@ -18,6 +27,7 @@ import { Button } from "./components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "./components/ui/sheet";
 import { useMediaQuery } from "./hooks/use-media-query";
 import { conversationStarts, loadConversation, saveConversation } from "./memory";
+import { isRunActive } from "./run";
 import { suggestQuestions } from "./suggestions";
 
 type Panel =
@@ -49,6 +59,9 @@ export function Conversation({ api, dataset }: { api: Api; dataset: Dataset }) {
   const [question, setQuestion] = useState("");
   const [asOf, setAsOf] = useState(today);
   const [sending, setSending] = useState(false);
+  // Each shown run's status, reported by its message; the latest one decides Send or Stop.
+  const [statuses, setStatuses] = useState<Record<string, RunStatus>>({});
+  const [stopping, setStopping] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [panel, setPanel] = useState<Panel | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -106,7 +119,8 @@ export function Conversation({ api, dataset }: { api: Api; dataset: Dataset }) {
   async function ask(event?: FormEvent) {
     event?.preventDefault();
     const text = question.trim();
-    if (!text || sending) return;
+    // Enter while the latest question runs does nothing: the button there stops it instead.
+    if (!text || sending || running) return;
     setSending(true);
     setError(null);
     try {
@@ -117,6 +131,23 @@ export function Conversation({ api, dataset }: { api: Api; dataset: Dataset }) {
       setError(errorMessage(caught));
     } finally {
       setSending(false);
+    }
+  }
+
+  const onStatus = useCallback((id: string, status: RunStatus) => {
+    setStatuses((current) => (current[id] === status ? current : { ...current, [id]: status }));
+  }, []);
+
+  async function stop() {
+    const id = runs?.at(-1)?.id;
+    if (!id || stopping) return;
+    setStopping(id);
+    setError(null);
+    try {
+      await api.cancelRun(id);
+    } catch (caught) {
+      setError(errorMessage(caught));
+      setStopping(null);
     }
   }
 
@@ -162,6 +193,10 @@ export function Conversation({ api, dataset }: { api: Api; dataset: Dataset }) {
   }
 
   const activeRun = panel?.kind === "run" ? panel.evidence.run.id : null;
+  const latestId = runs?.at(-1)?.id;
+  const latestStatus = latestId ? statuses[latestId] : undefined;
+  // While the latest question runs, the send button stops it, as in other chat assistants.
+  const running = latestStatus !== undefined && isRunActive(latestStatus);
   const starts = conversationStarts(runs ?? []);
   const last = runs?.at(-1);
   const startsFresh = last !== undefined && last.conversation_id !== conversation;
@@ -223,6 +258,7 @@ export function Conversation({ api, dataset }: { api: Api; dataset: Dataset }) {
                           : setPanel({ kind: "run", evidence, trigger })
                       }
                       onOpenMemory={(trigger) => setPanel({ kind: "memory", trigger })}
+                      onStatus={onStatus}
                       onCorrect={(run, trigger) =>
                         setPanel({
                           kind: "memory",
@@ -244,6 +280,9 @@ export function Conversation({ api, dataset }: { api: Api; dataset: Dataset }) {
           question={question}
           asOf={asOf}
           sending={sending}
+          running={running}
+          stopping={running && stopping === latestId}
+          onStop={stop}
           error={error}
           onQuestion={setQuestion}
           onAsOf={setAsOf}
@@ -418,6 +457,9 @@ function Composer({
   question,
   asOf,
   sending,
+  running,
+  stopping,
+  onStop,
   error,
   onQuestion,
   onAsOf,
@@ -430,6 +472,9 @@ function Composer({
   question: string;
   asOf: string;
   sending: boolean;
+  running: boolean;
+  stopping: boolean;
+  onStop: () => void;
   error: string | null;
   onQuestion: (text: string) => void;
   onAsOf: (date: string) => void;
@@ -474,16 +519,34 @@ function Composer({
               </label>
               {details}
             </div>
-            <Button
-              type="submit"
-              size="icon"
-              className="size-8 shrink-0 rounded-full"
-              disabled={sending || !question.trim()}
-              aria-label="Ask"
-              title="Send (Enter) · Shift+Enter for a new line"
-            >
-              {sending ? <Loader2 className="animate-spin" /> : <ArrowUp />}
-            </Button>
+            {running ? (
+              <Button
+                type="button"
+                size="icon"
+                className="size-8 shrink-0 rounded-full"
+                disabled={stopping}
+                onClick={onStop}
+                aria-label={stopping ? "Stopping…" : "Stop"}
+                title={stopping ? "Stopping…" : "Stop this question"}
+              >
+                {stopping ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <Square className="size-3 fill-current" />
+                )}
+              </Button>
+            ) : (
+              <Button
+                type="submit"
+                size="icon"
+                className="size-8 shrink-0 rounded-full"
+                disabled={sending || !question.trim()}
+                aria-label="Ask"
+                title="Send (Enter) · Shift+Enter for a new line"
+              >
+                {sending ? <Loader2 className="animate-spin" /> : <ArrowUp />}
+              </Button>
+            )}
           </div>
         </div>
       </form>

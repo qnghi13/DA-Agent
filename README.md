@@ -205,6 +205,15 @@ curl -H "Authorization: Bearer $KEY" localhost:8000/v1/runs/$RUN/report > report
 curl -H "Authorization: Bearer $KEY" "localhost:8000/v1/runs?dataset_id=$DATASET"  # history
 ```
 
+Operators can read and rerun a run's checkpoints with the worker's settings
+([ADR 0042](docs/adr/0042-cancel-deadline-time-travel.md)); a fork calls the model:
+
+```bash
+uv run python -m da_agent.timetravel list $RUN               # every step of a run
+uv run python -m da_agent.timetravel show $RUN $CHECKPOINT   # the state at one step
+uv run python -m da_agent.timetravel fork $RUN $CHECKPOINT   # run on from there in a new thread
+```
+
 Traces go to any OpenTelemetry (OTLP) endpoint set in `DA_AGENT_OTLP_ENDPOINT`, such as a local
 Phoenix (`http://127.0.0.1:6006/v1/traces`). Setting `DA_AGENT_TRACE_UI_URL=http://127.0.0.1:6006`
 on the API adds an "Open trace" link to each run in the UI. Phoenix shows every workspace's

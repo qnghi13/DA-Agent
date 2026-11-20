@@ -529,3 +529,34 @@ def test_a_route_with_a_fallback_still_falls_back_after_the_short_wait() -> None
     client.complete(REQUEST, run_id="r")
 
     assert client.complete(REQUEST, run_id="r").content == "backup"
+
+
+def test_a_throttle_wait_ends_early_when_the_run_is_stopped() -> None:
+    from da_agent.llm.ratelimit import MemoryRateLimiter, RouteLimit
+    from da_agent.llm.types import CallInterruptedError
+
+    limiter = MemoryRateLimiter({"groq:groq-model": RouteLimit(rpm=1)}, clock=lambda: 0.0)
+    adapter = ScriptedAdapter("groq", [reply(), reply()])
+    client, ledger, waits = make_client(adapter, limiter=limiter, max_throttle_wait=300.0)
+    client.complete(REQUEST, run_id="r")
+
+    with pytest.raises(CallInterruptedError):
+        client.complete(REQUEST, run_id="r", interrupted=lambda: len(waits) >= 3)
+
+    assert waits == [1.0, 1.0, 1.0]
+    assert adapter.calls == 1
+    assert [record.error for record in ledger.records()] == [None]
+
+
+def test_a_retry_wait_ends_early_when_the_run_is_stopped() -> None:
+    from da_agent.llm.types import CallInterruptedError
+
+    primary = ScriptedAdapter("groq", [RateLimitedError("slow down", retry_after=20.0), reply()])
+    backup = ScriptedAdapter("gemini", [reply("backup")])
+    client, _, waits = make_client(primary, backup, max_retries=1)
+
+    with pytest.raises(CallInterruptedError):
+        client.complete(REQUEST, run_id="r", interrupted=lambda: len(waits) >= 2)
+
+    assert waits == [1.0, 1.0]
+    assert (primary.calls, backup.calls) == (1, 0)

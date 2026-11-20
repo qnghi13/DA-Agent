@@ -484,3 +484,35 @@ def test_duckdb_run_sql_points_to_case_and_accent_blind_matching() -> None:
     assert "ILIKE" in duckdb_sql.description
     assert "strip_accents" in duckdb_sql.description
     assert "strip_accents" not in sqlite_sql.description
+
+
+def test_the_loop_stops_on_a_cancel_before_its_next_model_call(dataset: SqliteDataset) -> None:
+    from da_agent.agent.stop import StopToken
+
+    stop = StopToken()
+    adapter = ScriptedAdapter([call("run_sql", {"sql": "SELECT 1"}), submit("number", 1)])
+    original = adapter.complete
+
+    def cancel_after(request: LLMRequest, model: str) -> LLMResponse:
+        response = original(request, model)
+        stop.cancel("cancelled")
+        return response
+
+    adapter.complete = cancel_after  # type: ignore[method-assign]
+    client = LLMClient([Route(adapter, "m")], CostLedger(), sleep=lambda _: None, max_retries=0)
+
+    result = run_agent(
+        "Total revenue?", as_of="2026-06-28", dataset=dataset, documents=[], llm=client,
+        run_id="r1", stop=stop,
+    )  # fmt: skip
+
+    assert result.stop_reason == "cancelled"
+    assert len(adapter.requests) == 1
+    assert len(result.steps) == 1
+
+
+def test_the_loop_stops_at_its_deadline(dataset: SqliteDataset) -> None:
+    result, adapter = run(dataset, [submit("number", 1)], max_seconds=0.0)
+
+    assert result.stop_reason == "deadline_exceeded"
+    assert adapter.requests == []

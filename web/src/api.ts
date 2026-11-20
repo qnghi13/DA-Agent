@@ -273,6 +273,11 @@ export class Api {
     return this.request(`/v1/runs/${encodeURIComponent(id)}`);
   }
 
+  /** Stop a run. A queued run ends at once; a running one stops within a few seconds. */
+  cancelRun(id: string): Promise<{ id: string; status: "cancelled" | "cancelling" }> {
+    return this.request(`/v1/runs/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+  }
+
   /** The run's events; reconnects until the run ends. */
   streamRunEvents(id: string, onEvent: (event: SseEvent) => void, signal: AbortSignal) {
     return streamEvents(`/v1/runs/${encodeURIComponent(id)}/events`, {
@@ -406,13 +411,18 @@ export interface NewMemory {
   source_run_id?: string;
 }
 
+/** A run's job status. "cancelled" means the user stopped it (ADR 0042). */
+export type RunStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
 export interface Run {
   id: string;
   dataset_id: string;
   question: string;
   as_of: string;
   conversation_id: string | null;
-  status: "queued" | "running" | "succeeded" | "failed";
+  status: RunStatus;
+  /** The user asked to stop it; a running run keeps this until its worker stops. */
+  cancel_requested?: boolean;
   attempts: number;
   error: string | null;
   result: RunResult | null;

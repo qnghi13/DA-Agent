@@ -16,7 +16,7 @@ runtime context, never in state. See docs/adr/0013.
 import json
 import operator
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import Annotated, Any, TypedDict
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -52,6 +52,7 @@ from da_agent.agent.prompts import (
     turns_left_notice,
 )
 from da_agent.agent.rules import RuleIndex
+from da_agent.agent.stop import RunStopped, StopToken
 from da_agent.agent.tools import SUBMIT_ANSWER, Dataset, describe_tables, execute_tool, tool_specs
 from da_agent.agent.verify import (
     DateRanges,
@@ -119,6 +120,8 @@ class AgentContext:
     dialect: str
     # Whether make_chart is offered.
     charts: bool = False
+    # Checked before every model call and between nodes (ADR 0042).
+    stop: StopToken = field(default_factory=StopToken)
 
 
 Node = Callable[[AgentState, Runtime[AgentContext]], dict[str, Any]]
@@ -135,7 +138,13 @@ def _traced(name: str, node: Node) -> Node:
 
 
 def _complete(context: AgentContext, request: LLMRequest) -> LLMResponse:
-    return context.llm.complete(request, run_id=context.run_id, budget=context.limits.budget)
+    context.stop.check()
+    return context.llm.complete(
+        request,
+        run_id=context.run_id,
+        budget=context.limits.budget,
+        interrupted=lambda: context.stop.reason is not None,
+    )
 
 
 def _stop(reason: str, error: str | None = None) -> dict[str, Any]:
@@ -480,10 +489,15 @@ def _result(values: dict[str, Any], question_for_user: str | None = None) -> Age
 
 
 def _stream(
-    app: Any, command: Any, config: dict[str, Any], context: AgentContext, sink: EventSink | None
+    app: Any,
+    command: Any,
+    config: dict[str, Any],
+    context: AgentContext,
+    sink: EventSink | None,
+    latest: dict[str, Any],
 ) -> tuple[dict[str, Any], str | None]:
     """Run the graph, sending progress events. Returns the final state and the question an
-    interactive run paused on, if any."""
+    interactive run paused on, if any. latest holds the newest state, for a run that stops."""
     values: dict[str, Any] = {}
     asked: str | None = None
     for mode, chunk in app.stream(
@@ -491,6 +505,9 @@ def _stream(
     ):
         if mode == "values":
             values = chunk
+            latest.clear()
+            latest.update(chunk)
+            context.stop.check()
             continue
         for node, update in chunk.items():
             if node == "__interrupt__":
@@ -518,6 +535,7 @@ def run_graph(
     charts: bool = False,
     on_event: EventSink | None = None,
     agent_version: str | None = None,
+    stop: StopToken | None = None,
 ) -> AgentResult:
     """Answer one question, or continue the run saved under run_id.
 
@@ -527,9 +545,12 @@ def run_graph(
     defaults to run_id, which also keys the cost ledger. charts offers make_chart, whose specs
     come back in AgentResult.charts. on_event receives progress events (see node_events) as the
     run goes; a resumed run may repeat the events of the step that was running. agent_version
-    goes into every checkpoint's metadata and onto the run's span (ADR 0038).
+    goes into every checkpoint's metadata and onto the run's span (ADR 0038). stop ends the run
+    early with its reason, cancelled or deadline_exceeded; without one, limits.max_seconds sets
+    the deadline (ADR 0042).
     """
     limits = limits or AgentLimits()
+    stop = stop or StopToken(limits.max_seconds)
     tracer = tracer or trace.get_tracer("da_agent.agent")
     rules = RuleIndex(documents)
     dialect = getattr(dataset, "dialect", "SQLite")
@@ -548,6 +569,7 @@ def run_graph(
         ),
         dialect=dialect.lower(),
         charts=charts,
+        stop=stop,
     )
     app = build_graph(checkpointer)
     config: dict[str, Any] = {"configurable": {"thread_id": thread_id or run_id}}
@@ -568,12 +590,21 @@ def run_graph(
                 command: Any = Command(resume=reply) if reply is not None else None
             else:
                 command = {"question": question, "as_of": as_of}
+            latest: dict[str, Any] = {}
             try:
-                values, asked = _stream(app, command, config, context, on_event)
-            except LLMError as error:
-                # Every route failed. The run keeps its last checkpoint, so a later call retries.
-                current = app.get_state(config).values if checkpointer is not None else {}
-                result = _result({**current, "stop_reason": "llm_error", "error": str(error)})
+                values, asked = _stream(app, command, config, context, on_event, latest)
+            except (RunStopped, LLMError) as error:
+                current = app.get_state(config).values if checkpointer is not None else latest
+                # A deadline that passed during a call's retries is the deadline, not the provider.
+                reason = error.reason if isinstance(error, RunStopped) else stop.reason
+                if reason is not None:
+                    # Stopped on purpose: the result is final. Checkpoints stay for time travel.
+                    update = {"stop_reason": reason, "answer": None}
+                else:
+                    # Every route failed. The run keeps its last checkpoint, so a later call
+                    # retries.
+                    update = {"stop_reason": "llm_error", "error": str(error)}
+                result = _result({**current, **update})
                 span.set_attribute("da_agent.stop_reason", result.stop_reason)
                 return result
         result = _result(values, asked)

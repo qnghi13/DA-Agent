@@ -229,3 +229,81 @@ def test_failed_jobs_record_when_they_ended(conn: psycopg.Connection, workspace:
     assert queue.fail_expired() == 1
     assert times(conn, failed)[1] is not None
     assert times(conn, abandoned)[1] is not None
+
+
+def status_of(conn: psycopg.Connection, job_id: UUID) -> tuple[str, bool]:
+    row = conn.execute("SELECT status, finished_at IS NOT NULL FROM jobs WHERE id = %s", (job_id,))
+    found = row.fetchone()
+    assert found is not None
+    return found[0], found[1]
+
+
+def test_a_queued_job_is_cancelled_at_once_and_never_claimed(
+    conn: psycopg.Connection, workspace: UUID
+) -> None:
+    queue = JobQueue(conn)
+    job_id = queue.enqueue(workspace, "run", {})
+
+    assert queue.request_cancel(job_id, workspace) == "cancelled"
+    assert queue.request_cancel(job_id, workspace) == "cancelled"
+
+    assert status_of(conn, job_id) == ("cancelled", True)
+    assert queue.claim("w1", lease_seconds=30) is None
+
+
+def test_a_running_job_is_asked_to_stop_and_ends_cancelled(
+    conn: psycopg.Connection, workspace: UUID
+) -> None:
+    queue = JobQueue(conn)
+    job_id = queue.enqueue(workspace, "run", {})
+    queue.claim("w1", lease_seconds=30)
+    assert not queue.cancel_requested(job_id)
+
+    assert queue.request_cancel(job_id, workspace) == "cancelling"
+    assert queue.request_cancel(job_id, workspace) == "cancelling"
+    assert queue.cancel_requested(job_id)
+    assert queue.finish_cancelled(job_id, "w1", {"stop_reason": "cancelled"})
+
+    assert status_of(conn, job_id) == ("cancelled", True)
+
+
+def test_a_finished_or_unknown_job_is_not_cancelled(
+    conn: psycopg.Connection, workspace: UUID
+) -> None:
+    queue = JobQueue(conn)
+    job_id = queue.enqueue(workspace, "run", {})
+    queue.claim("w1", lease_seconds=30)
+    queue.complete(job_id, "w1", {})
+    other = create_workspace(conn, "other")
+
+    assert queue.request_cancel(job_id, workspace) == "finished"
+    assert queue.request_cancel(job_id, other) is None
+    assert status_of(conn, job_id)[0] == "succeeded"
+
+
+def test_a_cancelled_job_whose_worker_died_ends_cancelled_not_retried(
+    conn: psycopg.Connection, workspace: UUID
+) -> None:
+    queue = JobQueue(conn)
+    job_id = queue.enqueue(workspace, "run", {})
+    queue.claim("w1", lease_seconds=30)
+    queue.request_cancel(job_id, workspace)
+    expire_leases(conn)
+
+    assert queue.claim("w2", lease_seconds=30) is None
+    queue.fail_expired()
+
+    assert status_of(conn, job_id) == ("cancelled", True)
+
+
+def test_a_failure_after_a_cancel_request_ends_cancelled_not_queued(
+    conn: psycopg.Connection, workspace: UUID
+) -> None:
+    queue = JobQueue(conn)
+    job_id = queue.enqueue(workspace, "run", {})
+    queue.claim("w1", lease_seconds=30)
+    queue.request_cancel(job_id, workspace)
+
+    queue.fail(job_id, "w1", "provider down", retry_in_seconds=10)
+
+    assert status_of(conn, job_id) == ("cancelled", True)

@@ -504,3 +504,61 @@ def test_another_workspace_cannot_stream_a_runs_events(
     intruder = auth(create_key(conn, create_workspace(conn, "intruder")))
 
     assert client.get(f"/v1/runs/{run_id}/events", headers=intruder).status_code == 404
+
+
+def test_a_queued_run_is_cancelled_at_once_and_logged(
+    client: TestClient, conn: psycopg.Connection, key: str
+) -> None:
+    dataset_id = ready_dataset(client, conn, key)
+    run_id = ask(client, key, dataset_id, "Total?")
+
+    first = client.post(f"/v1/runs/{run_id}/cancel", headers=auth(key))
+    again = client.post(f"/v1/runs/{run_id}/cancel", headers=auth(key))
+
+    assert (first.status_code, first.json()) == (202, {"id": run_id, "status": "cancelled"})
+    assert (again.status_code, again.json()["status"]) == (202, "cancelled")
+    shown = client.get(f"/v1/runs/{run_id}", headers=auth(key)).json()
+    assert shown["status"] == "cancelled" and shown["cancel_requested"] is True
+    assert audit_actions(conn).count("run.cancel") == 2
+
+
+def test_a_running_run_is_asked_to_stop(
+    client: TestClient, conn: psycopg.Connection, key: str
+) -> None:
+    dataset_id = ready_dataset(client, conn, key)
+    run_id = ask(client, key, dataset_id, "Total?")
+    queue = JobQueue(conn)
+    while (job := queue.claim("w", lease_seconds=30)) is not None and str(job.id) != run_id:
+        queue.complete(job.id, "w", {})
+
+    response = client.post(f"/v1/runs/{run_id}/cancel", headers=auth(key))
+
+    assert (response.status_code, response.json()["status"]) == (202, "cancelling")
+    shown = client.get(f"/v1/runs/{run_id}", headers=auth(key)).json()
+    assert shown["status"] == "running" and shown["cancel_requested"] is True
+
+
+def test_a_finished_run_cannot_be_cancelled_and_others_cannot_see_it(
+    client: TestClient, conn: psycopg.Connection, key: str
+) -> None:
+    dataset_id = ready_dataset(client, conn, key)
+    run_id = ask(client, key, dataset_id, "Total?")
+    queue = JobQueue(conn)
+    while (job := queue.claim("w", lease_seconds=30)) is not None:
+        queue.complete(job.id, "w", {})
+    intruder = auth(create_key(conn, create_workspace(conn, "intruder")))
+
+    assert client.post(f"/v1/runs/{run_id}/cancel", headers=auth(key)).status_code == 409
+    assert client.post(f"/v1/runs/{run_id}/cancel", headers=intruder).status_code == 404
+    assert client.get(f"/v1/runs/{run_id}", headers=auth(key)).json()["cancel_requested"] is False
+
+
+def test_the_event_stream_of_a_cancelled_run_ends(
+    client: TestClient, conn: psycopg.Connection, key: str
+) -> None:
+    run_id, _ = queued_run(client, conn, key)
+    client.post(f"/v1/runs/{run_id}/cancel", headers=auth(key))
+
+    received = stream_events(client, run_id, key)
+
+    assert received[-1][1:] == ("end", {"status": "cancelled"})

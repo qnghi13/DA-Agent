@@ -98,10 +98,12 @@ def test_run_outcomes_are_classified(conn: psycopg.Connection, shop: UUID) -> No
     job(conn, shop, status="running")
     job(conn, shop, status="succeeded", result=answered(), age="3 days")
     job(conn, shop, status="succeeded", kind="ingest", result={})
+    job(conn, shop, status="cancelled", result=stopped("cancelled"))
+    job(conn, shop, status="succeeded", result=stopped("deadline_exceeded"))
 
     runs = summary(conn, "24h")["runs"]
 
-    assert runs["total"] == 10
+    assert runs["total"] == 12
     assert runs["outcomes"] == {
         "answered": 3,
         "abstained": 1,
@@ -110,13 +112,15 @@ def test_run_outcomes_are_classified(conn: psycopg.Connection, shop: UUID) -> No
         "budget_exceeded": 1,
         "failed": 1,
         "in_progress": 1,
+        "cancelled": 1,
+        "deadline_exceeded": 1,
     }
     # Rates are over finished runs only.
-    assert runs["answer_rate"] == pytest.approx(3 / 9)
-    assert runs["abstain_rate"] == pytest.approx(1 / 9)
+    assert runs["answer_rate"] == pytest.approx(3 / 11)
+    assert runs["abstain_rate"] == pytest.approx(1 / 11)
     assert runs["retried"] == 1
-    assert sum(point["count"] for point in runs["series"]) == 10
-    assert summary(conn, "7d")["runs"]["total"] == 11
+    assert sum(point["count"] for point in runs["series"]) == 12
+    assert summary(conn, "7d")["runs"]["total"] == 13
 
 
 def test_latency_splits_queue_wait_from_run_time(conn: psycopg.Connection, shop: UUID) -> None:

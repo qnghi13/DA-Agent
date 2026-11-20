@@ -24,6 +24,7 @@ from da_agent.agent.prompts import (
     turns_left_notice,
 )
 from da_agent.agent.rules import RuleIndex
+from da_agent.agent.stop import StopToken
 from da_agent.agent.tools import SUBMIT_ANSWER, Dataset, execute_tool, tool_specs
 from da_agent.llm.client import LLMClient
 from da_agent.llm.types import (
@@ -74,14 +75,17 @@ def run_agent(
     run_id: str,
     limits: AgentLimits | None = None,
     tracer: Tracer | None = None,
+    stop: StopToken | None = None,
 ) -> AgentResult:
-    """Answer one question. Limits and provider failures end the run without raising."""
+    """Answer one question. Limits, provider failures, and stops end the run without raising.
+    stop ends it early with its reason; without one, limits.max_seconds sets the deadline."""
     limits = limits or AgentLimits()
+    stop = stop or StopToken(limits.max_seconds)
     tracer = tracer or trace.get_tracer("da_agent.agent")
     with tracer.start_as_current_span("agent.run") as span:
         span.set_attribute("openinference.span.kind", "AGENT")
         span.set_attribute("da_agent.run_id", run_id)
-        result = _loop(question, as_of, dataset, documents, llm, run_id, limits, tracer)
+        result = _loop(question, as_of, dataset, documents, llm, run_id, limits, tracer, stop)
         span.set_attribute("da_agent.stop_reason", result.stop_reason)
         span.set_attribute("da_agent.iterations", result.iterations)
         return result
@@ -96,6 +100,7 @@ def _loop(
     run_id: str,
     limits: AgentLimits,
     tracer: Tracer,
+    stop: StopToken,
 ) -> AgentResult:
     messages = [
         Message(role="system", content=build_system_prompt(documents)),
@@ -114,8 +119,15 @@ def _loop(
         # On the last turn only an answer can still count, so offer nothing else.
         offered = [t for t in tools if t.name == SUBMIT_ANSWER] if turns_left == 1 else tools
         request = LLMRequest(messages=messages, tools=offered)
+        if stop.reason is not None:
+            return AgentResult(stop_reason=stop.reason, steps=steps, iterations=iteration - 1)
         try:
-            response = llm.complete(request, run_id=run_id, budget=limits.budget)
+            response = llm.complete(
+                request,
+                run_id=run_id,
+                budget=limits.budget,
+                interrupted=lambda: stop.reason is not None,
+            )
         except BudgetExceededError:
             return AgentResult(stop_reason="budget_exceeded", steps=steps, iterations=iteration - 1)
         except InvalidToolCallError as error:
@@ -132,8 +144,11 @@ def _loop(
             messages.append(Message(role="user", content=notice))
             continue
         except LLMError as error:
+            # A deadline that passed during a call's retries is the deadline, not the provider.
+            reason = stop.reason or "llm_error"
+            error_text = None if stop.reason else str(error)
             return AgentResult(
-                stop_reason="llm_error", steps=steps, iterations=iteration - 1, error=str(error)
+                stop_reason=reason, steps=steps, iterations=iteration - 1, error=error_text
             )
 
         messages.append(

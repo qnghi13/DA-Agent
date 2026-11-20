@@ -1,12 +1,11 @@
 # Progress
 
-Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-20 (breaker, rate limits)
+Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-20 (cancel, deadline, time travel)
 **Phase:** optimisation. Challenge rules: ≤15B params in total, offline Docker, 2×5090, 6 h,
 re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for the submission.
 
 ## Optimisation (2026-11-11)
-- `final-regression` failures (57): business rules 19, periods 7, shorthand 7, unanswerable 3,
-  type 3, harness 17 (budget 9, Groq 400s 5); hand SQL proves ingestion is not the cause.
+- `final-regression` failures (57): rules 19, periods 7, shorthand 7, harness 17, other 7.
 - Done (559f88a): code-computed periods, Vietnamese shorthand and Telex expansion, `vllm:` route.
   Test shops are new and rulebooks differ per split: ingestion runs in the container; the
   semantic layer holds data facts only, never rules.
@@ -28,14 +27,15 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
    manifest (ADR 0038, note 17); record/replay (ADR 0039, note 18: 3 Groq questions replayed
    17/17, same answers, $0.012); pass^k (ADR 0040, note 19: `smoke` x3 on Groq +16/+12/+10, std
    3.1, pass^3 50%, pass@3 67%, $0.205: one-run gains under ~9 points are noise); breaker and
-   outbound limits (ADR 0041, note 20, $0; resume idempotency needs nothing). Next: cancel,
-   deadline, time travel; feedback to dataset, online eval; alerts, SLOs.
+   outbound limits (ADR 0041, note 20); cancel with a Stop button, run deadline, time travel CLI
+   (ADR 0042, note 21; Stop tried in the UI, ~$0.003). Next: feedback to dataset, online eval;
+   alerts, SLOs.
 1. v0.1.0 released (ADR 0028); holdout ran once (+44, never rerun). Open: run 97d7bc1f guessed
    an absent `product_id` (audit: a UI guardrail, not a score fix); `\uXXXX` escapes written into
    SQL text (2 runs in all reports).
 ## Baselines (Groq `gpt-oss-20b`, before 559f88a): `regression` +53 (93/40/17), holdout +44.
 ## Done
-- ADRs 0001–0041, notes 01–20. Scorer 3000/3000; splits in `eval/splits/splits.json`.
+- ADRs 0001–0042, notes 01–21. Scorer 3000/3000; splits in `eval/splits/splits.json`.
 - Agent: `LLMClient`, SQL guard, LangGraph with checkpoints and verify, Groq `gpt-oss-20b`.
   Sandbox: all escape tests pass; ingestion and agent SQL run in it (ADRs 0009–0012).
   `datasets-dev/`: 24/24 ok, parse 99.98%+, exclusion precision and recall 100%.
@@ -49,7 +49,7 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
 - No rows, questions, rulebook, or answers in any commit or image (organiser rules). When the
   challenge ends: delete `train/`, `eval/reports/`, and Docker volumes with eval data.
 
-## Spend so far: about $3.06 (agent runs $2.47, spec proposals $0.57, demos $0.006).
+## Spend so far: about $3.07 (agent runs $2.48, spec proposals $0.57, demos $0.006).
 
 ## Watch out
 

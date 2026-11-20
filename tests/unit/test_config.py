@@ -189,3 +189,14 @@ def test_model_call_limits_are_read() -> None:
 def test_bad_model_call_limits_name_the_variable(name: str, value: str) -> None:
     with pytest.raises(ConfigError, match=name):
         Settings.from_env(REQUIRED | {name: value})
+
+
+def test_the_run_deadline_is_read() -> None:
+    assert Settings.from_env(REQUIRED).run_max_seconds == 300.0
+    assert Settings.from_env(REQUIRED | {"DA_AGENT_RUN_MAX_SECONDS": "90"}).run_max_seconds == 90.0
+
+
+@pytest.mark.parametrize("value", ["0", "-5", "nan", "inf", "soon"])
+def test_a_bad_run_deadline_names_the_variable(value: str) -> None:
+    with pytest.raises(ConfigError, match="DA_AGENT_RUN_MAX_SECONDS"):
+        Settings.from_env(REQUIRED | {"DA_AGENT_RUN_MAX_SECONDS": value})

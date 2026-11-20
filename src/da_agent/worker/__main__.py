@@ -77,9 +77,10 @@ def build_worker(
     llm = LLMClient(
         routes, PostgresCostLedger(conn), breaker_policy=settings.breaker_policy, limiter=limiter
     )
+    agent_limits = AgentLimits(max_seconds=settings.run_max_seconds)
     # Which agent this worker runs, recorded on every attempt (ADR 0038).
     limits = {
-        "agent": asdict(AgentLimits()), "daily_usd": settings.daily_budget_usd,
+        "agent": asdict(agent_limits), "daily_usd": settings.daily_budget_usd,
         "run_usd": settings.run_budget_usd, "run_tokens": settings.run_max_tokens,
     }  # fmt: skip
     manifest = build_manifest(routes=routes, limits=limits, env=env)
@@ -100,6 +101,7 @@ def build_worker(
             budgets=budgets,
             memory=MemoryLoader(**database),
             agent_version=manifest.version,
+            limits=agent_limits,
         ),
         "ingest": IngestHandler(**database, **roots, llm=llm, budgets=budgets),
         "build": BuildHandler(**database, **roots),

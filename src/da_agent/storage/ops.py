@@ -27,6 +27,7 @@ _OUTCOME = """
 CASE
     WHEN {j}status IN ('queued', 'running') THEN 'in_progress'
     WHEN {j}status = 'failed' THEN 'failed'
+    WHEN {j}status = 'cancelled' THEN 'cancelled'
     WHEN {j}result ->> 'stop_reason' = 'answered'
         AND {j}result -> 'answer' ->> 'kind' = 'unanswerable' THEN 'abstained'
     WHEN {j}result ->> 'stop_reason' = 'answered' THEN 'answered'
@@ -34,7 +35,7 @@ CASE
     WHEN {j}result ->> 'stop_reason' IN ('llm_error', 'invalid_tool_call', 'no_tool_call')
         THEN 'model_error'
     WHEN {j}result ->> 'stop_reason' IN ('budget_exceeded', 'iteration_limit',
-        'needs_clarification') THEN {j}result ->> 'stop_reason'
+        'needs_clarification', 'deadline_exceeded') THEN {j}result ->> 'stop_reason'
     ELSE 'other'
 END
 """

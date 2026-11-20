@@ -4,7 +4,8 @@ A worker claims a job with `FOR UPDATE SKIP LOCKED`, so two workers never take t
 holds it with a lease that it renews by heartbeat. Leases use the database clock, so worker clocks
 do not matter. A worker that dies stops renewing; once its lease runs out another worker claims the
 job again, and the dead worker's later writes are refused because they name the old worker. A job
-that runs out of attempts ends failed instead of looping forever.
+that runs out of attempts ends failed instead of looping forever. A user can cancel a job: a
+queued one ends at once, and a running one ends cancelled when its worker stops (ADR 0042).
 
 Every method is one SQL statement on an autocommit connection, so each is atomic on its own.
 """
@@ -21,6 +22,7 @@ from psycopg.types.json import Jsonb
 from da_agent.storage.db import returned_id
 
 JobKind = Literal["ingest", "build", "run", "export", "query"]
+CancelOutcome = Literal["cancelled", "cancelling", "finished"]
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,8 @@ class Job:
     last_error: str | None
     result: dict[str, Any] | None
     trace_ids: list[str] = field(default_factory=list)
+    # A user asked to stop it (ADR 0042); a running job keeps this until its worker stops.
+    cancel_requested: bool = False
 
 
 @dataclass(frozen=True)
@@ -84,7 +88,7 @@ class JobQueue:
                 started_at = coalesce(started_at, now())
             WHERE id = (
                 SELECT id FROM jobs
-                WHERE attempts < max_attempts AND (
+                WHERE attempts < max_attempts AND cancel_requested_at IS NULL AND (
                     (status = 'queued' AND run_after <= now())
                     OR (status = 'running' AND lease_until < now()))
                 ORDER BY run_after
@@ -122,9 +126,11 @@ class JobQueue:
         cursor = self._conn.execute(
             """
             UPDATE jobs SET last_error = %s, lease_until = NULL, updated_at = now(),
-                status = CASE WHEN %s::float8 IS NOT NULL AND attempts < max_attempts
+                status = CASE WHEN cancel_requested_at IS NOT NULL THEN 'cancelled'
+                              WHEN %s::float8 IS NOT NULL AND attempts < max_attempts
                               THEN 'queued' ELSE 'failed' END,
-                finished_at = CASE WHEN %s::float8 IS NOT NULL AND attempts < max_attempts
+                finished_at = CASE WHEN cancel_requested_at IS NULL AND %s::float8 IS NOT NULL
+                                        AND attempts < max_attempts
                                    THEN NULL ELSE now() END,
                 run_after = now() + make_interval(secs => coalesce(%s::float8, 0))
             WHERE id = %s AND worker_id = %s AND status = 'running'
@@ -134,20 +140,77 @@ class JobQueue:
         return cursor.rowcount == 1
 
     def fail_expired(self) -> int:
-        """End jobs whose lease ran out on their last attempt. Returns how many."""
+        """End jobs whose lease ran out on their last attempt, and cancelled jobs whose worker
+        stopped renewing. Returns how many."""
+        cancelled = self._conn.execute(
+            "UPDATE jobs SET status = 'cancelled', lease_until = NULL, updated_at = now(), "
+            "finished_at = now() "
+            "WHERE status = 'running' AND lease_until < now() AND cancel_requested_at IS NOT NULL"
+        )
         cursor = self._conn.execute(
             "UPDATE jobs SET status = 'failed', lease_until = NULL, updated_at = now(), "
             "finished_at = now(), "
             "last_error = 'the worker stopped renewing its lease on the last attempt' "
             "WHERE status = 'running' AND lease_until < now() AND attempts >= max_attempts"
         )
-        return cursor.rowcount
+        return cancelled.rowcount + cursor.rowcount
+
+    def request_cancel(self, job_id: UUID, workspace_id: UUID) -> CancelOutcome | None:
+        """Cancel a job of the workspace. A queued job ends at once (cancelled); a running one
+        is asked to stop (cancelling). A job that already ended says finished, or cancelled if it
+        was cancelled. None means the workspace has no such job. Asking twice changes nothing."""
+        row = self._conn.execute(
+            """
+            UPDATE jobs SET
+                status = CASE WHEN status = 'queued' THEN 'cancelled' ELSE status END,
+                finished_at = CASE WHEN status = 'queued' THEN now() ELSE finished_at END,
+                lease_until = CASE WHEN status = 'queued' THEN NULL ELSE lease_until END,
+                cancel_requested_at = coalesce(cancel_requested_at, now()),
+                updated_at = now()
+            WHERE id = %s AND workspace_id = %s AND status IN ('queued', 'running')
+            RETURNING status
+            """,
+            (job_id, workspace_id),
+        ).fetchone()
+        if row is not None:
+            return "cancelled" if row[0] == "cancelled" else "cancelling"
+        found = self._conn.execute(
+            "SELECT status FROM jobs WHERE id = %s AND workspace_id = %s", (job_id, workspace_id)
+        ).fetchone()
+        if found is None:
+            return None
+        return "cancelled" if found[0] == "cancelled" else "finished"
+
+    def cancel_requested(self, job_id: UUID) -> bool:
+        row = self._conn.execute(
+            "SELECT cancel_requested_at IS NOT NULL FROM jobs WHERE id = %s", (job_id,)
+        ).fetchone()
+        return bool(row and row[0])
+
+    def finish_cancelled(self, job_id: UUID, worker_id: str, result: dict[str, Any]) -> bool:
+        """End a running job that stopped on a user's cancel, keeping what it found so far."""
+        cursor = self._conn.execute(
+            "UPDATE jobs SET status = 'cancelled', result = %s, lease_until = NULL, "
+            "updated_at = now(), finished_at = now() "
+            "WHERE id = %s AND worker_id = %s AND status = 'running'",
+            (Jsonb(result), job_id, worker_id),
+        )
+        return cursor.rowcount == 1
+
+    def find_run(self, job_id: UUID) -> Job | None:
+        """A run job in any workspace. Operator tools only, such as time travel (ADR 0042)."""
+        return self._one(
+            "SELECT id, workspace_id, kind, payload, status, attempts, max_attempts, last_error, "
+            "result, trace_ids FROM jobs WHERE id = %s AND kind = 'run'",
+            (job_id,),
+        )
 
     def get(self, job_id: UUID, workspace_id: UUID) -> Job | None:
         """A job, only if it belongs to the workspace."""
         return self._one(
             "SELECT id, workspace_id, kind, payload, status, attempts, max_attempts, last_error, "
-            "result, trace_ids FROM jobs WHERE id = %s AND workspace_id = %s",
+            "result, trace_ids, cancel_requested_at IS NOT NULL AS cancel_requested "
+            "FROM jobs WHERE id = %s AND workspace_id = %s",
             (job_id, workspace_id),
         )
 

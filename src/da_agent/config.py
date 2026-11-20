@@ -24,6 +24,7 @@ The Runner service (python -m da_agent.runner, ADR 0024) reads only DA_AGENT_DAT
 DA_AGENT_SANDBOX_IMAGE, DA_AGENT_SANDBOX_USER, DA_AGENT_DATA_VOLUME, and DA_AGENT_RUNNER_TOKEN.
 """
 
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -90,6 +91,13 @@ def _number(env: Mapping[str, str], name: str, default: float) -> float:
     return value
 
 
+def _seconds(env: Mapping[str, str], name: str, default: float) -> float:
+    value = _number(env, name, default)
+    if not math.isfinite(value) or value <= 0:
+        raise ConfigError(f"{name} must be a finite number of seconds above zero")
+    return value
+
+
 def _token(env: Mapping[str, str], name: str) -> str:
     value = _required(env, name)
     if len(value) < MIN_TOKEN_CHARS:
@@ -115,6 +123,8 @@ class Settings:
     daily_budget_usd: float = 5.0
     run_budget_usd: float = 0.25
     run_max_tokens: int = 60_000
+    # Wall time for one run (ADR 0042).
+    run_max_seconds: float = 300.0
     otlp_endpoint: str | None = None
     trace_ui_url: str | None = None
     public_url: str = "http://127.0.0.1:8080"
@@ -154,6 +164,7 @@ class Settings:
             daily_budget_usd=_number(env, "DA_AGENT_DAILY_BUDGET_USD", cls.daily_budget_usd),
             run_budget_usd=_number(env, "DA_AGENT_RUN_BUDGET_USD", cls.run_budget_usd),
             run_max_tokens=int(_number(env, "DA_AGENT_RUN_MAX_TOKENS", cls.run_max_tokens)),
+            run_max_seconds=_seconds(env, "DA_AGENT_RUN_MAX_SECONDS", cls.run_max_seconds),
             otlp_endpoint=env.get("DA_AGENT_OTLP_ENDPOINT", "").strip() or None,
             trace_ui_url=_http_url(env, "DA_AGENT_TRACE_UI_URL"),
             public_url=_http_url(env, "DA_AGENT_PUBLIC_URL") or cls.public_url,

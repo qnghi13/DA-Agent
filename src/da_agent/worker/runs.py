@@ -22,11 +22,12 @@ from da_agent.agent.answer import result_to_json
 from da_agent.agent.checkpoints import checkpoint_version
 from da_agent.agent.graph import run_graph
 from da_agent.agent.loop_types import AgentLimits, Document
+from da_agent.agent.stop import CANCELLED, LEASE_LOST, StopToken
 from da_agent.agent.tools import Dataset
 from da_agent.llm.client import LLMClient
 from da_agent.storage.db import connect, search_path_option
 from da_agent.storage.events import RunEvents
-from da_agent.storage.jobs import Job
+from da_agent.storage.jobs import Job, JobQueue
 from da_agent.storage.versions import mark_resumed_from
 from da_agent.worker.limits import WorkspaceBudgets
 from da_agent.worker.worker import RetryableJobError
@@ -62,28 +63,67 @@ class RunHandler:
         self.memory = memory
         # Stamped on every checkpoint, so a resume by another version is marked (ADR 0038).
         self.agent_version = agent_version
+        # How often a run asks the queue whether its user cancelled it (ADR 0042).
+        self.cancel_poll_seconds = 1.0
 
-    def _checkpoint_connection(self) -> psycopg.Connection[DictRow]:
+    def checkpoint_connection(self) -> psycopg.Connection[DictRow]:
         conninfo = make_conninfo(self.checkpoint_url, options=search_path_option(self.schema))
         # The settings PostgresSaver.from_conn_string uses.
         return psycopg.Connection[DictRow].connect(
             conninfo, autocommit=True, prepare_threshold=0, row_factory=dict_row
         )
 
-    def __call__(self, job: Job, lost: threading.Event) -> dict[str, Any]:
-        payload = job.payload
+    def _prepare(self, job: Job) -> tuple[AgentLimits, Dataset, list[Document]]:
+        """The limits, dataset, and documents a run of this job uses."""
         limits = self.limits
         if self.budgets is not None:
             limits = replace(limits, budget=self.budgets.for_job(job))
-        dataset, documents = self.datasets(job.workspace_id, payload["dataset_id"])
+        dataset, documents = self.datasets(job.workspace_id, job.payload["dataset_id"])
         if self.memory is not None:
             visible = {t.name: {c.name for c in t.columns} for t in dataset.describe()}
             documents = [*documents, *self.memory(job, visible)]
+        return limits, dataset, documents
+
+    def fork(self, job: Job, fork_id: str) -> dict[str, Any]:
+        """Run on in thread fork_id, which time travel started from one of the job's checkpoints
+        (ADR 0042). Same dataset, documents, and limits as the job; costs go under fork_id. The
+        job and its own thread are not written."""
+        limits, dataset, documents = self._prepare(job)
+        with self.checkpoint_connection() as conn:
+            result = run_graph(
+                job.payload["question"],
+                as_of=job.payload["as_of"],
+                dataset=dataset,
+                documents=documents,
+                llm=self.llm,
+                run_id=fork_id,
+                thread_id=fork_id,
+                limits=limits,
+                checkpointer=PostgresSaver(conn),
+                charts=bool(job.payload.get("charts", True)),
+                agent_version=self.agent_version,
+            )
+        return result_to_json(result)
+
+    def __call__(self, job: Job, lost: threading.Event) -> dict[str, Any]:
+        payload = job.payload
+        limits, dataset, documents = self._prepare(job)
         with (
-            self._checkpoint_connection() as conn,
+            self.checkpoint_connection() as conn,
             connect(self.checkpoint_url, schema=self.schema) as events_conn,
         ):
             events = RunEvents(events_conn)
+            queue = JobQueue(events_conn)
+
+            def stop_asked() -> str | None:
+                # A lost lease means another worker owns the job now: stop spending at once.
+                if lost.is_set():
+                    return LEASE_LOST
+                return CANCELLED if queue.cancel_requested(job.id) else None
+
+            stop = StopToken(
+                limits.max_seconds, probe=stop_asked, probe_every=self.cancel_poll_seconds
+            )
             saver = PostgresSaver(conn)
             saver.setup()
             self._mark_resume(saver, job, events_conn)
@@ -99,6 +139,7 @@ class RunHandler:
                 charts=bool(payload.get("charts", True)),
                 on_event=lambda event: events.append(job.id, job.workspace_id, event),
                 agent_version=self.agent_version,
+                stop=stop,
             )
         if result.stop_reason == "llm_error":
             raise RetryableJobError("the model provider failed; the run will continue later")
