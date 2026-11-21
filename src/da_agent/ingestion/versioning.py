@@ -49,6 +49,12 @@ def headers(report: IngestReport) -> list[TableHeader]:
     ]
 
 
+def file_of(source: str) -> str:
+    """The stored file name of a source label such as `book.xlsx#Sheet1`, as build.py's
+    `_file_of` takes it from `_source`."""
+    return source.split("#", 1)[0]
+
+
 def _near_match(header: tuple[str, ...], previous: list[TableHeader]) -> TableHeader | None:
     best, best_shared = None, 0
     for old in previous:
@@ -74,7 +80,7 @@ def match_tables(
         match = next((old for old in free if old.header == header.header), None)
         if match is not None:
             free.remove(match)
-            has_new = any(s.source in new_sources for s in raw.sources)
+            has_new = any(file_of(s.source) in new_sources for s in raw.sources)
             changes.append(
                 TableChange(
                     raw_name=raw.name,

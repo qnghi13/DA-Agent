@@ -103,7 +103,7 @@ def test_xlsx_with_matching_and_new_sheet() -> None:
     changes = match_tables(
         previous,
         current,
-        frozenset({"more.xlsx#Orders", "more.xlsx#Returns"}),
+        frozenset({"more.xlsx"}),
         spec_with(orders_spec()),
     )
     by_name = {c.raw_name: c for c in changes}
@@ -111,6 +111,18 @@ def test_xlsx_with_matching_and_new_sheet() -> None:
     assert by_name["returns"].kind == "new"
     assert by_name["returns"].table is None
     assert by_name["returns"].near_match is None
+
+
+def test_new_xlsx_sheet_with_existing_header_is_grown() -> None:
+    previous = [TableHeader(raw_name="orders", header=ORDER_HEADER)]
+    current = IngestReport(
+        tables=[raw_table("orders", ORDER_HEADER, "orders.csv", "dec.xlsx#Sheet1")]
+    )
+    changes = match_tables(previous, current, frozenset({"dec.xlsx"}), spec_with(orders_spec()))
+    assert [c.kind for c in changes] == ["grown"]
+    # A sheet of an old workbook is not new.
+    old = match_tables(previous, current, frozenset({"dec"}), spec_with(orders_spec()))
+    assert [c.kind for c in old] == ["unchanged"]
 
 
 def test_near_match_is_new_with_differences() -> None:
