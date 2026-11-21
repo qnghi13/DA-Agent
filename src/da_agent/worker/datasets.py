@@ -9,6 +9,7 @@ A failed ingest or build is an outcome for the user, not a job failure: the data
 failed with a readable reason and the job completes. See docs/adr/0019.
 """
 
+import re
 import shutil
 import threading
 from pathlib import Path
@@ -37,7 +38,13 @@ DESCRIPTION_DOCUMENT = "Description from the uploader"
 FAILURES = {
     "ingest_failed": "The uploaded files could not be read.",
     "build_failed": "The data could not be built into tables.",
+    "proposal_failed": "The model could not propose tables for the new files.",
+    "choices_invalid": "The choices could not be applied to these files.",
+    "quality_failed": "Rows in the new files still fail the quality checks.",
+    "version_failed": "The new files could not be checked.",
 }
+# A directory under datasets_root or uploads_root: one level, as the Runner's `_child` accepts.
+DIRECTORY_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 
 
 def _summary(prepared: PreparedDataset, report: BuildReport) -> dict[str, Any]:
@@ -80,8 +87,12 @@ def _column_profile(column: ColumnBuild) -> dict[str, Any]:
     }
 
 
-def _install(build_dir: Path, target: Path) -> None:
-    """Move a build into place, replacing an older build of the same dataset."""
+def _install(build_dir: Path, root: Path, name: str) -> None:
+    """Move a build into place as root/name, replacing an older build there: a retried job finds
+    the directory its earlier attempt installed. `name` is a dataset id or `<id>-v<n>`."""
+    if not DIRECTORY_NAME.fullmatch(name):
+        raise ValueError(f"invalid dataset directory name {name!r}")
+    target = root / name
     target.parent.mkdir(parents=True, exist_ok=True)
     old = target.with_name(target.name + ".old")
     shutil.rmtree(old, ignore_errors=True)
@@ -126,7 +137,7 @@ class _DatasetJob:
         ):
             store.mark_failed(record.id, FAILURES.get(prepared.status, FAILURES["build_failed"]))
             return None
-        _install(build.output_dir, self.datasets_root / str(record.id))
+        _install(build.output_dir, self.datasets_root, str(record.id))
         return build.report
 
 

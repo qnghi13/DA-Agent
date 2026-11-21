@@ -179,6 +179,24 @@ def test_mark_rejects_unknown_columns_and_statuses(
         store.mark(dataset_id, 1, "nonsense")
 
 
+def test_mark_with_an_expected_status_changes_only_a_version_in_that_status(
+    conn: psycopg.Connection, workspace: UUID
+) -> None:
+    dataset_id = ready_dataset(conn, workspace)
+    store = DatasetVersionStore(conn)
+    version = store.open_version(workspace, dataset_id, NEW, f"{dataset_id}-v2", 20)
+    store.discard(workspace, dataset_id, version)
+
+    assert not store.mark(dataset_id, version, "checking", expected=("uploaded", "checking"))
+    record = store.get(workspace, dataset_id, version)
+    assert record is not None and record.status == "discarded"
+
+    other = store.open_version(workspace, dataset_id, NEW, f"{dataset_id}-v3", 20)
+    assert store.mark(dataset_id, other, "checking", expected=("uploaded",), tables=[])
+    record = store.get(workspace, dataset_id, other)
+    assert record is not None and (record.status, record.tables) == ("checking", [])
+
+
 def test_approve_stores_choices_and_enqueues_a_build(
     conn: psycopg.Connection, workspace: UUID
 ) -> None:

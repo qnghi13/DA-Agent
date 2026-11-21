@@ -170,10 +170,22 @@ class DatasetVersionStore:
             raise DatasetStateError("the dataset has no current version")
         return found[0]
 
-    def mark(self, dataset_id: UUID, version: int, status: str, **fields: Any) -> None:
-        """Set a version's status and any of the known columns. Unknown names raise ValueError."""
-        if status not in STATUSES:
-            raise ValueError(f"unknown status: {status}")
+    def mark(
+        self,
+        dataset_id: UUID,
+        version: int,
+        status: str,
+        *,
+        expected: tuple[str, ...] | None = None,
+        **fields: Any,
+    ) -> bool:
+        """Set a version's status and any of the known columns. Unknown names raise ValueError.
+
+        With `expected`, only a version in one of those statuses changes, so a worker never
+        overwrites a version the user discarded. Returns whether a row changed."""
+        unknown_statuses = ({status} | set(expected or ())) - STATUSES
+        if unknown_statuses:
+            raise ValueError(f"unknown status: {sorted(unknown_statuses)}")
         unknown = set(fields) - _JSON_FIELDS - _TEXT_FIELDS
         if unknown:
             raise ValueError(f"unknown version fields: {sorted(unknown)}")
@@ -182,10 +194,13 @@ class DatasetVersionStore:
         for name, value in fields.items():  # names are checked against the whitelist above
             sets.append(f"{name} = %s")
             params.append(Jsonb(value) if name in _JSON_FIELDS and value is not None else value)
-        query = (
-            f"UPDATE dataset_versions SET {', '.join(sets)} WHERE dataset_id = %s AND version = %s"  # noqa: S608
-        )
-        self._conn.execute(query, (*params, dataset_id, version))  # type: ignore[arg-type]
+        where = "dataset_id = %s AND version = %s"
+        params += [dataset_id, version]
+        if expected is not None:
+            where += " AND status = ANY(%s)"
+            params.append(list(expected))
+        query = f"UPDATE dataset_versions SET {', '.join(sets)} WHERE {where}"  # noqa: S608
+        return self._conn.execute(query, params).rowcount > 0  # type: ignore[arg-type]
 
     def apply(self, dataset_id: UUID, version: int, build_dir: str) -> None:
         """Make a version the dataset's current one, in one transaction. Idempotent."""
