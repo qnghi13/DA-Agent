@@ -3,6 +3,7 @@ import {
   BookMarked,
   CalendarDays,
   Database,
+  FilePlus2,
   Loader2,
   MessageSquarePlus,
   Square,
@@ -19,8 +20,10 @@ import {
   useState,
 } from "react";
 import { type Api, ApiError, type Dataset, type RunStatus, errorMessage } from "./api";
+import { AddFilesDialog } from "./components/chat/add-files-dialog";
 import { EvidenceContent } from "./components/chat/evidence";
 import { type Evidence, RunMessage } from "./components/chat/run-message";
+import { VersionList, VersionStatus, useVersionWatch } from "./components/chat/version-status";
 import { DatasetSummary } from "./components/dataset-summary";
 import { type MemoryDraft, MemoryPanel } from "./components/memory-panel";
 import { Button } from "./components/ui/button";
@@ -29,11 +32,14 @@ import { useMediaQuery } from "./hooks/use-media-query";
 import { conversationStarts, loadConversation, saveConversation } from "./memory";
 import { composerStops } from "./run";
 import { suggestQuestions } from "./suggestions";
+import { VersionReview } from "./VersionReview";
+import { addedFiles, isOlderVersion, isWaitingForUser, versionDividers } from "./versions";
 
 type Panel =
   | { kind: "run"; evidence: Evidence; trigger: HTMLElement | null }
   | { kind: "dataset"; trigger: HTMLElement | null }
-  | { kind: "memory"; draft?: MemoryDraft; trigger: HTMLElement | null };
+  | { kind: "memory"; draft?: MemoryDraft; trigger: HTMLElement | null }
+  | { kind: "version"; trigger: HTMLElement | null };
 
 interface RunRef {
   id: string;
@@ -46,8 +52,23 @@ function today(): string {
   return local.toISOString().slice(0, 10);
 }
 
-export function Conversation({ api, dataset }: { api: Api; dataset: Dataset }) {
+export function Conversation({
+  api,
+  dataset,
+  onRefresh,
+}: {
+  api: Api;
+  dataset: Dataset;
+  /** Called with the dataset whenever it is read again, such as while a new version is open. */
+  onRefresh: (dataset: Dataset) => void;
+}) {
   const datasetId = dataset.id;
+  const [addOpen, setAddOpen] = useState(false);
+  const [runVersions, setRunVersions] = useState<Record<string, number>>({});
+  const watch = useVersionWatch(api, dataset, onRefresh);
+  const openVersion = dataset.open_version ?? null;
+  const shownVersion = openVersion ?? watch.outcome;
+  const currentVersion = dataset.current_version ?? 1;
   // Oldest first, as a conversation reads.
   const [runs, setRuns] = useState<RunRef[] | null>(null);
   // The conversation new questions join; their runs read its earlier turns (docs/adr/0030).
@@ -100,6 +121,17 @@ export function Conversation({ api, dataset }: { api: Api; dataset: Dataset }) {
     setPanel(null);
     trigger?.focus();
   }, []);
+
+  const onVersion = useCallback((id: string, version: number) => {
+    setRunVersions((current) => (current[id] === version ? current : { ...current, [id]: version }));
+  }, []);
+
+  // The review closes when its version is no longer waiting for a decision.
+  const reviewing = panel?.kind === "version";
+  const reviewable = openVersion !== null && isWaitingForUser(openVersion);
+  useEffect(() => {
+    if (reviewing && !reviewable) setPanel(null);
+  }, [reviewing, reviewable]);
 
   async function loadOlder() {
     if (!olderBefore) return;
@@ -203,6 +235,9 @@ export function Conversation({ api, dataset }: { api: Api; dataset: Dataset }) {
 
   const activeRun = panel?.kind === "run" ? panel.evidence.run.id : null;
   const starts = conversationStarts(runs ?? []);
+  const dividers = versionDividers(
+    (runs ?? []).flatMap(({ id }) => (id in runVersions ? [{ id, dataset_version: runVersions[id] }] : [])),
+  );
   const last = runs?.at(-1);
   const latestId = last?.id;
   // While the latest question of this conversation runs, the send button stops it, as in other
@@ -214,7 +249,9 @@ export function Conversation({ api, dataset }: { api: Api; dataset: Dataset }) {
       ? panel.evidence.run.question
       : panel?.kind === "memory"
         ? "Memory"
-        : panel
+        : panel?.kind === "version"
+          ? "Review new files"
+          : panel
           ? dataset.name
           : "";
   const panelBody =
@@ -222,8 +259,22 @@ export function Conversation({ api, dataset }: { api: Api; dataset: Dataset }) {
       <EvidenceContent key={panel.evidence.run.id} api={api} evidence={panel.evidence} />
     ) : panel?.kind === "memory" ? (
       <MemoryPanel api={api} datasetId={datasetId} draft={panel.draft} />
+    ) : panel?.kind === "version" ? (
+      openVersion && reviewable ? (
+        <VersionReview
+          key={openVersion.version}
+          api={api}
+          dataset={dataset}
+          version={openVersion}
+          onDone={() => {
+            closePanel();
+            void watch.refresh().catch((caught) => setError(errorMessage(caught)));
+          }}
+        />
+      ) : null
     ) : panel ? (
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <VersionList versions={watch.versions} />
         <DatasetSummary dataset={dataset} />
       </div>
     ) : null;
@@ -256,7 +307,18 @@ export function Conversation({ api, dataset }: { api: Api; dataset: Dataset }) {
                 )}
                 {runs.map(({ id }) => (
                   <div key={id} className="flex flex-col gap-8">
+                    {dividers.has(id) && (
+                      <VersionDivider
+                        version={dividers.get(id) as number}
+                        files={addedFiles(watch.versions, dividers.get(id) as number)}
+                      />
+                    )}
                     {starts.has(id) && <ConversationBreak />}
+                    {id in runVersions && isOlderVersion({ dataset_version: runVersions[id] }, currentVersion) && (
+                      <span className="text-muted-foreground -mb-6 self-start rounded-full border px-2 py-0.5 text-[11px]">
+                        data v{runVersions[id]}
+                      </span>
+                    )}
                     <RunMessage
                       api={api}
                       runId={id}
@@ -268,6 +330,7 @@ export function Conversation({ api, dataset }: { api: Api; dataset: Dataset }) {
                       }
                       onOpenMemory={(trigger) => setPanel({ kind: "memory", trigger })}
                       onStatus={onStatus}
+                      onVersion={onVersion}
                       onCorrect={(run, trigger) =>
                         setPanel({
                           kind: "memory",
@@ -280,6 +343,16 @@ export function Conversation({ api, dataset }: { api: Api; dataset: Dataset }) {
                 ))}
                 {startsFresh && <ConversationBreak fresh />}
               </>
+            )}
+            {shownVersion && (
+              <VersionStatus
+                api={api}
+                datasetId={datasetId}
+                version={shownVersion}
+                onReview={(event) => setPanel({ kind: "version", trigger: event })}
+                onDismiss={watch.dismiss}
+                onChange={() => void watch.refresh().catch(() => {})}
+              />
             )}
             <div ref={endRef} />
           </div>
@@ -320,6 +393,18 @@ export function Conversation({ api, dataset }: { api: Api; dataset: Dataset }) {
               variant="ghost"
               size="sm"
               className="text-muted-foreground h-8 gap-1.5 px-2 text-xs font-normal"
+              disabled={openVersion !== null}
+              title={openVersion ? "Finish or discard the new files first" : undefined}
+              onClick={() => setAddOpen(true)}
+            >
+              <FilePlus2 className="size-3.5" />
+              Add files
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground h-8 gap-1.5 px-2 text-xs font-normal"
               aria-pressed={panel?.kind === "memory"}
               onClick={(event) =>
                 panel?.kind === "memory"
@@ -349,6 +434,13 @@ export function Conversation({ api, dataset }: { api: Api; dataset: Dataset }) {
         />
       </div>
 
+      <AddFilesDialog
+        api={api}
+        dataset={dataset}
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        onUploaded={() => void watch.refresh().catch((caught) => setError(errorMessage(caught)))}
+      />
       {wide ? (
         panel && (
           <DesktopPanel title={panelTitle} onClose={closePanel}>
@@ -365,13 +457,28 @@ export function Conversation({ api, dataset }: { api: Api; dataset: Dataset }) {
                   ? "How the agent reached this answer"
                   : panel?.kind === "memory"
                     ? "Notes the agent follows for this dataset"
-                    : "About this data"}
+                    : panel?.kind === "version"
+                      ? "Choices for the files you added"
+                      : "About this data"}
               </SheetDescription>
             </SheetHeader>
             {panelBody}
           </SheetContent>
         </Sheet>
       )}
+    </div>
+  );
+}
+
+/** Marks where the data version changed: answers below read the newer data. */
+function VersionDivider({ version, files }: { version: number; files: string[] }) {
+  return (
+    <div role="separator" className="text-muted-foreground flex items-center gap-3 text-xs">
+      <span className="bg-border h-px flex-1" />
+      <span className="max-w-[80%] text-center">
+        {files.length > 0 && `Added ${files.join(", ")}. `}Answers below use data version {version}.
+      </span>
+      <span className="bg-border h-px flex-1" />
     </div>
   );
 }

@@ -49,12 +49,15 @@ export function RunMessage({
   onCorrect,
   onOpenMemory,
   onStatus,
+  onVersion,
 }: {
   api: Api;
   runId: string;
   active: boolean;
   /** Called with the run's status whenever it changes, so the composer can offer Stop. */
   onStatus?: (runId: string, status: RunStatus) => void;
+  /** Called with the data version the run read, once it is loaded. */
+  onVersion?: (runId: string, version: number) => void;
   onShowWork: (evidence: Evidence, trigger: HTMLElement) => void;
   /** Opens memory to write a correction linked to this run. */
   onCorrect?: (run: Run, trigger: HTMLElement) => void;
@@ -91,6 +94,11 @@ export function RunMessage({
   useEffect(() => {
     if (status) onStatus?.(runId, status);
   }, [onStatus, runId, status]);
+
+  const dataVersion = run ? (run.dataset_version ?? 1) : undefined;
+  useEffect(() => {
+    if (dataVersion !== undefined) onVersion?.(runId, dataVersion);
+  }, [onVersion, runId, dataVersion]);
 
   if (!run) {
     return error ? (

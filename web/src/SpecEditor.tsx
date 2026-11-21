@@ -1,5 +1,5 @@
 import { ChevronRight, Loader2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { COLUMN_TYPES, type ColumnSpec, type DatasetSpec, type TableSpec } from "./api";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
@@ -17,15 +17,22 @@ export function SpecEditor({
   spec: proposed,
   busy,
   onApprove,
+  embedded = false,
+  onChange,
 }: {
   spec: DatasetSpec;
   busy: boolean;
   onApprove: (spec?: DatasetSpec) => void;
+  /** Inside another review: columns only, no title, no Approve button; `onChange` gets each edit. */
+  embedded?: boolean;
+  onChange?: (spec: DatasetSpec) => void;
 }) {
   const [spec, setSpec] = useState<DatasetSpec>(proposed);
   const [mode, setMode] = useState<Mode>("form");
   const [json, setJson] = useState("");
   const [jsonError, setJsonError] = useState<string | null>(null);
+
+  useEffect(() => onChange?.(spec), [spec, onChange]);
 
   const original = useMemo(() => JSON.stringify(proposed), [proposed]);
   const edited = JSON.stringify(spec) !== original;
@@ -66,6 +73,7 @@ export function SpecEditor({
 
   return (
     <section className="flex flex-col gap-4" aria-labelledby="spec-title">
+      {!embedded && (
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 id="spec-title" className="text-lg font-semibold tracking-tight">
@@ -96,6 +104,7 @@ export function SpecEditor({
           ))}
         </div>
       </div>
+      )}
 
       {mode === "form" ? (
         <>
@@ -134,6 +143,7 @@ export function SpecEditor({
         </>
       )}
 
+      {!embedded && (
       <div className="bg-background/90 sticky bottom-0 -mx-1 flex items-center justify-end gap-2 border-t px-1 py-4 backdrop-blur">
         {edited && (
           <Button
@@ -154,6 +164,7 @@ export function SpecEditor({
           {busy ? "Sending…" : edited || mode === "json" ? "Save and rebuild" : "Approve"}
         </Button>
       </div>
+      )}
     </section>
   );
 }

@@ -89,7 +89,16 @@ export function DatasetView({
   }
 
   if (dataset.status === "ready" && !(becameReady && !chatOpen)) {
-    return <Conversation api={api} dataset={dataset} />;
+    return (
+      <Conversation
+        api={api}
+        dataset={dataset}
+        onRefresh={(next) => {
+          setDataset(next);
+          onChange(next);
+        }}
+      />
+    );
   }
   if (dataset.status === "ready") {
     return (

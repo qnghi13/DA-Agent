@@ -95,6 +95,77 @@ export interface Dataset {
   error: string | null;
   files: { name: string; stored_as: string; bytes: number }[];
   documents: number;
+  /** The data version runs read; missing for an API from before versions. */
+  current_version?: number;
+  /** The version being checked or waiting for the user, if any (docs/design/2026-11-21-add-files.md). */
+  open_version?: DatasetVersion | null;
+}
+
+export type VersionStatus =
+  | "uploaded"
+  | "checking"
+  | "needs_choice"
+  | "proposed"
+  | "building"
+  | "applied"
+  | "failed"
+  | "discarded";
+
+export type OverlapChoice = "replace" | "drop_overlap" | "keep_both";
+
+export interface VersionOverlap {
+  kind: "exact" | "key" | "date";
+  rows: number;
+  key?: string[];
+  column?: string | null;
+  examples?: Record<string, string | null>[];
+  removed_by_dedupe?: boolean;
+}
+
+/** What the check found for one table (src/da_agent/ingestion/version_review.py). */
+export interface VersionChange {
+  table: string;
+  kind: "unchanged" | "grown" | "new" | "removed";
+  new_rows: number;
+  overlaps: VersionOverlap[];
+  near_match: string | null;
+  missing_columns: string[];
+  extra_columns: string[];
+  quality: string[];
+  stale_metrics: string[];
+  /** Only when the table has overlaps. */
+  allowed_choices?: OverlapChoice[];
+  note?: string;
+}
+
+/** A change to an existing table's spec the model proposed to fix parse problems. */
+export interface RepairChange {
+  table: string;
+  path: string;
+  before: unknown;
+  after: unknown;
+}
+
+export interface DatasetVersion {
+  version: number;
+  status: VersionStatus;
+  files: { name: string; stored_as: string; bytes: number }[];
+  spec: DatasetSpec | null;
+  summary: (DatasetSummary & { repair_problem?: string }) | null;
+  changes: VersionChange[] | null;
+  choices: Record<string, unknown> | null;
+  repairs: RepairChange[] | null;
+  error: string | null;
+  created_at: string;
+}
+
+export interface VersionApproval {
+  choices: Record<string, OverlapChoice>;
+  replace_files: Record<string, string>;
+  /** Edited specs of new tables only, or null to keep the proposal. */
+  spec: DatasetSpec | null;
+  repairs: RepairChange[];
+  apply_anyway: boolean;
 }
 
 // Statuses a worker is still changing; the UI polls while a dataset has one.
@@ -178,6 +249,43 @@ export class Api {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(spec ? { spec } : {}),
+    });
+  }
+
+  /** Upload more files as the dataset's next version; `replaces` has one stored name or null per file. */
+  addFiles(
+    datasetId: string,
+    files: File[],
+    replaces: (string | null)[],
+  ): Promise<{ dataset_id: string; version: number; status: VersionStatus }> {
+    const form = new FormData();
+    for (const file of files) form.append("files", file, file.name);
+    for (const replaced of replaces) form.append("replaces", replaced ?? "");
+    return this.request(`/v1/datasets/${encodeURIComponent(datasetId)}/files`, {
+      method: "POST",
+      body: form,
+    });
+  }
+
+  listVersions(datasetId: string): Promise<{ versions: DatasetVersion[] }> {
+    return this.request(`/v1/datasets/${encodeURIComponent(datasetId)}/versions`);
+  }
+
+  approveVersion(
+    datasetId: string,
+    n: number,
+    body: VersionApproval,
+  ): Promise<{ dataset_id: string; version: number; status: VersionStatus }> {
+    return this.request(`/v1/datasets/${encodeURIComponent(datasetId)}/versions/${n}/approve`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(body),
+    });
+  }
+
+  discardVersion(datasetId: string, n: number): Promise<void> {
+    return this.request(`/v1/datasets/${encodeURIComponent(datasetId)}/versions/${n}/discard`, {
+      method: "POST",
     });
   }
 
@@ -442,6 +550,8 @@ export interface Run {
   question: string;
   as_of: string;
   conversation_id: string | null;
+  /** The data version it read; missing for runs from before versions, which read version 1. */
+  dataset_version?: number;
   status: RunStatus;
   /** The user asked to stop it; a running run keeps this until its worker stops. */
   cancel_requested?: boolean;
