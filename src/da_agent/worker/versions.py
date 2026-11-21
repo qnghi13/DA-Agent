@@ -34,6 +34,7 @@ from da_agent.ingestion.spec import DatasetSpec
 from da_agent.ingestion.version_review import (
     blocking_tables,
     cover_raw_tables,
+    invalid_choices,
     overlap_keys,
     pin_kept_tables,
     replaced_files,
@@ -122,6 +123,8 @@ class VersionHandler:
                 current = store.current(dataset_id)
             except DatasetStateError as error:
                 raise PermanentJobError(str(error)) from error
+            if lost.is_set():
+                return {"status": "lost"}
             owned = STEP_STATUS[step]
             starts = ("uploaded", owned) if step == "check" else (owned,)
             if not store.mark(dataset_id, number, owned, expected=starts):
@@ -266,16 +269,15 @@ class _VersionRun:
             status = "needs_choice"
         else:
             return self.install_and_apply(fields)
-        if not self.store.mark(self.record.dataset_id, self.record.version, status,
-                               expected=(self.owned,), **fields):  # fmt: skip
-            return {"status": _status(self.store, self.job.workspace_id, self.record)}
+        if not self.mark(status, **fields):
+            return self.not_mine()
         return {"status": status}
 
     def build(self) -> dict[str, Any]:
         choices = self.record.choices or {}
         chosen: dict[str, str] = dict(choices.get("tables") or {})
         entries: list[dict[str, Any]] = self.record.changes or []
-        if blocking_tables(entries) - set(chosen):
+        if invalid_choices(entries, chosen):
             raise _VersionFailed(FAILURES["choices_invalid"])
         files = self.replace_files(chosen, choices.get("replace_files") or {})
         m = self.match(files)
@@ -400,33 +402,51 @@ class _VersionRun:
     def install_and_apply(self, fields: dict[str, Any]) -> dict[str, Any]:
         """Store what the version will hold, install its build as `<id>-v<n>`, and apply it in
         one transaction. A retry after the install replaces the directory and applies once."""
-        if self.lost.is_set():
-            return {"status": "lost"}
-        dataset_id, number = self.record.dataset_id, self.record.version
-        if not self.store.mark(dataset_id, number, self.owned, expected=(self.owned,), **fields):
-            return {"status": _status(self.store, self.job.workspace_id, self.record)}
+        if not self.mark(self.owned, **fields):
+            return self.not_mine()
         output = self.last_build.output_dir if self.last_build else None
         if output is None:
             raise _VersionFailed(FAILURES["build_failed"])
         with self.span("version.install"):
             _install(output, self.h.datasets_root, self.name)
         self.staging.remove(output)
-        self.store.apply(dataset_id, number, self.name)
+        if self.lost.is_set():
+            return {"status": "lost"}  # the next attempt replaces the directory and applies
+        record = self.record
+        if not self.store.apply(record.dataset_id, record.version, self.name,
+                                expected=(self.owned,)):  # fmt: skip
+            # Another attempt failed it or the user discarded it: its directory is not wanted.
+            shutil.rmtree(self.h.datasets_root / self.name, ignore_errors=True)
+            return self.not_mine()
         return {"status": "applied"}
 
     def fail(self, message: str) -> dict[str, Any]:
         """Mark the version failed and remove what it alone holds: its upload folder and any
         build installed for it. The current version's folders are never touched."""
         record = self.record
-        if not self.store.mark(record.dataset_id, record.version, "failed",
-                               expected=(self.owned,), error=message):  # fmt: skip
-            return {"status": _status(self.store, self.job.workspace_id, record)}
+        if not self.mark("failed", error=message):
+            return self.not_mine()
         upload_dir = record.upload_dir
         if upload_dir != self.current.upload_dir and DIRECTORY_NAME.fullmatch(upload_dir):
             shutil.rmtree(self.h.uploads_root / upload_dir, ignore_errors=True)
         if self.name != self.current.build_dir:
             shutil.rmtree(self.h.datasets_root / self.name, ignore_errors=True)
         return {"status": "failed"}
+
+    def mark(self, status: str, **fields: Any) -> bool:
+        """Change the version only while this attempt still holds the job and the version is
+        still in the step's status. A worker that lost its lease leaves it to the next attempt."""
+        if self.lost.is_set():
+            return False
+        record = self.record
+        return self.store.mark(
+            record.dataset_id, record.version, status, expected=(self.owned,), **fields
+        )
+
+    def not_mine(self) -> dict[str, Any]:
+        if self.lost.is_set():
+            return {"status": "lost"}
+        return {"status": _status(self.store, self.job.workspace_id, self.record)}
 
     def clean_staging(self) -> None:
         for path in self.staging:

@@ -159,8 +159,10 @@ class Setup:
         assert job is not None and job.kind == "version"
         return job
 
-    def run(self, llm: LLMClient, **options: Any) -> dict[str, Any]:
-        return self.handler(llm, **options)(self.claim(), threading.Event())
+    def run(
+        self, llm: LLMClient, lost: threading.Event | None = None, **options: Any
+    ) -> dict[str, Any]:
+        return self.handler(llm, **options)(self.claim(), lost or threading.Event())
 
     def version(self, number: int = 2) -> VersionRecord:
         record = self.store.get(self.workspace, self.dataset_id, number)
@@ -411,6 +413,85 @@ def test_a_crash_fails_the_version_and_frees_the_slot(
     assert not (setup.uploads / setup.folder).exists()
 
 
+def test_a_drop_choice_on_a_date_only_overlap_fails_the_build(setup: Setup) -> None:
+    # New ids, dates inside the old range: only a date overlap, which no row-drop can resolve.
+    setup.add_files({"orders_2.csv": "id,total,day\n3,300,05/02/2026\n"})
+    llm, _ = fake_llm()
+    setup.run(llm)
+    entry = setup.entry("orders")
+    assert setup.version().status == "needs_choice"
+    assert [o["kind"] for o in entry["overlaps"]] == ["date"]
+    assert entry["allowed_choices"] == ["replace", "keep_both"]
+    choices = {"tables": {"orders": "drop_overlap"}, "replace_files": {}, "apply_anyway": False}
+    setup.store.approve(setup.workspace, setup.dataset_id, 2, choices, None, [])
+
+    setup.run(llm)
+
+    version = setup.version()
+    assert (version.status, version.error) == ("failed", FAILURES["choices_invalid"])
+    assert setup.current_version() == 1
+
+
+def test_a_worker_that_lost_its_job_changes_nothing(setup: Setup) -> None:
+    lost = threading.Event()
+    lost.set()
+    setup.add_files({"orders_2.csv": "id,total,day\n3,300,01/03/2026\n"})
+    llm, _ = fake_llm()
+
+    outcome = setup.run(llm, lost=lost)
+
+    assert outcome["status"] == "lost"
+    assert setup.version().status == "uploaded" and setup.current_version() == 1
+    assert not (setup.datasets / f"{setup.dataset_id}-v2").exists()
+
+
+@pytest.mark.parametrize("ending", ["needs_choice", "failed", "applied"])
+def test_a_lease_lost_mid_step_leaves_the_version_to_the_next_attempt(
+    setup: Setup, monkeypatch: pytest.MonkeyPatch, ending: str
+) -> None:
+    # The lease is lost while the sandbox builds; the late attempt must not change the version.
+    new = {"needs_choice": ORDERS, "failed": "", "applied": "id,total,day\n3,300,01/03/2026\n"}
+    setup.add_files({"orders_2.csv": new[ending]})
+    lost = threading.Event()
+    build = setup.runner.build
+
+    def build_then_lose(request: BuildRun) -> BuildResult:
+        lost.set()
+        result = build(request)
+        if ending == "failed":
+            return result.model_copy(update={"status": "error", "report": None})
+        return result
+
+    monkeypatch.setattr(setup.runner, "build", build_then_lose)
+    llm, _ = fake_llm()
+
+    assert setup.run(llm, lost=lost)["status"] == "lost"
+
+    assert setup.version().status == "checking" and setup.current_version() == 1
+    assert (setup.uploads / setup.folder).exists()
+    assert not (setup.datasets / f"{setup.dataset_id}-v2").exists()
+
+
+def test_a_version_another_attempt_failed_is_never_applied(
+    setup: Setup, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup.add_files({"orders_2.csv": "id,total,day\n3,300,01/03/2026\n"})
+    apply = DatasetVersionStore.apply
+
+    def failed_meanwhile(self: DatasetVersionStore, *args: Any, **kwargs: Any) -> bool:
+        # The attempt that took over after a lost lease failed the version just before.
+        self.mark(setup.dataset_id, 2, "failed", error="the other attempt failed")
+        return apply(self, *args, **kwargs)
+
+    monkeypatch.setattr(DatasetVersionStore, "apply", failed_meanwhile)
+    llm, _ = fake_llm()
+
+    assert setup.run(llm)["status"] == "failed"
+
+    assert setup.version().status == "failed" and setup.current_version() == 1
+    assert not (setup.datasets / f"{setup.dataset_id}-v2").exists()
+
+
 def test_a_discarded_version_is_not_checked(setup: Setup) -> None:
     setup.add_files({"orders_2.csv": "id,total,day\n3,300,01/03/2026\n"})
     setup.store.discard(setup.workspace, setup.dataset_id, 2)
@@ -428,7 +509,7 @@ def test_retry_after_install_applies_once(setup: Setup, monkeypatch: pytest.Monk
     llm, _ = fake_llm()
     apply = DatasetVersionStore.apply
 
-    def killed(self: DatasetVersionStore, *args: Any) -> None:
+    def killed(self: DatasetVersionStore, *args: Any, **kwargs: Any) -> None:
         raise Killed
 
     monkeypatch.setattr(DatasetVersionStore, "apply", killed)

@@ -202,8 +202,19 @@ class DatasetVersionStore:
         query = f"UPDATE dataset_versions SET {', '.join(sets)} WHERE {where}"  # noqa: S608
         return self._conn.execute(query, params).rowcount > 0  # type: ignore[arg-type]
 
-    def apply(self, dataset_id: UUID, version: int, build_dir: str) -> None:
-        """Make a version the dataset's current one, in one transaction. Idempotent."""
+    def apply(
+        self,
+        dataset_id: UUID,
+        version: int,
+        build_dir: str,
+        *,
+        expected: tuple[str, ...] = ("checking", "building"),
+    ) -> bool:
+        """Make a version the dataset's current one, in one transaction. Idempotent.
+
+        Only a version in one of the `expected` statuses (the worker step's own) is applied, so a
+        late attempt never applies a version another attempt failed or the user discarded.
+        Returns True when the version is applied, now or before."""
         with self._conn.transaction():
             row = self._conn.execute(
                 "SELECT status FROM dataset_versions WHERE dataset_id = %s AND version = %s "
@@ -213,7 +224,9 @@ class DatasetVersionStore:
             if row is None:
                 raise DatasetStateError("version not found")
             if row[0] == "applied":
-                return
+                return True
+            if row[0] not in expected:
+                return False
             self._conn.execute(
                 "UPDATE datasets d SET spec = v.spec, summary = coalesce(v.summary, '{}'), "
                 "documents = coalesce(v.documents, '[]'), files = v.files, "
@@ -227,6 +240,7 @@ class DatasetVersionStore:
                 "updated_at = now() WHERE dataset_id = %s AND version = %s",
                 (build_dir, dataset_id, version),
             )
+        return True
 
     def approve(
         self,

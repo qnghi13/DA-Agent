@@ -14,6 +14,7 @@ from da_agent.ingestion.spec import ColumnSpec, DatasetSpec, OverlapDrop, TableS
 from da_agent.ingestion.version_review import (
     blocking_tables,
     cover_raw_tables,
+    invalid_choices,
     pin_kept_tables,
     replaced_files,
     stale_metrics,
@@ -125,6 +126,7 @@ def test_version_changes_have_one_entry_per_table() -> None:
             "overlaps": [key.model_dump(mode="json")], "near_match": None,
             "missing_columns": [], "extra_columns": [],
             "quality": ["orders.total: parsed 50%"], "stale_metrics": [],
+            "allowed_choices": ["replace", "drop_overlap", "keep_both"],
         },
         {
             "table": "orders_v2", "kind": "new", "new_rows": 4, "overlaps": [],
@@ -211,3 +213,42 @@ def test_only_a_file_of_the_current_version_can_be_replaced() -> None:
     for names in ({}, {"orders": "orders_2.csv"}, {"orders": "../x.csv"}, {"orders": 3}):
         with pytest.raises(ValueError):
             replaced_files(chosen, names, current)
+
+
+def overlap_entries(*overlaps: Overlap, dedupe: str = "none") -> list[dict[str, object]]:
+    build = BuildReport(tables=[TableBuild(name="orders", source="orders", overlaps=[*overlaps])])
+    changes = [TableChange(raw_name="orders", kind="grown", previous_raw_name="orders")]
+    spec = DatasetSpec(tables=[orders(dedupe=dedupe)])
+    return version_changes(changes, spec, {}, build, {}, {})
+
+
+def test_a_date_only_overlap_cannot_be_dropped() -> None:
+    # A whole-row drop would drop nothing for rows that only share a date range.
+    entries = overlap_entries(Overlap(kind="date", rows=3, column="day"))
+
+    assert entries[0]["allowed_choices"] == ["replace", "keep_both"]
+    assert invalid_choices(entries, {"orders": "drop_overlap"}) == ["orders"]
+    assert invalid_choices(entries, {"orders": "keep_both"}) == []
+
+
+def test_an_exact_repeat_removed_by_dedupe_does_not_allow_a_drop() -> None:
+    entries = overlap_entries(
+        Overlap(kind="exact", rows=2), Overlap(kind="date", rows=3, column="day"), dedupe="exact"
+    )
+
+    assert entries[0]["allowed_choices"] == ["replace", "keep_both"]
+
+
+def test_an_exact_or_key_overlap_allows_a_drop() -> None:
+    for overlap in (Overlap(kind="exact", rows=2), Overlap(kind="key", rows=1, key=["id"])):
+        entries = overlap_entries(overlap)
+        assert entries[0]["allowed_choices"] == ["replace", "drop_overlap", "keep_both"]
+        assert invalid_choices(entries, {"orders": "drop_overlap"}) == []
+
+
+def test_a_missing_or_unknown_choice_is_invalid() -> None:
+    entries = overlap_entries(Overlap(kind="key", rows=1, key=["id"]))
+
+    assert invalid_choices(entries, {}) == ["orders"]
+    assert invalid_choices(entries, {"orders": "merge"}) == ["orders"]
+    assert invalid_choices(entries, {"orders": "keep_both", "ghost": "keep_both"}) == ["ghost"]

@@ -197,6 +197,35 @@ def test_mark_with_an_expected_status_changes_only_a_version_in_that_status(
     assert record is not None and (record.status, record.tables) == ("checking", [])
 
 
+@pytest.mark.parametrize("status", ["failed", "discarded", "needs_choice"])
+def test_apply_refuses_a_version_not_in_a_worker_step(
+    conn: psycopg.Connection, workspace: UUID, status: str
+) -> None:
+    dataset_id = ready_dataset(conn, workspace)
+    store = DatasetVersionStore(conn)
+    version = store.open_version(workspace, dataset_id, NEW, f"{dataset_id}-v2", 20)
+    store.mark(dataset_id, version, status, spec={"tables": [{"name": "t"}]})
+
+    assert not store.apply(dataset_id, version, f"{dataset_id}-v2", expected=("checking",))
+
+    record = store.get(workspace, dataset_id, version)
+    assert record is not None and record.status == status
+    assert store.current(dataset_id).version == 1
+
+
+def test_apply_from_the_owned_step_applies_and_a_repeat_is_a_no_op(
+    conn: psycopg.Connection, workspace: UUID
+) -> None:
+    dataset_id = ready_dataset(conn, workspace)
+    store = DatasetVersionStore(conn)
+    version = store.open_version(workspace, dataset_id, NEW, f"{dataset_id}-v2", 20)
+    store.mark(dataset_id, version, "checking")
+
+    assert store.apply(dataset_id, version, f"{dataset_id}-v2", expected=("checking",))
+    assert store.apply(dataset_id, version, f"{dataset_id}-v2", expected=("checking",))
+    assert store.current(dataset_id).version == 2
+
+
 def test_approve_stores_choices_and_enqueues_a_build(
     conn: psycopg.Connection, workspace: UUID
 ) -> None:

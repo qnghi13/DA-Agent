@@ -12,6 +12,10 @@ from da_agent.ingestion.spec import DatasetSpec, OverlapDrop, TableSpec
 from da_agent.ingestion.versioning import QualityProblem, TableChange, TableHeader, file_of
 from da_agent.reports.metric import Definition, is_stale
 
+ALL_CHOICES = ["replace", "drop_overlap", "keep_both"]
+# Without a key or exact repeat there is no row to drop: a date-range overlap names no row pair.
+NO_DROP_CHOICES = ["replace", "keep_both"]
+
 
 def _names(spec: DatasetSpec, raw_names: list[str]) -> dict[str, str]:
     """Each raw table's clean name as the build gives it: the spec's, else one made from the raw
@@ -94,20 +98,39 @@ def version_changes(
             name = table_spec.name if table_spec else change.raw_name
         build = None if removed else builds.get(change.raw_name)
         near = change.near_match
-        entries.append(
-            {
-                "table": name,
-                "kind": change.kind,
-                "new_rows": build.new_rows if build else 0,
-                "overlaps": _overlaps(build, table_spec),
-                "near_match": names_before.get(near, near) if near else None,
-                "missing_columns": list(change.missing_columns),
-                "extra_columns": list(change.extra_columns),
-                "quality": [p.message for p in quality.get(name, [])],
-                "stale_metrics": stale.get(name, []),
-            }
-        )
+        overlaps = _overlaps(build, table_spec)
+        entry: dict[str, Any] = {
+            "table": name,
+            "kind": change.kind,
+            "new_rows": build.new_rows if build else 0,
+            "overlaps": overlaps,
+            "near_match": names_before.get(near, near) if near else None,
+            "missing_columns": list(change.missing_columns),
+            "extra_columns": list(change.extra_columns),
+            "quality": [p.message for p in quality.get(name, [])],
+            "stale_metrics": stale.get(name, []),
+        }
+        if overlaps:
+            entry["allowed_choices"] = _allowed_choices(overlaps)
+        entries.append(entry)
     return entries
+
+
+def _allowed_choices(overlaps: list[dict[str, Any]]) -> list[str]:
+    """`drop_overlap` only when a key or exact repeat names the rows to drop."""
+    droppable = any(
+        o.get("kind") in ("exact", "key") and not o.get("removed_by_dedupe") for o in overlaps
+    )
+    return list(ALL_CHOICES if droppable else NO_DROP_CHOICES)
+
+
+def invalid_choices(entries: list[dict[str, Any]], chosen: dict[str, Any]) -> list[str]:
+    """Tables whose choice the build step cannot carry out: a blocking table without a choice, a
+    choice its overlaps do not allow, or a table the check did not report."""
+    allowed = {e["table"]: e.get("allowed_choices", NO_DROP_CHOICES) for e in entries}
+    missing = blocking_tables(entries) - set(chosen)
+    wrong = {t for t, c in chosen.items() if t not in allowed or c not in allowed[t]}
+    return sorted(missing | wrong)
 
 
 def blocking_tables(entries: list[dict[str, Any]]) -> set[str]:
