@@ -16,7 +16,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, Any, Literal, Protocol
+from typing import IO, Annotated, Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -31,6 +31,8 @@ SANDBOX_LABEL = "da-agent.sandbox"
 STARTUP_GRACE_SECONDS = 15
 MAX_CODE_CHARS = 50_000
 MAX_SQL_CHARS = 20_000
+# What storage_name() makes of an uploaded file name: ASCII letters, digits, _ and -, a suffix.
+STORED_NAME_PATTERN = r"^[A-Za-z0-9_-]{1,110}\.[A-Za-z0-9]{1,8}$"
 _CHUNK = 65_536
 
 # 128 + signal number: SIGKILL (memory limit or docker kill) and SIGALRM (the in-sandbox timer).
@@ -91,6 +93,10 @@ class BuildRun(BaseModel):
     kind: Literal["build"] = "build"
     ingest_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
     spec: DatasetSpec
+    # Stored names of the files whose rows are new, so the build can report how they overlap.
+    new_sources: list[Annotated[str, Field(pattern=STORED_NAME_PATTERN)]] = Field(
+        default_factory=list, max_length=1000
+    )
     timeout_seconds: int = Field(default=600, ge=1, le=1800)
 
 

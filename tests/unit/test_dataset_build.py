@@ -9,7 +9,14 @@ import pytest
 
 from da_agent.ingestion.build import CLEAN_DATABASE, build
 from da_agent.ingestion.raw import RAW_DATABASE, ingest
-from da_agent.ingestion.spec import ColumnSpec, DatasetSpec, RowCondition, RowRule, TableSpec
+from da_agent.ingestion.spec import (
+    ColumnSpec,
+    DatasetSpec,
+    OverlapDrop,
+    RowCondition,
+    RowRule,
+    TableSpec,
+)
 
 
 def raw_upload(tmp_path: Path, files: dict[str, str]) -> tuple[Path, object]:
@@ -778,3 +785,178 @@ def test_date_columns_keep_their_range_and_get_distinct(tmp_path: Path, out: Pat
     assert column.distinct == 2
     assert (column.min_value, column.max_value) == ("2026-06-01", "2026-06-30")
     assert column.number_min is None and column.top_values == []
+
+
+# --- Overlap between new files and older rows (docs/design/2026-11-21-add-files.md) ---
+
+
+def orders_spec(**table: object) -> DatasetSpec:
+    return DatasetSpec(tables=[TableSpec(source="orders", name="orders", **table)])
+
+
+def overlap_build(
+    tmp_path: Path, out: Path, files: dict[str, str], spec=None, new=("orders_1.csv",)
+):
+    raw, report = raw_upload(tmp_path, files)
+    return build(
+        raw / RAW_DATABASE,
+        spec or orders_spec(),
+        report,
+        out,
+        new_sources=frozenset(new),
+    )
+
+
+def test_overlap_exact_counts_resent_rows(tmp_path: Path, out: Path) -> None:
+    rows_text = "order_id,status\n1,paid\n2,paid\n3,open\n"
+
+    result = overlap_build(tmp_path, out, {"orders.csv": rows_text, "orders_1.csv": rows_text})
+
+    table = result.tables[0]
+    assert table.new_rows == 3
+    exact = [o for o in table.overlaps if o.kind == "exact"]
+    assert len(exact) == 1 and exact[0].rows == 3
+    assert len(exact[0].examples) == 3
+    assert [o.kind for o in table.overlaps] == ["exact"]
+
+
+def test_overlap_key_numeric_order_id(tmp_path: Path, out: Path) -> None:
+    old = "order_id,status\n1,open\n2,open\n3,open\n4,open\n"
+    new = "order_id,status\n2,paid\n3,paid\n9,open\n"
+
+    result = overlap_build(tmp_path, out, {"orders.csv": old, "orders_1.csv": new})
+
+    table = result.tables[0]
+    assert [(o.kind, o.rows, o.key) for o in table.overlaps] == [("key", 2, ["order_id"])]
+    assert table.overlaps[0].examples[0]["order_id"] in ("2", "3")
+
+
+def test_overlap_key_two_columns_for_line_items(tmp_path: Path, out: Path) -> None:
+    old = "order_id,product,qty\n1,a,1\n1,b,1\n2,a,1\n2,b,1\n"
+    new = "order_id,product,qty\n1,a,5\n2,c,1\n"
+
+    result = overlap_build(tmp_path, out, {"orders.csv": old, "orders_1.csv": new})
+
+    assert [(o.kind, o.rows, o.key) for o in result.tables[0].overlaps] == [
+        ("key", 1, ["order_id", "product"])
+    ]
+
+
+def test_overlap_date_range(tmp_path: Path, out: Path) -> None:
+    old = "order_id,day\n1,2025-01-01\n2,2025-01-31\n"
+    inside = "order_id,day\n7,2025-01-15\n8,2025-02-03\n"
+    after = "order_id,day\n7,2025-02-02\n8,2025-02-03\n"
+    spec = orders_spec(columns=[ColumnSpec(source="day", name="day", type="date")])
+
+    for name in ("a", "b", "clean_b"):
+        (tmp_path / name).mkdir()
+    hit = overlap_build(tmp_path / "a", out, {"orders.csv": old, "orders_1.csv": inside}, spec)
+    miss = overlap_build(
+        tmp_path / "b", tmp_path / "clean_b", {"orders.csv": old, "orders_1.csv": after}, spec
+    )
+
+    dates = [o for o in hit.tables[0].overlaps if o.kind == "date"]
+    assert [(o.column, o.rows) for o in dates] == [("day", 1)]
+    assert dates[0].examples == [{"day": "2025-01-15"}]
+    assert [o for o in miss.tables[0].overlaps if o.kind == "date"] == []
+
+
+def test_no_overlap_without_new_sources(tmp_path: Path, out: Path) -> None:
+    text = "order_id,status\n1,paid\n"
+    raw, report = raw_upload(tmp_path, {"orders.csv": text, "orders_1.csv": text})
+
+    result = build(raw / RAW_DATABASE, orders_spec(), report, out)
+
+    table = result.tables[0]
+    assert (table.overlaps, table.new_rows, table.new_columns, table.new_excluded) == (
+        [],
+        0,
+        [],
+        [],
+    )
+
+
+def test_overlap_ignores_dedupe_flag(tmp_path: Path, out: Path) -> None:
+    text = "order_id,status\n1,paid\n2,paid\n"
+
+    result = overlap_build(
+        tmp_path, out, {"orders.csv": text, "orders_1.csv": text}, orders_spec(dedupe="exact")
+    )
+
+    assert [(o.kind, o.rows) for o in result.tables[0].overlaps] == [("exact", 2)]
+    assert rows(out, "SELECT count(*) FROM orders") == [(2,)]
+
+
+def test_new_columns_and_new_excluded_count_only_new_rows(tmp_path: Path, out: Path) -> None:
+    old = "order_id,amount\n1,10\nTotal,10\n"
+    new = "order_id,amount\n5,abc\n6,20\nTotal,20\n"
+    spec = orders_spec(
+        columns=[ColumnSpec(source="amount", name="amount", type="number")],
+        exclude_rows=[
+            RowRule(
+                when=[RowCondition(column="order_id", op="equals", value="total")], reason="total"
+            )
+        ],
+    )
+
+    result = overlap_build(tmp_path, out, {"orders.csv": old, "orders_1.csv": new}, spec)
+
+    table = result.tables[0]
+    assert table.new_rows == 2
+    amount = next(c for c in table.new_columns if c.name == "amount")
+    assert (amount.non_blank, amount.parsed, amount.failed_samples) == (2, 1, ["abc"])
+    assert [(r.reason, r.rows) for r in table.excluded] == [("total", 2)]
+    assert [(r.reason, r.rows, r.position) for r in table.new_excluded] == [("total", 1, 1)]
+    # Quarantine is written once, from the whole table.
+    assert rows(out, "SELECT count(*) FROM _quarantine") == [(1,)]
+
+
+def test_drop_overlap_moves_rows_to_excluded(tmp_path: Path, out: Path) -> None:
+    old = "order_id,status\n1,paid\n2,paid\n"
+    new = "order_id,status\n1,paid\n3,paid\n"
+    spec = orders_spec(
+        drop_overlap=[OverlapDrop(file="orders_1.csv", against=["orders.csv"], key=[])]
+    )
+
+    result = overlap_build(tmp_path, out, {"orders.csv": old, "orders_1.csv": new}, spec)
+
+    assert rows(out, "SELECT order_id, _source FROM orders ORDER BY _source, _row") == [
+        ("1", "orders.csv"),
+        ("2", "orders.csv"),
+        ("3", "orders_1.csv"),
+    ]
+    assert rows(out, "SELECT reason, _source, raw_values FROM _excluded") == [
+        ("already in orders.csv", "orders_1.csv", '{"order_id":"1","status":"paid"}')
+    ]
+    assert result.tables[0].new_rows == 1
+
+
+def test_drop_overlap_by_key_keeps_changed_rows_out(tmp_path: Path, out: Path) -> None:
+    old = "order_id,status\n1,open\n2,open\n"
+    new = "order_id,status\n1,paid\n3,open\n"
+    spec = orders_spec(
+        drop_overlap=[OverlapDrop(file="orders_1.csv", against=["orders.csv"], key=["order_id"])]
+    )
+
+    overlap_build(tmp_path, out, {"orders.csv": old, "orders_1.csv": new}, spec)
+
+    assert rows(out, "SELECT order_id FROM orders WHERE _source = 'orders_1.csv'") == [("3",)]
+
+
+def test_drop_overlap_quotes_names(tmp_path: Path, out: Path) -> None:
+    key = "k'\"x"
+    header = '"k\'""x",v\n'
+    file_old, file_new = "o'ld\".csv", "o'ld\"_1.csv"
+    raw, report = raw_upload(
+        tmp_path, {file_old: header + "1,a\n2,a\n", file_new: header + "1,b\n3,b\n"}
+    )
+    drop = OverlapDrop(file=file_new, against=[file_old], key=[key])
+    spec = DatasetSpec(
+        tables=[TableSpec(source=report.tables[0].name, name="t", drop_overlap=[drop])]
+    )
+
+    result = build(raw / RAW_DATABASE, spec, report, out, new_sources=frozenset({file_new}))
+
+    assert result.tables[0].error is None
+    assert rows(out, "SELECT reason FROM _excluded") == [(f"already in {file_old}",)]
+    assert rows(out, "SELECT count(*) FROM t") == [(3,)]

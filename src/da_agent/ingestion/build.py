@@ -10,6 +10,7 @@ copied to `_excluded`, so nothing is dropped silently.
 
 import itertools
 from pathlib import Path
+from typing import Literal
 
 import duckdb
 from pydantic import BaseModel, Field
@@ -21,6 +22,7 @@ from da_agent.ingestion.spec import (
     SOURCE_NAME,
     ColumnSpec,
     DatasetSpec,
+    OverlapDrop,
     RowCondition,
     RowRule,
     TableSpec,
@@ -68,6 +70,9 @@ PROVEN_SUBTOTAL = "Proven subtotal: equals the sum of the rows above (code)"
 ID_FILLED, ID_DISTINCT, ID_NUMERIC, ID_MIN_ROWS = 0.5, 0.9, 0.5, 20
 # The column profile lists this many most frequent values, each cut to this length.
 TOP_VALUES, TOP_VALUE_CHARS = 5, 60
+# A key identifies the older rows when its distinct values reach this share of them. The overlap
+# report lists this many example rows, each with at most this many columns.
+OVERLAP_KEY_SHARE, OVERLAP_EXAMPLES, OVERLAP_EXAMPLE_COLUMNS = 0.99, 5, 8
 NUMBER_TYPES = ("integer", "number", "money", "quantity")
 # Excel serial numbers from 1954 to 2119. Five-digit numbers outside this range stay unparsed.
 EXCEL_SERIAL_MIN, EXCEL_SERIAL_MAX = 20000, 80000
@@ -116,6 +121,16 @@ class ExcludedRule(BaseModel):
     identifier: str | None = None
 
 
+class Overlap(BaseModel):
+    """New rows that repeat older ones: whole rows, a key, or a date inside the old date range."""
+
+    kind: Literal["exact", "key", "date"]
+    rows: int
+    key: list[str] = Field(default_factory=list, description="Raw key columns, for kind key.")
+    column: str | None = Field(default=None, description="Clean date column, for kind date.")
+    examples: list[dict[str, str | None]] = Field(default_factory=list)
+
+
 class SubtotalCheck(BaseModel):
     """A rare row shape whose rows mostly equal the sum of the rows above them."""
 
@@ -142,6 +157,15 @@ class TableBuild(BaseModel):
     duplicate_key: list[str] = Field(
         default_factory=list,
         description="Fewer columns than the table that identify every distinct row, if any.",
+    )
+    # Set only when the build knows which files are new (docs/design/2026-11-21-add-files.md).
+    overlaps: list[Overlap] = Field(default_factory=list)
+    new_rows: int = Field(default=0, description="Rows in the clean table from new files.")
+    new_columns: list[ColumnBuild] = Field(
+        default_factory=list, description="Parse stats over the rows from new files only."
+    )
+    new_excluded: list[ExcludedRule] = Field(
+        default_factory=list, description="The excluded rows of new files only."
     )
     error: str | None = None
 
@@ -244,9 +268,15 @@ def _exclusion_reason(rules: list[RowRule]) -> str:
 
 
 def build(
-    raw_database: Path, spec: DatasetSpec, report: IngestReport, out_dir: Path
+    raw_database: Path,
+    spec: DatasetSpec,
+    report: IngestReport,
+    out_dir: Path,
+    new_sources: frozenset[str] = frozenset(),
 ) -> BuildReport:
-    """Write dataset.duckdb to out_dir. One failing table is reported and the rest still build."""
+    """Write dataset.duckdb to out_dir. One failing table is reported and the rest still build.
+
+    A row is new when the file part of its `_source` (the text before `#`) is in new_sources."""
     result = BuildReport()
     raw_columns = {
         t.name: [c.name for c in t.columns if c.name not in META_COLUMNS] for t in report.tables
@@ -275,6 +305,7 @@ def build(
                         raw_columns[table.source],
                         sensitive[table.source],
                         raw_reports[table.source],
+                        new_sources,
                     )
                 )
             except duckdb.Error as error:
@@ -312,7 +343,9 @@ def _build_table(
     raw_columns: list[str],
     sensitive: set[str],
     raw_report: TableReport,
+    new_sources: frozenset[str] = frozenset(),
 ) -> TableBuild:
+    new = _new_condition(new_sources)
     specs = {c.source: c for c in table.columns}
     hidden = sorted(s for s in raw_columns if s in sensitive or (s in specs and specs[s].sensitive))
     taken = {c.name for c in table.columns}
@@ -339,6 +372,8 @@ def _build_table(
     )
     proven = _exclude_proven_subtotals(connection, marked, table.source, raw_columns, raw_report)
     visible = [s for s in raw_columns if s not in hidden]
+    overlaps = _row_overlaps(connection, marked, raw_columns, visible, new) if new_sources else []
+    _drop_overlaps(connection, marked, raw_columns, table.drop_overlap)
     values = ", ".join(f"{lit(s)}, {q(s)}" for s in visible)
     raw_values = f"CAST(json_object({values}) AS VARCHAR)" if visible else "'{}'"
     connection.execute(
@@ -379,20 +414,10 @@ def _build_table(
     common = _common_filled_count(connection, marked, raw_columns)
     full = f"{filled_count_sql(raw_columns)} >= {common}" if raw_columns else "false"
     identifiers = _identifier_columns(connection, marked, raw_columns) if table.exclude_rows else {}
-    for position, label in enumerate(_rule_labels(table.exclude_rows), start=1):
-        excluded = f"SELECT count(*) FROM {q(marked)} WHERE __excluded = {lit(label)}"
-        rule = ExcludedRule(
-            reason=label,
-            position=position,
-            rows=_scalar(connection, excluded),
-            full_rows=_scalar(connection, f"{excluded} AND {full}"),
-        )
-        for column, form in identifiers.items():
-            same_form = f"{signature_sql(q(column))} = {lit(form)}"
-            count = _scalar(connection, f"{excluded} AND {filled_sql(column)} AND {same_form}")
-            if count > rule.with_identifier:
-                rule.with_identifier, rule.identifier = count, column
-        report.excluded.append(rule)
+    labels = _rule_labels(table.exclude_rows)
+    report.excluded = _excluded_rules(connection, marked, labels, full, identifiers, "true")
+    if new_sources:
+        report.new_excluded = _excluded_rules(connection, marked, labels, full, identifiers, new)
     for shape in _subtotal_shapes(raw_report):
         kept = (
             f"SELECT count(*) FROM {q(marked)} WHERE __excluded IS NULL "
@@ -407,6 +432,7 @@ def _build_table(
             )
         )
     report.rows = _scalar(connection, f"SELECT count(*) FROM {q(stage)}")
+    report.overlaps = overlaps
     names = [c.name for c in columns]
     report.duplicate_rows = _duplicate_rows(connection, table.name, names)
     if report.duplicate_rows:
@@ -419,9 +445,203 @@ def _build_table(
             checked.min_value, checked.max_value = _value_range(connection, table.name, column.name)
         _profile(connection, table.name, column, checked)
         report.columns.append(checked)
+    if new_sources:
+        report.new_rows = _scalar(connection, f"SELECT count(*) FROM {q(stage)} WHERE {new}")
+        report.new_columns = [
+            _check_column(connection, table.name, stage, c, scope=new, quarantine=False)
+            for c in columns
+        ]
+        report.overlaps += _date_overlaps(connection, table.name, columns, new)
     connection.execute(f"DROP TABLE {q(stage)}")
     connection.execute(f"DROP TABLE {q(marked)}")
     return report
+
+
+def _excluded_rules(
+    connection: duckdb.DuckDBPyConnection,
+    marked: str,
+    labels: list[str],
+    full: str,
+    identifiers: dict[str, str],
+    scope: str,
+) -> list[ExcludedRule]:
+    """Counts per exclude rule over the rows matching scope: all rows, or the new files' rows."""
+    rules = []
+    for position, label in enumerate(labels, start=1):
+        excluded = f"SELECT count(*) FROM {q(marked)} WHERE __excluded = {lit(label)} AND {scope}"
+        rule = ExcludedRule(
+            reason=label,
+            position=position,
+            rows=_scalar(connection, excluded),
+            full_rows=_scalar(connection, f"{excluded} AND {full}"),
+        )
+        for column, form in identifiers.items():
+            same_form = f"{signature_sql(q(column))} = {lit(form)}"
+            count = _scalar(connection, f"{excluded} AND {filled_sql(column)} AND {same_form}")
+            if count > rule.with_identifier:
+                rule.with_identifier, rule.identifier = count, column
+        rules.append(rule)
+    return rules
+
+
+def _file_of(source: str = "_source") -> str:
+    return f"split_part({source}, '#', 1)"
+
+
+def _new_condition(new_sources: frozenset[str]) -> str:
+    """SQL that is true for a row of a new file."""
+    if not new_sources:
+        return "false"
+    return f"{_file_of()} IN ({', '.join(lit(s) for s in sorted(new_sources))})"
+
+
+def _in_older_rows(marked: str, new: str, expression: str, guard: str = "true") -> str:
+    """A test that a new row's expression equals the expression of an older, kept row."""
+    return (
+        f"{guard} AND {expression} IN (SELECT {expression} FROM {q(marked)} "
+        f"WHERE __excluded IS NULL AND NOT ({new}) AND {guard})"
+    )
+
+
+def _row_overlaps(
+    connection: duckdb.DuckDBPyConnection,
+    marked: str,
+    raw_columns: list[str],
+    visible: list[str],
+    new: str,
+) -> list[Overlap]:
+    """Exact and key overlaps between kept new rows and kept older rows, before fill-down and
+    dedupe, so a `dedupe` flag cannot hide a re-sent file."""
+    found: list[Overlap] = []
+    if not raw_columns:
+        return found
+    base = f"FROM {q(marked)} WHERE __excluded IS NULL AND {new}"
+    whole = f"list_value({', '.join(q(c) for c in raw_columns)})"
+    exact = _in_older_rows(marked, new, whole)
+    shown = visible[:OVERLAP_EXAMPLE_COLUMNS]
+    count = _scalar(connection, f"SELECT count(*) {base} AND {exact}")
+    if count:
+        found.append(
+            Overlap(
+                kind="exact",
+                rows=count,
+                examples=_examples(connection, f"{base} AND {exact}", shown),
+            )
+        )
+    key = _overlap_key(connection, marked, visible, new)
+    if key:
+        parts = [f"trim({q(c)})" for c in key]
+        filled = " AND ".join(f"{p} <> ''" for p in parts)
+        same_key = _in_older_rows(marked, new, f"list_value({', '.join(parts)})", filled)
+        where = f"{base} AND {same_key} AND NOT ({exact})"
+        count = _scalar(connection, f"SELECT count(*) {where}")
+        if count:
+            found.append(
+                Overlap(kind="key", rows=count, key=key, examples=_examples(connection, where, key))
+            )
+    return found
+
+
+def _examples(
+    connection: duckdb.DuckDBPyConnection, source: str, columns: list[str]
+) -> list[dict[str, str | None]]:
+    rows = connection.execute(
+        f"SELECT {', '.join(q(c) for c in columns)} {source} ORDER BY _source, __row "
+        f"LIMIT {OVERLAP_EXAMPLES}"
+    ).fetchall()
+    return [
+        {
+            c: (str(v)[:TOP_VALUE_CHARS] if v is not None else None)
+            for c, v in zip(columns, row, strict=True)
+        }
+        for row in rows
+    ]
+
+
+def _overlap_key(
+    connection: duckdb.DuckDBPyConnection, marked: str, columns: list[str], new: str
+) -> list[str]:
+    """The smallest set of 1 or 2 raw columns whose distinct non-blank values reach
+    OVERLAP_KEY_SHARE of the older kept rows. Empty when there is none or nothing to compare."""
+    old = f"FROM {q(marked)} WHERE __excluded IS NULL AND NOT ({new})"
+    total = _scalar(connection, f"SELECT count(*) {old}")
+    new_rows = _scalar(
+        connection, f"SELECT count(*) FROM {q(marked)} WHERE __excluded IS NULL AND {new}"
+    )
+    if not total or not new_rows:
+        return []
+    searched = columns[:KEY_SEARCH_COLUMNS]
+    for size in range(1, MAX_KEY_SIZE + 1):
+        keys = list(itertools.combinations(searched, size))
+        if not keys:
+            continue
+        counts = []
+        for key in keys:
+            parts = [f"trim({q(c)})" for c in key]
+            filled = " AND ".join(f"{p} <> ''" for p in parts)
+            counts.append(
+                f"count(DISTINCT CASE WHEN {filled} THEN list_value({', '.join(parts)}) END)"
+            )
+        row = connection.execute(f"SELECT {', '.join(counts)} {old}").fetchone()
+        for key, distinct in zip(keys, row or (), strict=False):
+            if distinct >= OVERLAP_KEY_SHARE * total:
+                return list(key)
+    return []
+
+
+def _date_overlaps(
+    connection: duckdb.DuckDBPyConnection, table: str, columns: list[ColumnSpec], new: str
+) -> list[Overlap]:
+    """New rows dated within the span of the older rows, per date column of the clean table."""
+    found = []
+    for column in columns:
+        if column.type not in ("date", "datetime"):
+            continue
+        name = q(column.name)
+        inside = (
+            f"FROM {q(table)} WHERE {new} AND {name} BETWEEN "
+            f"(SELECT min({name}) FROM {q(table)} WHERE NOT ({new})) AND "
+            f"(SELECT max({name}) FROM {q(table)} WHERE NOT ({new}))"
+        )
+        count = _scalar(connection, f"SELECT count(*) {inside}")
+        if count:
+            rows = connection.execute(
+                f"SELECT CAST({name} AS VARCHAR) {inside} ORDER BY {name}, _source, _row "
+                f"LIMIT {OVERLAP_EXAMPLES}"
+            ).fetchall()
+            examples: list[dict[str, str | None]] = [{column.name: str(r[0])} for r in rows]
+            found.append(Overlap(kind="date", rows=count, column=column.name, examples=examples))
+    return found
+
+
+def _drop_overlaps(
+    connection: duckdb.DuckDBPyConnection,
+    marked: str,
+    raw_columns: list[str],
+    drops: list[OverlapDrop],
+) -> None:
+    """Mark the rows of each drop's file that repeat a kept row of its `against` files, by its
+    key columns (not blank) or by whole row, so they land in `_excluded` with their file."""
+    for drop in drops:
+        if drop.key:
+            match = " AND ".join(
+                f"trim(n.{q(k)}) = trim(o.{q(k)}) AND trim(n.{q(k)}) <> ''" for k in drop.key
+            )
+        else:
+            match = " AND ".join(f"n.{q(c)} IS NOT DISTINCT FROM o.{q(c)}" for c in raw_columns)
+        if not match:
+            continue
+        against = ", ".join(lit(f) for f in drop.against)
+        connection.execute(
+            f"UPDATE {q(marked)} SET __excluded = {lit('already in ' + ', '.join(drop.against))} "
+            f"FROM (SELECT DISTINCT n._source AS s, n.__row AS r FROM {q(marked)} n "
+            f"JOIN {q(marked)} o ON {match} AND NOT (n._source = o._source AND n.__row = o.__row) "
+            f"WHERE n.__excluded IS NULL AND o.__excluded IS NULL "
+            f"AND {_file_of('n._source')} = {lit(drop.file)} "
+            f"AND {_file_of('o._source')} IN ({against})) AS p "
+            f"WHERE {q(marked)}._source = p.s AND {q(marked)}.__row = p.r "
+            f"AND {q(marked)}.__excluded IS NULL"
+        )
 
 
 def _subtotal_shapes(raw_report: TableReport) -> list[RowShape]:
@@ -615,20 +835,28 @@ def _scalar(connection: duckdb.DuckDBPyConnection, sql: str) -> int:
 
 
 def _check_column(
-    connection: duckdb.DuckDBPyConnection, table: str, stage: str, column: ColumnSpec
+    connection: duckdb.DuckDBPyConnection,
+    table: str,
+    stage: str,
+    column: ColumnSpec,
+    scope: str = "true",
+    quarantine: bool = True,
 ) -> ColumnBuild:
+    """Parse stats over the stage rows matching scope. Only the whole-table check writes the
+    quarantine, so a second pass over the new rows does not repeat its rows."""
     report = ColumnBuild(name=column.name, source=column.source, type=column.type)
     raw = q(column.source)
-    non_blank = f"{raw} IS NOT NULL AND trim({raw}) <> ''"
+    non_blank = f"{scope} AND {raw} IS NOT NULL AND trim({raw}) <> ''"
     report.non_blank = _scalar(connection, f"SELECT count(*) FROM {q(stage)} WHERE {non_blank}")
     if column.type == "text":
         report.parsed = report.non_blank
         return report
     failed = f"{non_blank} AND ({parse_expression(column, column.source)}) IS NULL"
-    connection.execute(
-        f"INSERT INTO {QUARANTINE} SELECT {lit(table)}, {lit(column.name)}, _source, __row, {raw} "
-        f"FROM {q(stage)} WHERE {failed}"
-    )
+    if quarantine:
+        connection.execute(
+            f"INSERT INTO {QUARANTINE} SELECT {lit(table)}, {lit(column.name)}, _source, __row, "
+            f"{raw} FROM {q(stage)} WHERE {failed}"
+        )
     failures = _scalar(connection, f"SELECT count(*) FROM {q(stage)} WHERE {failed}")
     report.parsed = report.non_blank - failures
     samples = connection.execute(

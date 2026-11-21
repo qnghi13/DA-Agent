@@ -4,7 +4,14 @@ import pytest
 from pydantic import ValidationError
 
 from da_agent.ingestion.report import ColumnProfile, ColumnReport, IngestReport, TableReport
-from da_agent.ingestion.spec import ColumnSpec, DatasetSpec, Relationship, TableSpec, check_spec
+from da_agent.ingestion.spec import (
+    ColumnSpec,
+    DatasetSpec,
+    OverlapDrop,
+    Relationship,
+    TableSpec,
+    check_spec,
+)
 
 
 def report() -> IngestReport:
@@ -383,3 +390,12 @@ def test_rules_may_name_columns_the_spec_does_not_declare_by_their_default_clean
     assert clean.tables[0].fill_down == ["Mã đơn", "Ngày"]
     assert clean.tables[0].exclude_rows[0].when[0].column == "Mã đơn"
     assert check_spec(clean, report()) == []
+
+
+def test_spec_rejects_bad_overlap_drop() -> None:
+    with pytest.raises(ValidationError):
+        OverlapDrop(file="", against=["a.csv"], key=[])
+    drop = OverlapDrop(file="b.csv", against=["a.csv"], key=[])
+    with pytest.raises(ValidationError):
+        TableSpec(source="t", name="t", drop_overlap=[drop] * 21)
+    assert len(TableSpec(source="t", name="t", drop_overlap=[drop] * 20).drop_overlap) == 20

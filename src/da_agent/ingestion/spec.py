@@ -73,6 +73,17 @@ class RowRule(_Model):
     reason: str = Field(default="", max_length=200)
 
 
+class OverlapDrop(_Model):
+    """Rows of one stored file that repeat rows of older files are moved to `_excluded`. An empty
+    key compares whole rows; else rows match when their key columns are equal and not blank."""
+
+    file: str = Field(min_length=1, max_length=255, description="Stored name of the newer file.")
+    against: list[str] = Field(
+        min_length=1, max_length=20, description="Stored names of the files it repeats."
+    )
+    key: list[str] = Field(default_factory=list, max_length=5, description="Raw column names.")
+
+
 class TableSpec(_Model):
     source: str = Field(description="Raw table name, exactly as in the profile.")
     name: Identifier = Field(pattern=IDENTIFIER_PATTERN)
@@ -88,6 +99,7 @@ class TableSpec(_Model):
         max_length=10,
         description="Rules for rows that are not records, tested on raw values before fill_down.",
     )
+    drop_overlap: list[OverlapDrop] = Field(default_factory=list, max_length=20)
 
 
 class Relationship(_Model):

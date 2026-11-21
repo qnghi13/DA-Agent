@@ -22,6 +22,10 @@ def runner(tmp_path_factory: pytest.TempPathFactory) -> Runner:
     upload = root / "uploads" / "up_1"
     upload.mkdir()
     (upload / "sales.csv").write_text('Mã,Tổng\nD1,"22,000"\n', encoding="utf-8")
+    again = root / "uploads" / "up_overlap"
+    again.mkdir()
+    (again / "orders.csv").write_text("id,v\n1,a\n2,b\n", encoding="utf-8")
+    (again / "orders_1.csv").write_text("id,v\n1,a\n2,b\n", encoding="utf-8")
     book = openpyxl.Workbook()
     book.active.append(["SỔ NHẬP"])
     book.active.append([])
@@ -100,3 +104,18 @@ def test_a_spec_builds_clean_tables_in_the_sandbox(runner: Runner) -> None:
     database = str(built.output_dir / "dataset.duckdb")
     with duckdb.connect(database, read_only=True) as connection:
         assert connection.execute("SELECT ma, total FROM sales").fetchall() == [("D1", 22000)]
+
+
+def test_a_build_with_new_sources_reports_overlaps(runner: Runner) -> None:
+    ingested = runner.ingest(IngestRun(upload_id="up_overlap", timeout_seconds=120))
+    assert ingested.output_dir is not None
+    spec = DatasetSpec(tables=[TableSpec(source="orders", name="orders")])
+
+    built = runner.build(
+        BuildRun(ingest_id=ingested.output_dir.name, spec=spec, new_sources=["orders_1.csv"])
+    )
+
+    assert built.status == "ok", built.stderr
+    assert built.report is not None
+    table = built.report.tables[0]
+    assert (table.new_rows, [(o.kind, o.rows) for o in table.overlaps]) == (2, [("exact", 2)])
