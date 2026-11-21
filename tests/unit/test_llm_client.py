@@ -411,6 +411,9 @@ class FakeLimiter:
     def settle(self, route_key: str, reserved: int, used: int) -> None:
         self.settled.append((route_key, reserved, used))
 
+    def release(self, route_key: str, reserved: int) -> None:
+        self.settled.append((route_key, reserved, 0))
+
 
 def test_the_client_waits_as_the_limiter_says_then_settles_real_usage() -> None:
     limiter = FakeLimiter([2.5])
@@ -649,3 +652,25 @@ def test_a_throttled_attempt_is_marked_on_its_span() -> None:
 
     throttled = [s for s in exporter.get_finished_spans() if s.attributes.get("da_agent.throttled")]
     assert len(throttled) == 1
+
+
+def test_a_retry_after_the_cooldown_may_be_the_probe() -> None:
+    from da_agent.llm.breaker import BreakerPolicy
+
+    now = [0.0]
+    primary = ScriptedAdapter("groq", [TransientLLMError("down"), reply("probe")])
+    holder: dict[str, LLMClient] = {}
+
+    def sleep(seconds: float) -> None:
+        breaker = holder["client"]._breakers[0]
+        for _ in range(5):
+            breaker.record_failure()  # others open the breaker meanwhile
+        now[0] += 60.0  # and the cooldown passes before this retry
+
+    client = LLMClient(
+        [Route(primary, "groq-model")], CostLedger(), sleep=sleep, max_retries=2,
+        breaker_policy=BreakerPolicy(failures=5, cooldown_seconds=30.0), clock=lambda: now[0],
+    )  # fmt: skip
+    holder["client"] = client
+
+    assert client.complete(REQUEST, run_id="r").content == "probe"

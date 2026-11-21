@@ -1078,3 +1078,21 @@ def test_a_stop_after_the_answer_was_written_keeps_the_answer(dataset: SqliteDat
 
     assert result.stop_reason == "answered"
     assert result.answer is not None and result.answer.value == 350
+
+
+def test_a_user_stop_is_reported_even_when_a_node_stopped_the_run_too(
+    dataset: SqliteDataset,
+) -> None:
+    from da_agent.agent.stop import StopToken
+
+    stop = StopToken()
+
+    def on_event(event: dict[str, Any]) -> None:
+        if event.get("type") == "plan":  # the plan node has just stopped on its budget
+            stop.cancel("cancelled")
+
+    limits = AgentLimits(budget=RunBudget(max_total_tokens=0))
+    adapter = ScriptedAdapter([plan(), sql(), submit("number", 350)])
+    result = run_stoppable(dataset, adapter, stop, limits=limits, on_event=on_event)
+
+    assert result.stop_reason == "cancelled"

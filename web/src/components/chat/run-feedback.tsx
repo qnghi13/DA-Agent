@@ -92,6 +92,7 @@ export function RunFeedbackControl({ api, run }: { api: Api; run: Run }) {
             variant="ghost"
             size="sm"
             className="h-8 text-xs"
+            disabled={busy}
             onClick={() => {
               setReasons(feedback?.reasons ?? []);
               setNote(feedback?.note ?? "");

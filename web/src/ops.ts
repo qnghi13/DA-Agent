@@ -242,6 +242,8 @@ export interface OpsAlert {
   severity: string;
   summary: string;
   started_at: string | null;
+  /** Alertmanager's state; the list holds only active alerts, not silenced or inhibited ones. */
+  state: string;
   labels: Record<string, string>;
 }
 

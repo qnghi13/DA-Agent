@@ -297,8 +297,9 @@ class LLMClient:
                 if breaker is not None and not breaker.allow():
                     raise
                 self._wait(wait, interrupted)
-                # Other calls may have opened the breaker while this one waited.
-                if breaker is not None and breaker.state == "open":
+                # Other calls may have opened the breaker while this one waited; after its
+                # cooldown, this retry may be the one probe.
+                if breaker is not None and not breaker.allow():
                     raise
                 attempt += 1
             except Exception:

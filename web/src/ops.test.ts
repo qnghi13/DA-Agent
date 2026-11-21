@@ -107,7 +107,7 @@ describe("alerts", () => {
   it("lists pages before tickets, each oldest first", async () => {
     const { sortAlerts } = await import("./ops");
     const alert = (name: string, severity: string, started_at: string) => ({
-      name, severity, summary: "", started_at, labels: {},
+      name, severity, summary: "", started_at, state: "active", labels: {},
     });
 
     const sorted = sortAlerts([

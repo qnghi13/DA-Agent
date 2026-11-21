@@ -507,9 +507,9 @@ def _stream(
             values = chunk
             latest.clear()
             latest.update(chunk)
-            # A state with a stop reason is the end of the run: nothing is left to stop, and a
-            # stop now would throw away an answer already written.
-            if not chunk.get("stop_reason"):
+            # Once the answer is written, a stop would only throw it away. Any other stop
+            # reason still gives way to the user's stop or the deadline.
+            if chunk.get("stop_reason") != "answered":
                 context.stop.check()
             continue
         for node, update in chunk.items():
