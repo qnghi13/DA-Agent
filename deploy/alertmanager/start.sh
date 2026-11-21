@@ -11,7 +11,9 @@ else
 fi
 sed "s/RECEIVER/$receiver/" /etc/alertmanager/alertmanager.yml > /tmp/alertmanager/config.yml
 echo "alertmanager: sending alerts to receiver '$receiver'"
+# One instance: no cluster, so no gossip port that another container could join.
 exec /bin/alertmanager \
     --config.file=/tmp/alertmanager/config.yml \
     --storage.path=/alertmanager \
-    --web.listen-address=:9093
+    --web.listen-address=:9093 \
+    --cluster.listen-address=

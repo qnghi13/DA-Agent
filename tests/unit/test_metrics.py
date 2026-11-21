@@ -116,3 +116,25 @@ def test_the_process_metrics_are_made_once() -> None:
 
     assert worker_metrics() is worker_metrics()
     assert llm_metrics() is llm_metrics()
+
+
+def test_every_labelled_series_starts_at_zero_so_the_first_event_counts() -> None:
+    from da_agent.telemetry.metrics import ATTEMPT_RESULTS, CALL_RESULTS, JOB_KINDS, RUN_OUTCOMES
+
+    registry = CollectorRegistry()
+    WorkerMetrics(registry)
+    llm = LLMMetrics(registry)
+
+    llm.prepare([("groq", "m")])
+
+    for outcome in RUN_OUTCOMES:
+        assert registry.get_sample_value("da_agent_runs_total", {"outcome": outcome}) == 0
+    for kind in JOB_KINDS:
+        for result in ATTEMPT_RESULTS:
+            labels = {"kind": kind, "result": result}
+            assert registry.get_sample_value("da_agent_job_attempts_total", labels) == 0
+    assert "throttled" in CALL_RESULTS and "ok" in CALL_RESULTS
+    for result in CALL_RESULTS:
+        labels = {"provider": "groq", "model": "m", "result": result}
+        assert registry.get_sample_value("da_agent_llm_calls_total", labels) == 0
+    assert registry.get_sample_value("da_agent_breaker_open", {"route": "groq:m"}) == 0

@@ -35,6 +35,18 @@ _MODEL_ERRORS = {"llm_error", "invalid_tool_call", "no_tool_call"}
 _UNVERIFIED = {"unverified", "unreadable_values"}
 _OWN_NAME = {"budget_exceeded", "iteration_limit", "needs_clarification", "deadline_exceeded"}
 
+# Every label value a counter can take is created at zero when the process starts. A series first
+# created by its first event starts at 1, and rate() and increase() would never see that event.
+RUN_OUTCOMES = (
+    "answered", "abstained", "unverified", "model_error", "budget_exceeded", "iteration_limit",
+    "needs_clarification", "deadline_exceeded", "cancelled", "failed", "other",
+)  # fmt: skip
+JOB_KINDS = ("run", "ingest", "build", "export", "query")
+ATTEMPT_RESULTS = ("succeeded", "retry", "failed", "cancelled", "lost")
+CALL_RESULTS = (
+    "ok", "rate_limited", "transient", "permanent", "invalid_tool_call", "throttled"
+)  # fmt: skip
+
 
 def _safe[**P](method: Callable[P, None]) -> Callable[P, None]:
     @functools.wraps(method)
@@ -58,8 +70,9 @@ def run_outcome(status: str, result: dict[str, Any] | None) -> str:
     result = result or {}
     stop = result.get("stop_reason")
     if stop == "answered":
-        answer = result.get("answer") or {}
-        return "abstained" if answer.get("kind") == "unanswerable" else "answered"
+        answer = result.get("answer")
+        unanswerable = isinstance(answer, dict) and answer.get("kind") == "unanswerable"
+        return "abstained" if unanswerable else "answered"
     if stop in _UNVERIFIED:
         return "unverified"
     if stop in _MODEL_ERRORS:
@@ -92,6 +105,11 @@ class WorkerMetrics:
             buckets=WAIT_SECONDS,
             registry=registry,
         )
+        for outcome in RUN_OUTCOMES:
+            self._runs.labels(outcome=outcome)
+        for kind in JOB_KINDS:
+            for result in ATTEMPT_RESULTS:
+                self._attempts.labels(kind=kind, result=result)
 
     @_safe
     def run_finished(self, outcome: str) -> None:
@@ -137,6 +155,15 @@ class LLMMetrics:
         )
 
     @_safe
+    def prepare(self, routes: list[tuple[str, str]]) -> None:
+        """Create each route's series at zero, so its first call is counted by rate()."""
+        for provider, model in routes:
+            for result in CALL_RESULTS:
+                self._calls.labels(provider=provider, model=model, result=result)
+            self._seconds.labels(provider=provider, model=model)
+            self._breaker.labels(route=f"{provider}:{model}").set(0)
+
+    @_safe
     def call(
         self,
         provider: str,
@@ -179,6 +206,10 @@ def llm_metrics() -> LLMMetrics:
     return LLMMetrics()
 
 
+API_PREFIX = "/v1/"
+KNOWN_METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"})
+
+
 class ApiMetrics:
     """Requests by route template, method, and status, and their latency (ADR 0044)."""
 
@@ -208,6 +239,10 @@ class ApiMetrics:
 
         @app.middleware("http")
         async def count(request: Any, call_next: Any) -> Any:
+            # Only the API counts: health probes of /openapi.json every few seconds would
+            # outnumber real requests and hide their errors from the availability SLO.
+            if not request.url.path.startswith(API_PREFIX):
+                return await call_next(request)
             started = time.monotonic()
             status = 500
             try:
@@ -217,7 +252,9 @@ class ApiMetrics:
             finally:
                 route = request.scope.get("route")
                 template = getattr(route, "path", None) or "unmatched"
-                self.request(template, request.method, status, time.monotonic() - started)
+                # Any method token reaches here; unknown ones share one label value.
+                method = request.method if request.method in KNOWN_METHODS else "other"
+                self.request(template, method, status, time.monotonic() - started)
 
 
 @functools.cache

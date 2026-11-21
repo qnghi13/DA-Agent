@@ -14,6 +14,7 @@ another worker took it). The outcome is written only while this worker still own
 See docs/adr/0017 and docs/adr/0018.
 """
 
+import logging
 import threading
 import time
 import uuid
@@ -29,6 +30,8 @@ from da_agent.storage.db import connect
 from da_agent.storage.jobs import Job, JobQueue
 from da_agent.storage.versions import record_attempt
 from da_agent.telemetry.metrics import WorkerMetrics, run_outcome
+
+logger = logging.getLogger(__name__)
 
 Handler = Callable[[Job, threading.Event], dict[str, Any]]
 MAX_ERROR_CHARS = 500
@@ -81,7 +84,9 @@ class Worker:
         """Claim and process one job. Returns False when no job was due."""
         with self._connect() as conn:
             queue = JobQueue(conn)
-            queue.fail_expired()
+            for kind, status in queue.fail_expired():
+                # Their worker died mid-attempt: count the ending it never could.
+                self._record_ending(kind, "lost", status, None)
             job = queue.claim(self.worker_id, lease_seconds=self.config.lease_seconds)
             if job is None:
                 return False
@@ -169,11 +174,23 @@ class Worker:
     def _record(self, job: Job, ending: dict[str, Any], seconds: float) -> None:
         if self._metrics is None:
             return
-        self._metrics.attempt(job.kind, ending["attempt"])
         if job.kind == "run":
             self._metrics.run_duration(seconds)
-            if ending["status"] is not None:
-                self._metrics.run_finished(run_outcome(ending["status"], ending["result"]))
+        self._record_ending(job.kind, ending["attempt"], ending["status"], ending["result"])
+
+    def _record_ending(
+        self, kind: str, attempt: str, status: str | None, result: dict[str, Any] | None
+    ) -> None:
+        """Count one attempt, and the run when it ended for good. Never raises: a metric must not
+        stop the worker (ADR 0044)."""
+        if self._metrics is None:
+            return
+        try:
+            self._metrics.attempt(kind, attempt)
+            if kind == "run" and status is not None:
+                self._metrics.run_finished(run_outcome(status, result))
+        except Exception:
+            logger.exception("could not record a job's metrics")
 
     def _heartbeat(self, job: Job, lost: threading.Event, done: threading.Event) -> None:
         # Its own connection: a psycopg connection must not be shared between threads at once.

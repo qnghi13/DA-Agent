@@ -13,7 +13,7 @@ from prometheus_client import REGISTRY
 from da_agent.api.app import ApiSettings, create_app
 from da_agent.config import ConfigError, Settings
 from da_agent.storage.db import connect, migrate
-from da_agent.telemetry.db_metrics import DatabaseCollector
+from da_agent.telemetry.db_metrics import DatabaseCollector, connect_db_metrics
 from da_agent.telemetry.metrics import api_metrics, serve
 
 
@@ -50,7 +50,7 @@ def main() -> int:
         metrics = api_metrics()
         REGISTRY.register(
             DatabaseCollector(
-                lambda: connect(settings.database_url, schema=settings.schema),
+                lambda: connect_db_metrics(settings.database_url, settings.schema),
                 default_daily_usd=settings.daily_budget_usd,
             )
         )

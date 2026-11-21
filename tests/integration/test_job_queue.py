@@ -152,7 +152,7 @@ def test_a_job_that_keeps_killing_its_worker_ends_failed(
         expire_leases(conn)
 
     assert queue.claim("w3", lease_seconds=30) is None
-    assert queue.fail_expired() == 1
+    assert queue.fail_expired() == [("run", "failed")]
     job = queue.get(job_id, workspace)
     assert job is not None and job.status == "failed"
     assert "lease" in (job.last_error or "")
@@ -226,7 +226,7 @@ def test_failed_jobs_record_when_they_ended(conn: psycopg.Connection, workspace:
         "UPDATE jobs SET lease_until = now() - interval '1 second' WHERE id = %s", (abandoned,)
     )
 
-    assert queue.fail_expired() == 1
+    assert len(queue.fail_expired()) == 1
     assert times(conn, failed)[1] is not None
     assert times(conn, abandoned)[1] is not None
 

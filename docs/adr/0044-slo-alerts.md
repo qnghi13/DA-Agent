@@ -9,13 +9,19 @@ watched the system between visits: no SLOs, no error budgets, no alerts.
 - **Metrics where the work happens** (`prometheus_client`, `da_agent.telemetry.metrics`). The worker
   counts finished runs by outcome (the ops panel's groups), job attempts by result, run and queue
   wait histograms, model calls by route and result with latency, tokens, and cost, and an open
-  breaker gauge. The API counts requests by route template, method, and status. Each process
-  serves `/metrics` on port 9100, apart from the web app and never published to the host.
-  Recording a metric never fails the work it measures.
+  breaker gauge. The API counts `/v1/` requests by route template, method (unknown methods share
+  "other"), and status; health probes of `/openapi.json` are left out, since they would outnumber
+  real requests and hide their errors. Every label value a counter can take is created at zero
+  at start-up, because a series first created by its own event starts at 1 and `rate()` never sees
+  that event. Each process serves `/metrics` on port 9100, apart from the web app and never
+  published to the host. Recording a metric never fails the work it measures, and runs whose
+  worker died on their last attempt are counted by the worker that ends them.
 - **Metrics read from Postgres only for state that lives there** (`da_agent.telemetry.db_metrics`,
   in the API): queue depth, the oldest due job, each workspace's share of its daily budget, and
-  ratings in the last 7 days. Read at most every 30 s; when Postgres cannot be read, the last
-  values stay and `da_agent_db_metrics_up` drops to 0. Run outcomes and latency do not come from
+  ratings in the last 7 days. Read at most every 30 s, on a connection that gives up after 3 s;
+  a scrape never waits for a read in progress, and when Postgres cannot be read the last values
+  stay and `da_agent_db_metrics_up` drops to 0. A workspace with a zero budget that spent counts as
+  over budget. Run outcomes and latency do not come from
   the database, so those alerts still work when it fails.
 - **SLOs** over 7 days, as recorded series in `deploy/prometheus/rules/slo.yml`: runs 99% without a
   failure or model error (cancelled, budget, and deadline stops are not failures), run attempts
@@ -32,6 +38,7 @@ watched the system between visits: no SLOs, no error budgets, no alerts.
 - **The ops dashboard** lists firing alerts from Alertmanager (`GET /v1/ops/alerts`, operators
   only), pages first; an unreachable Alertmanager shows as unavailable, never as an API error.
 - Prometheus v3.15.1 and Alertmanager v0.35.0, pinned by digest; their UIs on 127.0.0.1 only.
+  Alertmanager runs as one instance with clustering off, so it has no gossip port.
 
 **Rejected:**
 - An SLO engine inside the app (Postgres to SLIs to an alert table): it reimplements Alertmanager's
@@ -47,3 +54,11 @@ watched the system between visits: no SLOs, no error budgets, no alerts.
 - Checked for real on 2026-11-21: with the worker stopped, WorkerDown reached a test webhook after
   about 3 minutes, and the resolved notice about 5 minutes after it came back.
 - Two more containers and their volumes (15 days of metrics).
+- Prometheus and Alertmanager sit on the edge network too, which publishing a port needs. There,
+  the web and Phoenix containers can reach their APIs and every `:9100` endpoint, none with
+  authentication: anything inside the Compose networks can read metrics or silence alerts.
+- 14.4 and 6 are the workbook factors for a 30-day budget; over 7 days a page means about 8.6% of
+  the budget per hour. At low traffic the 5-minute window is often empty, so a page can resolve
+  and fire again around a lone failure.
+- Queue wait covers every job kind, and streaming responses are timed to their headers; both are
+  kept simple on purpose and can be split later.

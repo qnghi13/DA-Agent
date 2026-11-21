@@ -680,3 +680,42 @@ def test_a_lost_job_is_an_attempt_but_not_a_finished_run(
 
     assert metric(registry, "da_agent_job_attempts_total", kind="run", result="lost") == 1
     assert metric(registry, "da_agent_runs_total", outcome="answered") == 0
+
+
+def test_a_run_whose_worker_died_on_its_last_attempt_counts_as_failed(
+    schema: str, conn: psycopg.Connection, workspace: UUID
+) -> None:
+    from prometheus_client import CollectorRegistry
+
+    from da_agent.telemetry.metrics import WorkerMetrics
+
+    queue = JobQueue(conn)
+    queue.enqueue(workspace, "run", {}, max_attempts=1)
+    assert queue.claim("dead", lease_seconds=30) is not None
+    conn.execute("UPDATE jobs SET lease_until = now() - interval '1 second'")
+    registry = CollectorRegistry()
+
+    Worker(
+        config(schema, "w1"), {"run": lambda job, lost: {}}, tracer=trace.NoOpTracer(),
+        metrics=WorkerMetrics(registry),
+    ).run_once()  # fmt: skip
+
+    assert metric(registry, "da_agent_runs_total", outcome="failed") == 1
+    assert metric(registry, "da_agent_job_attempts_total", kind="run", result="lost") == 1
+
+
+def test_a_strange_result_never_crashes_the_worker_loop(
+    schema: str, conn: psycopg.Connection, workspace: UUID
+) -> None:
+    from prometheus_client import CollectorRegistry
+
+    from da_agent.telemetry.metrics import WorkerMetrics
+
+    JobQueue(conn).enqueue(workspace, "run", {})
+    odd = {"stop_reason": "answered", "answer": "42"}
+    worker = Worker(
+        config(schema, "w1"), {"run": lambda job, lost: odd},
+        tracer=trace.NoOpTracer(), metrics=WorkerMetrics(CollectorRegistry()),
+    )  # fmt: skip
+
+    assert worker.run_once()

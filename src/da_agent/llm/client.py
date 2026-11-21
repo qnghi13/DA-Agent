@@ -198,6 +198,8 @@ class LLMClient:
         self._max_throttle_wait = max(max_throttle_wait, max_wait)
         # Prometheus counters for SLOs and alerts (ADR 0044). None records nothing.
         self._metrics = metrics
+        if metrics is not None:
+            metrics.prepare([(route.adapter.provider, route.model) for route in self._routes])
 
     def complete(
         self,

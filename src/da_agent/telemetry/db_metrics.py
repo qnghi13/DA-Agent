@@ -3,7 +3,9 @@
 Queue depth, the oldest job waiting to start, each workspace's share of its daily model budget,
 and ratings in the last 7 days. Run outcomes and latency are counted by the processes instead, so
 those alerts still work when Postgres does not. Values are read at most every 30 seconds; when
-Postgres cannot be read, the last values stay and da_agent_db_metrics_up drops to 0.
+Postgres cannot be read, the last values stay and da_agent_db_metrics_up drops to 0. A scrape never
+waits on Postgres: while one read is in progress, others serve the last values, and the read
+itself gives up after a few seconds (connect_db_metrics).
 """
 
 import logging
@@ -19,6 +21,7 @@ from prometheus_client.registry import Collector
 logger = logging.getLogger(__name__)
 
 CACHE_SECONDS = 30.0
+TIMEOUT_SECONDS = 3
 
 _QUEUE = "SELECT status, count(*) FROM jobs WHERE status IN ('queued', 'running') GROUP BY status"
 # Only jobs that are due count: a job waiting out its retry delay is not stuck.
@@ -36,6 +39,21 @@ _FEEDBACK = (
     "SELECT rating, count(*) FROM run_feedback "
     "WHERE updated_at >= now() - interval '7 days' GROUP BY rating"
 )
+
+
+def _ratio(spent: float, limit: float) -> float:
+    """Share of the budget used. A zero budget (a frozen workspace) is over it once it spends."""
+    if limit > 0:
+        return spent / limit
+    return float("inf") if spent > 0 else 0.0
+
+
+def connect_db_metrics(url: str, schema: str | None = None) -> psycopg.Connection:
+    """A connection that gives up quickly, so a stalled Postgres stalls no metrics read."""
+    options = f"-c statement_timeout={TIMEOUT_SECONDS * 1000}"
+    if schema is not None:
+        options += f" -c search_path={schema}"
+    return psycopg.connect(url, autocommit=True, connect_timeout=TIMEOUT_SECONDS, options=options)
 
 
 class DatabaseCollector(Collector):
@@ -59,7 +77,9 @@ class DatabaseCollector(Collector):
             queue = {"queued": 0, "running": 0} | dict(conn.execute(_QUEUE).fetchall())
             oldest_row = conn.execute(_OLDEST).fetchone()
             budget = {
-                str(workspace): spent / (limit if limit is not None else self._default_daily_usd)
+                str(workspace): _ratio(
+                    spent, limit if limit is not None else self._default_daily_usd
+                )
                 for workspace, spent, limit in conn.execute(_BUDGET).fetchall()
             }
             feedback = {"up": 0, "down": 0} | dict(conn.execute(_FEEDBACK).fetchall())
@@ -71,7 +91,10 @@ class DatabaseCollector(Collector):
         }
 
     def _current(self) -> dict[str, Any] | None:
-        with self._lock:
+        # Another scrape is reading: serve what we have rather than wait on Postgres.
+        if not self._lock.acquire(blocking=False):
+            return self._values
+        try:
             now = self._clock()
             if now - self._read_at >= CACHE_SECONDS:
                 self._read_at = now
@@ -82,6 +105,12 @@ class DatabaseCollector(Collector):
                     logger.warning("could not read metrics from Postgres: %s", error)
                     self._up = False
             return self._values
+        finally:
+            self._lock.release()
+
+    def describe(self) -> list[GaugeMetricFamily]:
+        # Registering must not read Postgres; the registry otherwise calls collect() to describe.
+        return []
 
     def collect(self) -> Iterator[GaugeMetricFamily]:
         values = self._current()

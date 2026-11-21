@@ -43,7 +43,7 @@ def test_requests_are_counted_by_route_template_method_and_status(
 
     client.get("/v1/runs/00000000-0000-0000-0000-000000000001", headers=headers)
     client.get("/v1/runs/00000000-0000-0000-0000-000000000002", headers=headers)
-    client.get("/no/such/path")
+    client.get("/v1/no/such/path")
 
     template = {"route": "/v1/runs/{run_id}", "method": "GET", "status": "404"}
     assert metric(registry, "da_agent_http_requests_total", **template) == 2
@@ -132,3 +132,98 @@ def test_the_collector_keeps_its_last_values_when_postgres_is_down(
     now[0] = 120.0
     assert metric(registry, "da_agent_queue_jobs", status="queued") == 2
     assert metric(registry, "da_agent_db_metrics_up") == 1
+
+
+def test_only_api_paths_and_known_methods_become_labels(
+    schema: str, conn: psycopg.Connection, workspace: UUID, tmp_path: Path
+) -> None:
+    assert POSTGRES_URL is not None
+    registry = CollectorRegistry()
+    settings = ApiSettings(database_url=POSTGRES_URL, schema=schema, uploads_root=tmp_path / "u")
+    client = TestClient(create_app(settings, metrics=ApiMetrics(registry)))
+
+    client.get("/openapi.json")  # the Compose healthcheck
+    client.get("/docs")
+    client.request("FOOBAR", "/v1/ops/alerts")
+    client.request("BAZQUX", "/v1/ops/alerts")
+
+    names = {
+        sample.labels.get("method")
+        for family in registry.collect()
+        if family.name == "da_agent_http_requests"
+        for sample in family.samples
+        if sample.name.endswith("_total")
+    }
+    assert names == {"other"}
+    assert metric(registry, "da_agent_http_requests_total", route="/v1/ops/alerts",
+                  method="other", status="405") == 2  # fmt: skip
+
+
+def test_a_hung_database_never_blocks_a_scrape(
+    schema: str, conn: psycopg.Connection, workspace: UUID
+) -> None:
+    import threading
+    import time
+
+    assert POSTGRES_URL is not None
+    JobQueue(conn).enqueue(workspace, "run", {})
+    hang = threading.Event()
+    release = threading.Event()
+    now = [0.0]
+
+    def connect_or_hang() -> psycopg.Connection:
+        if hang.is_set():
+            release.wait(10)
+        return connect(POSTGRES_URL, schema=schema)
+
+    collector = DatabaseCollector(connect_or_hang, default_daily_usd=5.0, clock=lambda: now[0])
+    registry = CollectorRegistry()
+    registry.register(collector)
+    assert metric(registry, "da_agent_queue_jobs", status="queued") == 1
+
+    hang.set()
+    now[0] = 60.0
+    stuck = threading.Thread(
+        target=lambda: metric(registry, "da_agent_queue_jobs", status="queued")
+    )
+    stuck.start()
+    time.sleep(0.2)
+    started = time.monotonic()
+    value = metric(registry, "da_agent_queue_jobs", status="queued")
+
+    assert time.monotonic() - started < 1.0
+    assert value == 1
+    release.set()
+    stuck.join(5)
+
+
+def test_a_workspace_with_a_zero_budget_does_not_break_the_metrics(
+    schema: str, conn: psycopg.Connection, workspace: UUID
+) -> None:
+    assert POSTGRES_URL is not None
+    job_id = JobQueue(conn).enqueue(workspace, "run", {})
+    set_daily_budget(conn, workspace, 0.0)
+    PostgresCostLedger(conn).record(
+        CostRecord(run_id=str(job_id), provider="fake", model="m", input_tokens=1,
+                   output_tokens=1, cached_input_tokens=0, cost_usd=0.01, latency_seconds=0.1)
+    )  # fmt: skip
+    registry = CollectorRegistry()
+    registry.register(
+        DatabaseCollector(lambda: connect(POSTGRES_URL, schema=schema), default_daily_usd=5.0)
+    )
+
+    assert metric(registry, "da_agent_db_metrics_up") == 1
+    assert metric(registry, "da_agent_queue_jobs", status="queued") == 1
+    assert metric(registry, "da_agent_budget_used_ratio", workspace_id=str(workspace)) == float(
+        "inf"
+    )
+
+
+def test_the_metrics_connection_gives_up_quickly(schema: str) -> None:
+    from da_agent.telemetry.db_metrics import connect_db_metrics
+
+    assert POSTGRES_URL is not None
+    with connect_db_metrics(POSTGRES_URL, schema) as conn:
+        row = conn.execute("SHOW statement_timeout").fetchone()
+
+    assert row == ("3s",)

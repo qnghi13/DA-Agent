@@ -142,21 +142,24 @@ class JobQueue:
         )
         return cursor.rowcount == 1
 
-    def fail_expired(self) -> int:
+    def fail_expired(self) -> list[tuple[str, str]]:
         """End jobs whose lease ran out on their last attempt, and cancelled jobs whose worker
-        stopped renewing. Returns how many."""
+        stopped renewing. Returns each ended job's kind and status, so the caller can count them
+        (ADR 0044): their own worker died before it could."""
         cancelled = self._conn.execute(
             "UPDATE jobs SET status = 'cancelled', lease_until = NULL, updated_at = now(), "
             "finished_at = now() "
-            "WHERE status = 'running' AND lease_until < now() AND cancel_requested_at IS NOT NULL"
-        )
-        cursor = self._conn.execute(
+            "WHERE status = 'running' AND lease_until < now() AND cancel_requested_at IS NOT NULL "
+            "RETURNING kind, status"
+        ).fetchall()
+        failed = self._conn.execute(
             "UPDATE jobs SET status = 'failed', lease_until = NULL, updated_at = now(), "
             "finished_at = now(), "
             "last_error = 'the worker stopped renewing its lease on the last attempt' "
-            "WHERE status = 'running' AND lease_until < now() AND attempts >= max_attempts"
-        )
-        return cancelled.rowcount + cursor.rowcount
+            "WHERE status = 'running' AND lease_until < now() AND attempts >= max_attempts "
+            "RETURNING kind, status"
+        ).fetchall()
+        return [(str(kind), str(status)) for kind, status in [*cancelled, *failed]]
 
     def request_cancel(self, job_id: UUID, workspace_id: UUID) -> CancelOutcome | None:
         """Cancel a job of the workspace. A queued job ends at once (cancelled); a running one
