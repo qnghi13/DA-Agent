@@ -1,0 +1,278 @@
+"""Dataset versions: each upload of more files is a new version.
+
+Design: docs/design/2026-11-21-add-files.md.
+
+A version moves uploaded -> checking -> (applied | needs_choice | proposed | failed | discarded);
+needs_choice and proposed lead to building -> applied. At most one version per dataset is open,
+enforced by a unique partial index. Every read and change is scoped to a workspace, except the
+worker-side methods (`mark`, `apply`, `current`), which take the dataset id from a job payload.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+from uuid import UUID
+
+import psycopg
+from psycopg import errors
+from psycopg.rows import class_row
+from psycopg.types.json import Jsonb
+
+from da_agent.storage.datasets import DatasetNotFoundError, DatasetStateError
+from da_agent.storage.jobs import JobQueue
+
+STATUSES = frozenset(
+    {
+        "uploaded", "checking", "needs_choice", "proposed", "building",
+        "applied", "failed", "discarded",
+    }
+)  # fmt: skip
+_JSON_FIELDS = frozenset(
+    {
+        "files",
+        "spec",
+        "summary",
+        "documents",
+        "tables",
+        "changes",
+        "choices",
+        "spec_edits",
+        "repairs",
+    }
+)
+_TEXT_FIELDS = frozenset({"upload_dir", "build_dir", "error"})
+_COLUMNS = (
+    "dataset_id, version, status, files, upload_dir, build_dir, spec, summary, documents, "
+    "tables, changes, choices, spec_edits, repairs, error, created_at, updated_at"
+)
+
+
+@dataclass(frozen=True)
+class VersionRecord:
+    dataset_id: UUID
+    version: int
+    status: str
+    files: list[dict[str, Any]]
+    upload_dir: str
+    build_dir: str | None
+    spec: dict[str, Any] | None
+    summary: dict[str, Any] | None
+    documents: list[dict[str, str]] | None
+    tables: Any
+    changes: Any
+    choices: dict[str, Any] | None
+    spec_edits: dict[str, Any] | None
+    repairs: Any
+    error: str | None
+    created_at: Any
+    updated_at: Any
+
+
+def ensure_first_version(conn: psycopg.Connection, dataset_id: UUID) -> None:
+    """Give a ready dataset its version 1 and make it current, if it has none yet.
+
+    Called when a dataset becomes ready by the normal upload path, so every ready dataset has a
+    current version. Must run in the caller's transaction. Folders keep the dataset id."""
+    conn.execute(
+        "INSERT INTO dataset_versions "
+        "(dataset_id, version, status, files, upload_dir, build_dir, spec, summary, documents) "
+        "SELECT id, 1, 'applied', files, id::text, id::text, spec, summary, documents "
+        "FROM datasets WHERE id = %s ON CONFLICT DO NOTHING",
+        (dataset_id,),
+    )
+    conn.execute(
+        "UPDATE datasets SET current_version = coalesce(current_version, 1) WHERE id = %s",
+        (dataset_id,),
+    )
+
+
+class DatasetVersionStore:
+    def __init__(self, conn: psycopg.Connection) -> None:
+        self._conn = conn
+
+    def _fetch(self, where: str, params: tuple[Any, ...]) -> list[VersionRecord]:
+        with self._conn.cursor(row_factory=class_row(VersionRecord)) as cursor:
+            return cursor.execute(  # type: ignore[call-overload]
+                # Columns are a constant and `where` is built in this module, never from a caller.
+                f"SELECT {_COLUMNS} FROM dataset_versions v WHERE {where} ORDER BY version",  # noqa: S608
+                params,
+            ).fetchall()
+
+    def open_version(
+        self,
+        workspace_id: UUID,
+        dataset_id: UUID,
+        files: list[dict[str, Any]],
+        upload_dir: str,
+        max_versions: int,
+    ) -> int:
+        """Insert the next version as `uploaded` and enqueue its check, in one transaction.
+        Raises DatasetStateError if the dataset is not ready, a version is open, or the limit
+        is reached."""
+        try:
+            with self._conn.transaction():
+                row = self._conn.execute(
+                    "SELECT status FROM datasets WHERE id = %s AND workspace_id = %s FOR UPDATE",
+                    (dataset_id, workspace_id),
+                ).fetchone()
+                if row is None:
+                    raise DatasetNotFoundError("dataset not found")
+                if row[0] != "ready":
+                    raise DatasetStateError(
+                        f"the dataset is {row[0]}; only a ready one takes files"
+                    )
+                last = self._conn.execute(
+                    "SELECT coalesce(max(version), 0) FROM dataset_versions WHERE dataset_id = %s",
+                    (dataset_id,),
+                ).fetchone()
+                version = (last[0] if last else 0) + 1
+                if version > max_versions:
+                    raise DatasetStateError(
+                        f"the dataset already has {max_versions} versions; the limit is reached"
+                    )
+                self._conn.execute(
+                    "INSERT INTO dataset_versions (dataset_id, version, files, upload_dir) "
+                    "VALUES (%s, %s, %s, %s)",
+                    (dataset_id, version, Jsonb(files), upload_dir),
+                )
+                JobQueue(self._conn).enqueue(
+                    workspace_id,
+                    "version",
+                    {"dataset_id": str(dataset_id), "version": version, "step": "check"},
+                )
+        except errors.UniqueViolation as error:
+            raise DatasetStateError("a version is already open") from error
+        return version
+
+    def get(self, workspace_id: UUID, dataset_id: UUID, version: int) -> VersionRecord | None:
+        found = self._fetch(
+            "v.dataset_id = %s AND v.version = %s AND EXISTS "
+            "(SELECT 1 FROM datasets d WHERE d.id = v.dataset_id AND d.workspace_id = %s)",
+            (dataset_id, version, workspace_id),
+        )
+        return found[0] if found else None
+
+    def list(self, workspace_id: UUID, dataset_id: UUID) -> list[VersionRecord]:
+        return self._fetch(
+            "v.dataset_id = %s AND EXISTS "
+            "(SELECT 1 FROM datasets d WHERE d.id = v.dataset_id AND d.workspace_id = %s)",
+            (dataset_id, workspace_id),
+        )
+
+    def current(self, dataset_id: UUID) -> VersionRecord:
+        found = self._fetch(
+            "v.dataset_id = %s AND v.version = "
+            "(SELECT current_version FROM datasets WHERE id = %s)",
+            (dataset_id, dataset_id),
+        )
+        if not found:
+            raise DatasetStateError("the dataset has no current version")
+        return found[0]
+
+    def mark(self, dataset_id: UUID, version: int, status: str, **fields: Any) -> None:
+        """Set a version's status and any of the known columns. Unknown names raise ValueError."""
+        if status not in STATUSES:
+            raise ValueError(f"unknown status: {status}")
+        unknown = set(fields) - _JSON_FIELDS - _TEXT_FIELDS
+        if unknown:
+            raise ValueError(f"unknown version fields: {sorted(unknown)}")
+        sets = ["status = %s", "updated_at = now()"]
+        params: list[Any] = [status]
+        for name, value in fields.items():  # names are checked against the whitelist above
+            sets.append(f"{name} = %s")
+            params.append(Jsonb(value) if name in _JSON_FIELDS and value is not None else value)
+        query = (
+            f"UPDATE dataset_versions SET {', '.join(sets)} WHERE dataset_id = %s AND version = %s"  # noqa: S608
+        )
+        self._conn.execute(query, (*params, dataset_id, version))  # type: ignore[arg-type]
+
+    def apply(self, dataset_id: UUID, version: int, build_dir: str) -> None:
+        """Make a version the dataset's current one, in one transaction. Idempotent."""
+        with self._conn.transaction():
+            row = self._conn.execute(
+                "SELECT status FROM dataset_versions WHERE dataset_id = %s AND version = %s "
+                "FOR UPDATE",
+                (dataset_id, version),
+            ).fetchone()
+            if row is None:
+                raise DatasetStateError("version not found")
+            if row[0] == "applied":
+                return
+            self._conn.execute(
+                "UPDATE datasets d SET spec = v.spec, summary = coalesce(v.summary, '{}'), "
+                "documents = coalesce(v.documents, '[]'), files = v.files, "
+                "current_version = v.version, updated_at = now() "
+                "FROM dataset_versions v WHERE d.id = v.dataset_id AND v.dataset_id = %s "
+                "AND v.version = %s",
+                (dataset_id, version),
+            )
+            self._conn.execute(
+                "UPDATE dataset_versions SET status = 'applied', build_dir = %s, error = NULL, "
+                "updated_at = now() WHERE dataset_id = %s AND version = %s",
+                (build_dir, dataset_id, version),
+            )
+
+    def approve(
+        self,
+        workspace_id: UUID,
+        dataset_id: UUID,
+        version: int,
+        choices: dict[str, Any],
+        spec_edits: dict[str, Any] | None,
+        accepted_repairs: list[dict[str, Any]],
+    ) -> str:
+        """Store the user's decisions and enqueue the build. Returns 'building'.
+
+        `choices` is stored as given, in `choices`; `spec_edits` goes in its own column and
+        `accepted_repairs` in `repairs`. Contents are validated by the API, not here. Allowed only
+        from needs_choice or proposed."""
+        with self._conn.transaction():
+            row = self._conn.execute(
+                "SELECT v.status FROM dataset_versions v JOIN datasets d ON d.id = v.dataset_id "
+                "WHERE v.dataset_id = %s AND v.version = %s AND d.workspace_id = %s "
+                "FOR UPDATE OF v",
+                (dataset_id, version, workspace_id),
+            ).fetchone()
+            if row is None:
+                raise DatasetNotFoundError("version not found")
+            if row[0] not in ("needs_choice", "proposed"):
+                raise DatasetStateError(
+                    f"the version is {row[0]}; only one that needs a decision can be approved"
+                )
+            self._conn.execute(
+                "UPDATE dataset_versions SET status = 'building', choices = %s, spec_edits = %s, "
+                "repairs = %s, updated_at = now() WHERE dataset_id = %s AND version = %s",
+                (
+                    Jsonb(choices),
+                    Jsonb(spec_edits) if spec_edits is not None else None,
+                    Jsonb(accepted_repairs),
+                    dataset_id,
+                    version,
+                ),
+            )
+            JobQueue(self._conn).enqueue(
+                workspace_id,
+                "version",
+                {"dataset_id": str(dataset_id), "version": version, "step": "build"},
+            )
+        return "building"
+
+    def discard(self, workspace_id: UUID, dataset_id: UUID, version: int) -> None:
+        """Drop an open version that waits for the user. Raises DatasetStateError otherwise."""
+        with self._conn.transaction():
+            row = self._conn.execute(
+                "SELECT v.status FROM dataset_versions v JOIN datasets d ON d.id = v.dataset_id "
+                "WHERE v.dataset_id = %s AND v.version = %s AND d.workspace_id = %s "
+                "FOR UPDATE OF v",
+                (dataset_id, version, workspace_id),
+            ).fetchone()
+            if row is None:
+                raise DatasetNotFoundError("version not found")
+            if row[0] not in ("uploaded", "needs_choice", "proposed"):
+                raise DatasetStateError(f"the version is {row[0]}; it cannot be discarded")
+            self._conn.execute(
+                "UPDATE dataset_versions SET status = 'discarded', updated_at = now() "
+                "WHERE dataset_id = %s AND version = %s",
+                (dataset_id, version),
+            )

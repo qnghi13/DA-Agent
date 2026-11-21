@@ -60,6 +60,13 @@ def normalized_spec(spec: dict[str, Any]) -> dict[str, Any]:
         raise InvalidSpecError(f"the edited spec is invalid: {problems}") from error
 
 
+def _ensure_first_version(conn: psycopg.Connection, dataset_id: UUID) -> None:
+    # Imported here: dataset_versions imports the errors above from this module.
+    from da_agent.storage.dataset_versions import ensure_first_version
+
+    ensure_first_version(conn, dataset_id)
+
+
 class DatasetStore:
     def __init__(self, conn: psycopg.Connection) -> None:
         self._conn = conn
@@ -114,11 +121,13 @@ class DatasetStore:
         )
 
     def mark_ready(self, dataset_id: UUID, summary: dict[str, Any]) -> None:
-        self._conn.execute(
-            "UPDATE datasets SET status = 'ready', summary = %s, error = NULL, updated_at = now() "
-            "WHERE id = %s",
-            (Jsonb(summary), dataset_id),
-        )
+        with self._conn.transaction():
+            self._conn.execute(
+                "UPDATE datasets SET status = 'ready', summary = %s, error = NULL, "
+                "updated_at = now() WHERE id = %s",
+                (Jsonb(summary), dataset_id),
+            )
+            _ensure_first_version(self._conn, dataset_id)
 
     def mark_failed(self, dataset_id: UUID, error: str) -> None:
         self._conn.execute(
@@ -147,6 +156,7 @@ class DatasetStore:
                     "UPDATE datasets SET status = 'ready', updated_at = now() WHERE id = %s",
                     (dataset_id,),
                 )
+                _ensure_first_version(self._conn, dataset_id)
                 return "ready"
             self._conn.execute(
                 "UPDATE datasets SET status = 'building', spec = %s, updated_at = now() "

@@ -21,7 +21,7 @@ from psycopg.types.json import Jsonb
 
 from da_agent.storage.db import returned_id
 
-JobKind = Literal["ingest", "build", "run", "export", "query"]
+JobKind = Literal["ingest", "build", "run", "export", "query", "version"]
 CancelOutcome = Literal["cancelled", "cancelling", "finished"]
 
 
