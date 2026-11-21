@@ -12,7 +12,9 @@ from uuid import UUID
 from da_agent.runner.client import UNAVAILABLE
 from da_agent.runner.runner import SandboxRunner, SqlResult, SqlRun
 from da_agent.security.sql_guard import SqlRejectedError, validate_select
+from da_agent.storage.dataset_versions import payload_version
 from da_agent.storage.db import connect
+from da_agent.storage.exports import applied_build_dir
 from da_agent.storage.jobs import Job, JobQueue
 from da_agent.worker.worker import PermanentJobError, RetryableJobError
 
@@ -45,7 +47,8 @@ class QueryHandler:
         self.schema = schema
         self.runner = runner
 
-    def _dataset(self, job: Job) -> UUID:
+    def _dataset(self, job: Job) -> str:
+        """The folder of the data version the run read, so an old answer gives its old numbers."""
         run_id, dataset_id = _id(job.payload.get("run_id")), _id(job.payload.get("dataset_id"))
         with connect(self.url, schema=self.schema) as conn:
             run = JobQueue(conn).get(run_id, job.workspace_id)
@@ -57,18 +60,23 @@ class QueryHandler:
                 "SELECT status FROM datasets WHERE id = %s AND workspace_id = %s",
                 (dataset_id, job.workspace_id),
             ).fetchone()
-        if row is None:
+            if row is None:
+                raise PermanentJobError("not found")
+            if row[0] != "ready":
+                raise PermanentJobError("the dataset is not ready")
+            build_dir = applied_build_dir(
+                conn, job.workspace_id, dataset_id, payload_version(run.payload)
+            )
+        if build_dir is None:
             raise PermanentJobError("not found")
-        if row[0] != "ready":
-            raise PermanentJobError("the dataset is not ready")
-        return dataset_id
+        return build_dir
 
     def __call__(self, job: Job, lost: threading.Event) -> dict[str, Any]:
         sql = check_sql(job.payload.get("sql"))
-        dataset_id = self._dataset(job)
+        build_dir = self._dataset(job)
         result: SqlResult = self.runner.query(
             SqlRun(
-                dataset_id=str(dataset_id), sql=sql, max_rows=QUERY_ROWS,
+                dataset_id=build_dir, sql=sql, max_rows=QUERY_ROWS,
                 timeout_seconds=QUERY_TIMEOUT_SECONDS,
             )
         )  # fmt: skip

@@ -162,9 +162,12 @@ def _finished_run(
     conversation: UUID | None,
     question: str,
     answer: dict | None,
+    version: int | None = None,
 ) -> UUID:
     queue = JobQueue(conn)
     payload = {"dataset_id": str(dataset), "question": question, "as_of": "2025-11-01"}
+    if version is not None:
+        payload["dataset_version"] = version
     if conversation is not None:
         payload["conversation_id"] = str(conversation)
     job_id = queue.enqueue(workspace, "run", payload)
@@ -202,13 +205,44 @@ def test_recent_turns_come_from_finished_runs_of_the_conversation_in_order(
     _finished_run(conn, workspace, dataset, chat, "Top product?", {"kind": "text", "value": "Tea"})
     current = _finished_run(conn, workspace, dataset, chat, "And September?", None)
 
-    turns = conversations.recent_turns(workspace, chat, before=current, limit=5)
+    turns = conversations.recent_turns(workspace, chat, before=current, current_version=1, limit=5)
     assert [t.question for t in turns] == ["Revenue in October?", "Top product?"]
     assert turns[0].answer == "152"
     assert turns[0].sql == "SELECT sum(total) FROM orders WHERE month = 10"
-    assert conversations.recent_turns(workspace, chat, before=current, limit=1)[0].question == (
-        "Top product?"
-    )
+    latest = conversations.recent_turns(workspace, chat, before=current, current_version=1, limit=1)
+    assert latest[0].question == "Top product?"
+
+
+def test_recent_turns_label_older_versions(
+    conn: psycopg.Connection, workspace: UUID, dataset: UUID
+) -> None:
+    conversations = ConversationStore(conn)
+    chat = conversations.create(workspace, dataset)
+    answer = {"kind": "number", "value": 152}
+    _finished_run(conn, workspace, dataset, chat, "before any version field", answer)
+    _finished_run(conn, workspace, dataset, chat, "on one", answer, version=1)
+    _finished_run(conn, workspace, dataset, chat, "on two", answer, version=2)
+    current = _finished_run(conn, workspace, dataset, chat, "now", None, version=2)
+
+    turns = conversations.recent_turns(workspace, chat, before=current, current_version=2)
+
+    label = "(answered on data version 1; the data has changed since; do not reuse its numbers)"
+    assert [t.dataset_version for t in turns] == [1, 1, 2]
+    assert [label in t.answer for t in turns] == [True, True, False]
+    assert turns[0].answer.startswith("152")
+
+
+def test_a_resumed_run_labels_by_its_own_version_not_the_live_one(
+    conn: psycopg.Connection, workspace: UUID, dataset: UUID
+) -> None:
+    conversations = ConversationStore(conn)
+    chat = conversations.create(workspace, dataset)
+    _finished_run(conn, workspace, dataset, chat, "on one", {"kind": "number", "value": 1})
+    current = _finished_run(conn, workspace, dataset, chat, "now", None)
+
+    [turn] = conversations.recent_turns(workspace, chat, before=current, current_version=1)
+
+    assert "data version" not in turn.answer
 
 
 def test_turns_are_bounded(conn: psycopg.Connection, workspace: UUID, dataset: UUID) -> None:
@@ -216,7 +250,7 @@ def test_turns_are_bounded(conn: psycopg.Connection, workspace: UUID, dataset: U
     chat = conversations.create(workspace, dataset)
     _finished_run(conn, workspace, dataset, chat, "q" * 5000, {"kind": "text", "value": "a" * 5000})
     current = _finished_run(conn, workspace, dataset, chat, "next", None)
-    [turn] = conversations.recent_turns(workspace, chat, before=current)
+    [turn] = conversations.recent_turns(workspace, chat, before=current, current_version=1)
     assert len(turn.question) <= MAX_TURN_TEXT
     assert len(turn.answer) <= MAX_TURN_TEXT
 
@@ -231,7 +265,7 @@ def test_conversations_never_cross_workspaces(
     other = create_workspace(conn, "other")
     assert conversations.get(other, chat) is None
     with pytest.raises(MemoryNotFoundError):
-        conversations.recent_turns(other, chat, before=current)
+        conversations.recent_turns(other, chat, before=current, current_version=1)
     with pytest.raises(MemoryNotFoundError):
         conversations.create(other, dataset)
 

@@ -27,6 +27,7 @@ from da_agent.ingestion.pipeline import (
 from da_agent.ingestion.spec import DatasetSpec
 from da_agent.llm.client import LLMClient
 from da_agent.runner.runner import SandboxRunner
+from da_agent.storage.dataset_versions import DatasetVersionStore
 from da_agent.storage.datasets import DatasetRecord, DatasetStore
 from da_agent.storage.db import connect
 from da_agent.storage.jobs import Job
@@ -202,20 +203,26 @@ class DatasetOpener:
         self.datasets_root = datasets_root
 
     def __call__(
-        self, workspace_id: UUID, dataset_id: str
+        self, workspace_id: UUID, dataset_id: str, version: int
     ) -> tuple[SandboxDataset, list[Document]]:
+        """The dataset as of `version`, which must be an applied version of this dataset. A run
+        keeps its version, so a newer upload never changes a run in flight."""
         try:
             key = UUID(dataset_id)
         except ValueError as error:
             raise PermanentJobError("dataset not found") from error
         with connect(self.url, schema=self.schema) as conn:
             record = DatasetStore(conn).get(key, workspace_id)
+            found = DatasetVersionStore(conn).get(workspace_id, key, version)
         if record is None:
             raise PermanentJobError("dataset not found")
         if record.status != "ready":
             raise PermanentJobError(f"the dataset is not ready to be queried ({record.status})")
-        dataset = SandboxDataset.open(self.runner, self.datasets_root, str(record.id))
-        documents = [Document(d["path"], d["text"]) for d in record.documents]
+        if found is None or found.status != "applied" or not found.build_dir:
+            raise PermanentJobError("dataset version not found")
+        dataset = SandboxDataset.open(self.runner, self.datasets_root, found.build_dir)
+        rows = record.documents if found.documents is None else found.documents
+        documents = [Document(d["path"], d["text"]) for d in rows]
         if record.description:
             documents.append(Document(DESCRIPTION_DOCUMENT, record.description))
         return dataset, documents

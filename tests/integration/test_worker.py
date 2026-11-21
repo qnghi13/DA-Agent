@@ -76,9 +76,12 @@ def run_handler(
     dataset: SqliteDataset,
     schema: str,
     agent_version: str | None = None,
+    opened: list[int] | None = None,
 ) -> RunHandler:
-    def datasets(workspace_id: UUID, dataset_id: str):
+    def datasets(workspace_id: UUID, dataset_id: str, version: int):
         assert dataset_id == "shop"
+        if opened is not None:
+            opened.append(version)
         return dataset, [Document("rules", "Revenue is the sum of totals.")]
 
     llm = LLMClient([Route(adapter, "m")], CostLedger(), sleep=lambda _: None, max_retries=0)
@@ -88,8 +91,8 @@ def run_handler(
     )
 
 
-def enqueue_run(conn: psycopg.Connection, workspace: UUID) -> UUID:
-    payload = {"question": "Total revenue?", "as_of": "2026-06-28", "dataset_id": "shop"}
+def enqueue_run(conn: psycopg.Connection, workspace: UUID, **extra: Any) -> UUID:
+    payload = {"question": "Total revenue?", "as_of": "2026-06-28", "dataset_id": "shop"} | extra
     return JobQueue(conn).enqueue(workspace, "run", payload)
 
 
@@ -114,6 +117,36 @@ def test_a_run_job_answers_and_stores_the_result(
     assert (result.stop_reason, result.answer and result.answer.value) == ("answered", 350)
     assert result.queries[0].rows == [[350]]
     assert not worker.run_once()
+
+
+def test_a_run_opens_the_version_in_its_payload(
+    schema: str, conn: psycopg.Connection, workspace: UUID, dataset: SqliteDataset
+) -> None:
+    job_id = enqueue_run(conn, workspace, dataset_version=1)
+    opened: list[int] = []
+    adapter = ScriptedAdapter([plan(), sql(), submit("number", 350)])
+    handler = run_handler(adapter, dataset, schema, opened=opened)
+    worker = Worker(config(schema, "w1"), {"run": handler})
+
+    assert worker.run_once()
+
+    assert job(conn, job_id, workspace).status == "succeeded"
+    assert opened == [1]
+
+
+def test_old_payload_without_version_opens_v1(
+    schema: str, conn: psycopg.Connection, workspace: UUID, dataset: SqliteDataset
+) -> None:
+    enqueue_run(conn, workspace)
+    opened: list[int] = []
+    adapter = ScriptedAdapter([plan(), sql(), submit("number", 350)])
+    worker = Worker(
+        config(schema, "w1"), {"run": run_handler(adapter, dataset, schema, opened=opened)}
+    )
+
+    assert worker.run_once()
+
+    assert opened == [1]
 
 
 def test_a_killed_worker_is_resumed_by_another_without_repeating_finished_turns(

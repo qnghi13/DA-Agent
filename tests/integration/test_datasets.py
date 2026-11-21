@@ -22,7 +22,7 @@ from da_agent.storage.sandbox_dataset import BUILD_REPORT
 from da_agent.storage.workspaces import create_workspace
 from da_agent.worker.datasets import BuildHandler, DatasetOpener, IngestHandler
 from da_agent.worker.worker import PermanentJobError
-from tests.integration.conftest import POSTGRES_URL
+from tests.integration.conftest import POSTGRES_URL, apply_next_version
 from tests.unit.test_prepare_pipeline import GOOD, FakeRunner, llm
 
 pytestmark = pytest.mark.integration
@@ -124,11 +124,11 @@ def test_approving_the_proposed_spec_makes_the_dataset_ready_and_openable(
     dataset_id, _ = ingest(schema, conn, workspace, tmp_path, WritingRunner(tmp_path, [report()]))
     opener = DatasetOpener(**database(schema), runner=object(), datasets_root=tmp_path / "datasets")
     with pytest.raises(PermanentJobError, match="not ready"):
-        opener(workspace, str(dataset_id))
+        opener(workspace, str(dataset_id), 1)
 
     assert DatasetStore(conn).approve(workspace, dataset_id, None) == "ready"
 
-    dataset, documents = opener(workspace, str(dataset_id))
+    dataset, documents = opener(workspace, str(dataset_id), 1)
     assert [table.name for table in dataset.describe()] == ["orders"]
     assert [d.name for d in documents] == ["README.md", "Description from the uploader"]
     assert documents[1].text == "Revenue excludes cancelled orders."
@@ -153,7 +153,7 @@ def test_an_edited_spec_is_built_by_a_build_job(
     assert record is not None and record.status == "ready"
     assert record.spec == DatasetSpec.model_validate(edited).model_dump(mode="json")
     opener = DatasetOpener(**database(schema), runner=object(), datasets_root=tmp_path / "datasets")
-    dataset, _ = opener(workspace, str(dataset_id))
+    dataset, _ = opener(workspace, str(dataset_id), 1)
     assert dataset.describe()[0].columns[0].name == "amount"
 
 
@@ -189,6 +189,83 @@ def test_another_workspace_cannot_read_approve_or_open_a_dataset(
     with pytest.raises(DatasetStateError, match="not found"):
         DatasetStore(conn).approve(other, dataset_id, None)
     with pytest.raises(PermanentJobError, match="not found"):
-        opener(other, str(dataset_id))
+        opener(other, str(dataset_id), 1)
     with pytest.raises(PermanentJobError, match="not found"):
-        opener(workspace, "../" + str(dataset_id))
+        opener(workspace, "../" + str(dataset_id), 1)
+
+
+def _two_versions(
+    schema: str, conn: psycopg.Connection, workspace: UUID, tmp_path: Path
+) -> tuple[UUID, DatasetOpener]:
+    """A ready dataset whose version 1 has a `total` column and version 2 an `amount` column."""
+    dataset_id, _ = ingest(schema, conn, workspace, tmp_path, WritingRunner(tmp_path, [report()]))
+    DatasetStore(conn).approve(workspace, dataset_id, None)
+    apply_next_version(conn, workspace, dataset_id)
+    folder = tmp_path / "datasets" / f"{dataset_id}-v2"
+    folder.mkdir()
+    (folder / BUILD_REPORT).write_text(report("amount").model_dump_json())
+    opener = DatasetOpener(**database(schema), runner=object(), datasets_root=tmp_path / "datasets")
+    return dataset_id, opener
+
+
+def test_the_opener_opens_the_folder_of_the_version_asked_for(
+    schema: str, conn: psycopg.Connection, workspace: UUID, tmp_path: Path
+) -> None:
+    dataset_id, opener = _two_versions(schema, conn, workspace, tmp_path)
+
+    first, _ = opener(workspace, str(dataset_id), 1)
+    second, _ = opener(workspace, str(dataset_id), 2)
+
+    assert first.describe()[0].columns[0].name == "total"
+    assert second.describe()[0].columns[0].name == "amount"
+
+
+def test_the_opener_refuses_a_version_that_is_not_applied_or_not_there(
+    schema: str, conn: psycopg.Connection, workspace: UUID, tmp_path: Path
+) -> None:
+    dataset_id, opener = _two_versions(schema, conn, workspace, tmp_path)
+    conn.execute("UPDATE dataset_versions SET status = 'failed' WHERE version = 2")
+
+    with pytest.raises(PermanentJobError, match="not found"):
+        opener(workspace, str(dataset_id), 2)
+    with pytest.raises(PermanentJobError, match="not found"):
+        opener(workspace, str(dataset_id), 9)
+
+
+@pytest.mark.security
+def test_the_opener_never_opens_a_version_of_another_dataset_or_workspace(
+    schema: str, conn: psycopg.Connection, workspace: UUID, tmp_path: Path
+) -> None:
+    dataset_id, opener = _two_versions(schema, conn, workspace, tmp_path)
+    other = create_workspace(conn, "other")
+
+    with pytest.raises(PermanentJobError, match="not found"):
+        opener(other, str(dataset_id), 2)
+
+
+def test_run_in_flight_keeps_its_version(
+    schema: str, conn: psycopg.Connection, workspace: UUID, tmp_path: Path
+) -> None:
+    from da_agent.worker.runs import RunHandler
+
+    dataset_id, _ = ingest(schema, conn, workspace, tmp_path, WritingRunner(tmp_path, [report()]))
+    DatasetStore(conn).approve(workspace, dataset_id, None)
+    payload = {"dataset_id": str(dataset_id), "question": "q", "as_of": "2026-06-28",
+               "dataset_version": 1}  # fmt: skip
+    job_id = JobQueue(conn).enqueue(workspace, "run", payload)
+    job = JobQueue(conn).get(job_id, workspace)
+    assert job is not None
+    # Version 2 is applied after the run was created and before it executes.
+    apply_next_version(conn, workspace, dataset_id)
+    folder = tmp_path / "datasets" / f"{dataset_id}-v2"
+    folder.mkdir()
+    (folder / BUILD_REPORT).write_text(report("amount").model_dump_json())
+    opener = DatasetOpener(**database(schema), runner=object(), datasets_root=tmp_path / "datasets")
+    handler = RunHandler(
+        llm=object(), datasets=opener,  # type: ignore[arg-type]
+        checkpoint_url=POSTGRES_URL or "", schema=schema,
+    )  # fmt: skip
+
+    _, dataset, _ = handler._prepare(job)
+
+    assert dataset.describe()[0].columns[0].name == "total"

@@ -15,10 +15,12 @@ from psycopg.types.json import Jsonb
 
 from da_agent.runner.client import UNAVAILABLE
 from da_agent.runner.runner import SqlResult, SqlRun
+from da_agent.storage.dataset_versions import ensure_first_version
 from da_agent.storage.datasets import DatasetStore
 from da_agent.storage.jobs import Job, JobQueue
 from da_agent.worker.queries import QueryHandler
 from da_agent.worker.worker import PermanentJobError, RetryableJobError
+from tests.integration.conftest import apply_next_version
 
 pytestmark = pytest.mark.integration
 URL = os.environ.get("DA_AGENT_TEST_POSTGRES_URL", "")
@@ -39,6 +41,7 @@ class FakeRunner:
 def setup(conn: psycopg.Connection, workspace: UUID, schema: str) -> dict[str, Any]:
     dataset = DatasetStore(conn).create(workspace, "shop", "")
     conn.execute("UPDATE datasets SET status = 'ready' WHERE id = %s", (dataset,))
+    ensure_first_version(conn, dataset)
     queue = JobQueue(conn)
     run = queue.enqueue(workspace, "run", {"dataset_id": str(dataset), "question": "q"})
     conn.execute(
@@ -157,3 +160,51 @@ def test_an_unknown_run_is_not_found(
 
     with pytest.raises(PermanentJobError, match="not found"):
         setup["handler"](job, threading.Event())
+
+
+def _run_on(conn: psycopg.Connection, workspace: UUID, dataset: UUID, **payload: Any) -> UUID:
+    run = JobQueue(conn).enqueue(
+        workspace, "run", {"dataset_id": str(dataset), "question": "q"} | payload
+    )
+    conn.execute(
+        "UPDATE jobs SET status = 'succeeded', result = %s WHERE id = %s",
+        (Jsonb({"queries": QUERIES}), run),
+    )
+    return run
+
+
+def test_query_job_uses_run_version(
+    conn: psycopg.Connection, workspace: UUID, setup: dict[str, Any]
+) -> None:
+    dataset = setup["dataset"]
+    apply_next_version(conn, workspace, dataset)
+    old = _run_on(conn, workspace, dataset, dataset_version=1)
+    new = _run_on(conn, workspace, dataset, dataset_version=2)
+
+    for run, directory in ((old, str(dataset)), (new, f"{dataset}-v2")):
+        setup["runner"].requests.clear()
+        job = _query_job(conn, workspace, setup, "SELECT id FROM sales", run_id=str(run))
+        setup["handler"](job, threading.Event())
+        assert [r.dataset_id for r in setup["runner"].requests] == [directory]
+
+
+def test_a_run_without_a_version_queries_version_one(
+    conn: psycopg.Connection, workspace: UUID, setup: dict[str, Any]
+) -> None:
+    apply_next_version(conn, workspace, setup["dataset"])
+
+    # The fixture's run has no dataset_version in its payload.
+    setup["handler"](_query_job(conn, workspace, setup, "SELECT id FROM sales"), threading.Event())
+
+    assert [r.dataset_id for r in setup["runner"].requests] == [str(setup["dataset"])]
+
+
+def test_a_run_on_a_version_that_is_not_applied_is_refused(
+    conn: psycopg.Connection, workspace: UUID, setup: dict[str, Any]
+) -> None:
+    run = _run_on(conn, workspace, setup["dataset"], dataset_version=7)
+    job = _query_job(conn, workspace, setup, "SELECT id FROM sales", run_id=str(run))
+
+    with pytest.raises(PermanentJobError, match="not found"):
+        setup["handler"](job, threading.Event())
+    assert setup["runner"].requests == []

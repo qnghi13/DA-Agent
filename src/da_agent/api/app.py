@@ -55,6 +55,7 @@ from da_agent.reports.metric import (
 from da_agent.runner.runner import MAX_SQL_CHARS
 from da_agent.security.sql_guard import SqlRejectedError, validate_select
 from da_agent.storage import audit, feedback, ops
+from da_agent.storage.dataset_versions import DatasetVersionStore, payload_version
 from da_agent.storage.datasets import (
     DatasetNotFoundError,
     DatasetRecord,
@@ -256,6 +257,7 @@ def _run_view(job: Job, trace_ui_url: str | None = None) -> dict[str, Any]:
     return {
         "id": str(job.id),
         "dataset_id": job.payload.get("dataset_id"),
+        "dataset_version": payload_version(job.payload),
         "question": job.payload.get("question"),
         "as_of": job.payload.get("as_of"),
         "conversation_id": job.payload.get("conversation_id"),
@@ -659,6 +661,8 @@ def create_run(body: RunRequest, conn: Db, caller: Caller, settings: Settings) -
         "question": body.question,
         "as_of": as_of,
         "charts": True,
+        # The data version the run reads, fixed now so a newer upload never changes its answer.
+        "dataset_version": DatasetVersionStore(conn).current(record.id).version,
     }
     if conversation is not None:
         payload["conversation_id"] = conversation

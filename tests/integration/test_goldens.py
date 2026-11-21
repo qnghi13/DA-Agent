@@ -43,7 +43,7 @@ def liked_run(conn: psycopg.Connection, workspace: UUID, dataset_id: UUID, value
 
 
 def handler(adapter: ScriptedAdapter, data: SqliteDataset, schema: str) -> RunHandler:
-    def datasets(workspace_id: UUID, dataset_id: str):
+    def datasets(workspace_id: UUID, dataset_id: str, version: int):
         if UUID(dataset_id) == GONE:
             raise PermanentJobError("the dataset was deleted")
         return data, [Document("rules", "Revenue is the sum of totals.")]

@@ -15,6 +15,7 @@ from uuid import UUID
 from da_agent.agent.loop_types import Document
 from da_agent.agent.memory import EarlierTurn, MemoryNote, memory_documents
 from da_agent.reports.metric import Definition, is_stale
+from da_agent.storage.dataset_versions import payload_version
 from da_agent.storage.db import connect
 from da_agent.storage.jobs import Job
 from da_agent.storage.memory import (
@@ -61,7 +62,10 @@ class MemoryLoader:
             if conversation:
                 try:
                     turns = ConversationStore(conn).recent_turns(
-                        job.workspace_id, UUID(conversation), before=job.id
+                        job.workspace_id,
+                        UUID(conversation),
+                        before=job.id,
+                        current_version=payload_version(payload),
                     )
                 except MemoryNotFoundError:
                     turns = []  # deleted with its dataset, or never in this workspace

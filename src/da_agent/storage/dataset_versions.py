@@ -69,6 +69,13 @@ class VersionRecord:
     updated_at: Any
 
 
+def payload_version(payload: dict[str, Any]) -> int:
+    """The data version a run, query, or export job reads. Payloads from before versions existed
+    have none and mean version 1."""
+    value = payload.get("dataset_version", 1)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 1 else 1
+
+
 def ensure_first_version(conn: psycopg.Connection, dataset_id: UUID) -> None:
     """Give a ready dataset its version 1 and make it current, if it has none yet.
 

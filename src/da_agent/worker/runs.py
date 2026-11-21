@@ -25,6 +25,7 @@ from da_agent.agent.loop_types import AgentLimits, Document
 from da_agent.agent.stop import CANCELLED, LEASE_LOST, StopToken
 from da_agent.agent.tools import Dataset
 from da_agent.llm.client import LLMClient
+from da_agent.storage.dataset_versions import payload_version
 from da_agent.storage.db import connect, search_path_option
 from da_agent.storage.events import RunEvents
 from da_agent.storage.jobs import Job, JobQueue
@@ -81,7 +82,9 @@ class RunHandler:
         limits = self.limits
         if self.budgets is not None:
             limits = replace(limits, budget=self.budgets.for_job(job, run_id))
-        dataset, documents = self.datasets(job.workspace_id, job.payload["dataset_id"])
+        dataset, documents = self.datasets(
+            job.workspace_id, job.payload["dataset_id"], payload_version(job.payload)
+        )
         if self.memory is not None:
             visible = {t.name: {c.name for c in t.columns} for t in dataset.describe()}
             documents = [*documents, *self.memory(job, visible)]

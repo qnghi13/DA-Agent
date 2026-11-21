@@ -24,7 +24,7 @@ from da_agent.storage.events import RunEvents
 from da_agent.storage.jobs import JobQueue
 from da_agent.storage.keys import create_key, revoke_key
 from da_agent.storage.workspaces import create_workspace
-from tests.integration.conftest import POSTGRES_URL
+from tests.integration.conftest import POSTGRES_URL, apply_next_version
 
 pytestmark = pytest.mark.integration
 
@@ -242,8 +242,26 @@ def test_a_question_about_a_ready_dataset_queues_a_run(
         "question": "Total revenue?",
         "as_of": "2026-06-28",
         "charts": True,
+        "dataset_version": 1,
     }
     assert "run.create" in audit_actions(conn)
+
+
+def test_new_run_uses_current_version(
+    client: TestClient, conn: psycopg.Connection, key: str, workspace: UUID
+) -> None:
+    dataset_id = ready_dataset(client, conn, key)
+    first = client.post(
+        "/v1/runs", headers=auth(key), json={"dataset_id": dataset_id, "question": "Total?"}
+    ).json()["id"]
+    apply_next_version(conn, workspace, UUID(dataset_id))
+
+    second = client.post(
+        "/v1/runs", headers=auth(key), json={"dataset_id": dataset_id, "question": "Total?"}
+    ).json()["id"]
+
+    assert client.get(f"/v1/runs/{first}", headers=auth(key)).json()["dataset_version"] == 1
+    assert client.get(f"/v1/runs/{second}", headers=auth(key)).json()["dataset_version"] == 2
 
 
 def test_a_question_needs_a_ready_dataset(

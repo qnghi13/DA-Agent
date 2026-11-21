@@ -20,10 +20,12 @@ from da_agent.storage.csv_export import EXPORT_TIMEOUT_SECONDS
 from da_agent.storage.db import connect
 from da_agent.storage.exports import (
     CHANGED_DATASET,
+    applied_build_dir,
     dataset_changed_since_run,
     edited_export_filename,
     export_file,
     export_filename,
+    job_dataset_version,
     purge_expired,
 )
 from da_agent.storage.jobs import Job, JobQueue
@@ -44,16 +46,24 @@ def _id(value: Any) -> UUID:
 
 class ExportHandler:
     def __init__(
-        self, *, url: str, schema: str | None = None, runner: SandboxRunner, exports_root: Path
+        self,
+        *,
+        url: str,
+        schema: str | None = None,
+        runner: SandboxRunner,
+        exports_root: Path,
+        datasets_root: Path,
     ) -> None:
         self.url = url
         self.schema = schema
         self.runner = runner
         self.exports_root = exports_root
+        self.datasets_root = datasets_root
 
-    def _stored_sql(self, job: Job) -> tuple[UUID, str, str]:
-        """The dataset, the stored SQL, and the file name. The job names a run's query by index
-        or an edited query job by id; the SQL is always read from the stored result."""
+    def _stored_sql(self, job: Job) -> tuple[str, str, str]:
+        """The folder of the data version the answer read, the stored SQL, and the file name.
+        The job names a run's query by index or an edited query job by id; the SQL is always
+        read from the stored result."""
         dataset_id = _id(job.payload.get("dataset_id"))
         with connect(self.url, schema=self.schema) as conn:
             queue = JobQueue(conn)
@@ -77,18 +87,26 @@ class ExportHandler:
                 raise PermanentJobError("not found")
             if source.payload.get("dataset_id") != str(dataset_id):
                 raise PermanentJobError("not found")
-            if dataset_changed_since_run(conn, job.workspace_id, source.id, dataset_id):
+            if dataset_changed_since_run(
+                conn, job.workspace_id, source.id, dataset_id, datasets_root=self.datasets_root
+            ):
                 raise PermanentJobError(CHANGED_DATASET)
-        return dataset_id, str(sql), filename
+            version = job_dataset_version(conn, job.workspace_id, source.id)
+            build_dir = (
+                applied_build_dir(conn, job.workspace_id, dataset_id, version) if version else None
+            )
+        if build_dir is None:
+            raise PermanentJobError(CHANGED_DATASET)
+        return build_dir, str(sql), filename
 
     def __call__(self, job: Job, lost: threading.Event) -> dict[str, Any]:
-        dataset_id, sql, filename = self._stored_sql(job)
+        build_dir, sql, filename = self._stored_sql(job)
         try:
             checked = validate_select(sql, dialect="duckdb")
         except SqlRejectedError as error:
             raise PermanentJobError("this query cannot be exported") from error
         purge_expired(self.exports_root, now=time.time())
-        result = self.runner.export(ExportRun(dataset_id=str(dataset_id), sql=checked))
+        result = self.runner.export(ExportRun(dataset_id=build_dir, sql=checked))
         try:
             if result.status == "error" and result.stderr == UNAVAILABLE:
                 raise RetryableJobError(UNAVAILABLE)

@@ -111,7 +111,12 @@ def build_worker(
         "version": VersionHandler(
             **database, **roots, llm=llm, uploads_root=settings.uploads_root, budgets=budgets
         ),
-        "export": ExportHandler(**database, runner=runner, exports_root=settings.exports_root),
+        "export": ExportHandler(
+            **database,
+            runner=runner,
+            exports_root=settings.exports_root,
+            datasets_root=settings.datasets_root,
+        ),
         "query": QueryHandler(**database, runner=runner),
     }
     worker_config = WorkerConfig(

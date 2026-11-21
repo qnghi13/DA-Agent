@@ -17,11 +17,13 @@ from psycopg.types.json import Jsonb
 from da_agent.runner.client import UNAVAILABLE
 from da_agent.runner.runner import ExportResult, ExportRun
 from da_agent.storage.csv_export import ExportReport
+from da_agent.storage.dataset_versions import ensure_first_version
 from da_agent.storage.datasets import DatasetStore
 from da_agent.storage.exports import CHANGED_DATASET, export_file
 from da_agent.storage.jobs import Job, JobQueue
 from da_agent.worker.exports import ExportHandler
 from da_agent.worker.worker import PermanentJobError, RetryableJobError
+from tests.integration.conftest import apply_next_version
 
 pytestmark = pytest.mark.integration
 URL = os.environ.get("DA_AGENT_TEST_POSTGRES_URL", "")
@@ -66,6 +68,9 @@ def setup(conn: psycopg.Connection, workspace: UUID, schema: str, tmp_path: Path
         "WHERE id = %s",
         (dataset,),
     )
+    ensure_first_version(conn, dataset)
+    datasets = tmp_path / "datasets"
+    (datasets / str(dataset)).mkdir(parents=True)
     queue = JobQueue(conn)
     run = queue.enqueue(workspace, "run", {"dataset_id": str(dataset), "question": "q"})
     conn.execute(
@@ -74,9 +79,11 @@ def setup(conn: psycopg.Connection, workspace: UUID, schema: str, tmp_path: Path
     )
     runner = FakeRunner(tmp_path / "staging")
     exports = tmp_path / "exports"
-    handler = ExportHandler(url=URL, schema=schema, runner=runner, exports_root=exports)
+    handler = ExportHandler(
+        url=URL, schema=schema, runner=runner, exports_root=exports, datasets_root=datasets
+    )
     return {"dataset": dataset, "run": run, "runner": runner, "exports": exports,
-            "handler": handler}  # fmt: skip
+            "handler": handler, "datasets": datasets}  # fmt: skip
 
 
 def _export_job(
@@ -275,3 +282,57 @@ def test_an_edited_query_of_another_dataset_is_not_found(
 
     with pytest.raises(PermanentJobError, match="not found"):
         setup["handler"](job, threading.Event())
+
+
+def _run_on(conn: psycopg.Connection, workspace: UUID, setup: dict[str, Any], **payload: Any):
+    body = {"dataset_id": str(setup["dataset"]), "question": "q"} | payload
+    run = JobQueue(conn).enqueue(workspace, "run", body)
+    conn.execute(
+        "UPDATE jobs SET status = 'succeeded', result = %s WHERE id = %s",
+        (Jsonb({"queries": QUERIES}), run),
+    )
+    return run
+
+
+def test_export_of_old_run_reads_old_version(
+    conn: psycopg.Connection, workspace: UUID, setup: dict[str, Any]
+) -> None:
+    dataset = setup["dataset"]
+    apply_next_version(conn, workspace, dataset)
+    (setup["datasets"] / f"{dataset}-v2").mkdir()
+    old = _run_on(conn, workspace, setup, dataset_version=1)
+    new = _run_on(conn, workspace, setup, dataset_version=2)
+
+    for run, directory in ((old, str(dataset)), (new, f"{dataset}-v2")):
+        setup["runner"].requests.clear()
+        payload = {"run_id": str(run), "query_index": 1, "dataset_id": str(dataset)}
+        job_id = JobQueue(conn).enqueue(workspace, "export", payload)
+        job = JobQueue(conn).get(job_id, workspace)
+        assert job is not None
+        setup["handler"](job, threading.Event())
+        assert [r.dataset_id for r in setup["runner"].requests] == [directory]
+
+
+def test_an_edited_query_exports_its_runs_version(
+    conn: psycopg.Connection, workspace: UUID, setup: dict[str, Any]
+) -> None:
+    dataset = setup["dataset"]
+    apply_next_version(conn, workspace, dataset)
+    (setup["datasets"] / f"{dataset}-v2").mkdir()
+    setup["run"] = _run_on(conn, workspace, setup, dataset_version=2)
+    query = _edited_query(conn, workspace, setup, "SELECT id FROM sales")
+
+    setup["handler"](_query_export_job(conn, workspace, setup, query), threading.Event())
+
+    assert [r.dataset_id for r in setup["runner"].requests] == [f"{dataset}-v2"]
+
+
+def test_an_export_whose_version_folder_is_gone_is_refused(
+    conn: psycopg.Connection, workspace: UUID, setup: dict[str, Any]
+) -> None:
+    (setup["datasets"] / str(setup["dataset"])).rmdir()
+    job = _export_job(conn, workspace, setup)
+
+    with pytest.raises(PermanentJobError, match=CHANGED_DATASET):
+        setup["handler"](job, threading.Event())
+    assert setup["runner"].requests == []

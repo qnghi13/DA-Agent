@@ -41,3 +41,13 @@ def conn(schema: str) -> Iterator[psycopg.Connection]:
 @pytest.fixture
 def workspace(conn: psycopg.Connection) -> UUID:
     return create_workspace(conn, "shop")
+
+
+def apply_next_version(conn: psycopg.Connection, workspace: UUID, dataset_id: UUID) -> int:
+    """Open the dataset's next version and apply it at once, as `<id>-v<n>`."""
+    from da_agent.storage.dataset_versions import DatasetVersionStore
+
+    store = DatasetVersionStore(conn)
+    version = store.open_version(workspace, dataset_id, [], f"{dataset_id}-v-up", 9)
+    assert store.apply(dataset_id, version, f"{dataset_id}-v{version}", expected=("uploaded",))
+    return version

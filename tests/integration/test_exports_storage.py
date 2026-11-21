@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 import psycopg
 import pytest
 
+from da_agent.storage.dataset_versions import ensure_first_version
 from da_agent.storage.datasets import DatasetStore
 from da_agent.storage.exports import (
     dataset_changed_since_run,
@@ -20,6 +21,7 @@ from da_agent.storage.exports import (
     purge_expired,
 )
 from da_agent.storage.jobs import JobQueue
+from tests.integration.conftest import apply_next_version
 
 pytestmark = pytest.mark.integration
 
@@ -31,6 +33,7 @@ def _ready_dataset_and_run(conn: psycopg.Connection, workspace: UUID) -> tuple[U
         "WHERE id = %s",
         (dataset,),
     )
+    ensure_first_version(conn, dataset)
     run = JobQueue(conn).enqueue(workspace, "run", {"dataset_id": str(dataset)})
     return dataset, run
 
@@ -81,6 +84,25 @@ def test_a_missing_dataset_or_run_counts_as_changed(
 
     assert dataset_changed_since_run(conn, workspace, run, uuid4()) is True
     assert dataset_changed_since_run(conn, workspace, uuid4(), dataset) is True
+
+
+def test_a_run_on_an_older_version_is_unchanged_while_its_folder_exists(
+    conn: psycopg.Connection, workspace: UUID, tmp_path: Path
+) -> None:
+    dataset, run = _ready_dataset_and_run(conn, workspace)
+    apply_next_version(conn, workspace, dataset)  # moves datasets.updated_at past the run
+    (tmp_path / str(dataset)).mkdir()
+
+    assert not dataset_changed_since_run(conn, workspace, run, dataset, datasets_root=tmp_path)
+
+
+def test_a_run_whose_version_folder_is_gone_counts_as_changed(
+    conn: psycopg.Connection, workspace: UUID, tmp_path: Path
+) -> None:
+    dataset, run = _ready_dataset_and_run(conn, workspace)
+    apply_next_version(conn, workspace, dataset)
+
+    assert dataset_changed_since_run(conn, workspace, run, dataset, datasets_root=tmp_path)
 
 
 def test_old_exports_are_purged_and_new_ones_kept(tmp_path: Path) -> None:

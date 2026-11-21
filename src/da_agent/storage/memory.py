@@ -91,6 +91,12 @@ class Turn:
     question: str
     answer: str
     sql: str | None
+    dataset_version: int = 1
+
+
+OLDER_VERSION_NOTE = (
+    "(answered on data version {n}; the data has changed since; do not reuse its numbers)"
+)
 
 
 def _clip(text: str, limit: int) -> str:
@@ -408,16 +414,18 @@ class ConversationStore:
         return {"id": row[0], "dataset_id": row[1], "created_at": row[2]}
 
     def recent_turns(
-        self, workspace_id: UUID, conversation_id: UUID, *, before: UUID,
+        self, workspace_id: UUID, conversation_id: UUID, *, before: UUID, current_version: int,
         limit: int = DEFAULT_TURNS,
     ) -> list[Turn]:  # fmt: skip
         """The last finished runs of the conversation created before the run `before`, oldest
-        first. Runs still open or failed are left out."""
+        first. Runs still open or failed are left out. `current_version` is the data version of
+        the run `before`, not the dataset's live one, so a resumed run builds the same prompt
+        (ADR 0030); a turn answered on a lower version says so after its answer."""
         if self.get(workspace_id, conversation_id) is None:
             raise MemoryNotFoundError("conversation not found")
         rows = self._conn.execute(
             """
-            SELECT payload->>'question', result FROM jobs
+            SELECT payload->>'question', result, payload->'dataset_version' FROM jobs
             WHERE conversation_id = %s AND workspace_id = %s AND kind = 'run'
               AND status = 'succeeded' AND id <> %s
               AND created_at <= (SELECT created_at FROM jobs WHERE id = %s)
@@ -426,13 +434,18 @@ class ConversationStore:
             (conversation_id, workspace_id, before, before, limit),
         ).fetchall()
         turns = []
-        for question, result in reversed(rows):
+        for question, result, stored in reversed(rows):
             sql = _last_sql(result)
+            version = stored if isinstance(stored, int) and stored >= 1 else 1
+            answer = _clip(_answer_text(result), MAX_TURN_TEXT)
+            if version < current_version:
+                answer = f"{answer}\n{OLDER_VERSION_NOTE.format(n=version)}"
             turns.append(
                 Turn(
                     question=_clip(question or "", MAX_TURN_TEXT),
-                    answer=_clip(_answer_text(result), MAX_TURN_TEXT),
+                    answer=answer,
                     sql=_clip(sql, MAX_TURN_SQL) if sql else None,
+                    dataset_version=version,
                 )
             )
         return turns
