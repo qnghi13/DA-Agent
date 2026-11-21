@@ -432,3 +432,26 @@ def test_adding_files_stops_when_the_daily_budget_is_spent(
 
     assert response.status_code == 429
     assert "budget" in response.json()["detail"]
+
+
+def test_a_version_view_carries_spec_summary_and_choices(
+    client: TestClient, conn: psycopg.Connection, key: str
+) -> None:
+    from psycopg.types.json import Jsonb
+
+    dataset_id = ready_dataset(client, conn, key)
+    add(client, key, dataset_id, [("b.csv", b"a\n1\n")])
+    waiting(conn, dataset_id)
+    conn.execute(
+        "UPDATE dataset_versions SET spec = %s, summary = %s WHERE version = 2",
+        (Jsonb({"tables": []}), Jsonb({"parse_rate": 0.99})),
+    )
+    assert approve(client, key, dataset_id).status_code == 200
+
+    listed = client.get(f"/v1/datasets/{dataset_id}/versions", headers=auth(key)).json()
+    opened = client.get(f"/v1/datasets/{dataset_id}", headers=auth(key)).json()["open_version"]
+
+    for view in (listed["versions"][1], opened):
+        assert view["spec"] == {"tables": []}
+        assert view["summary"] == {"parse_rate": 0.99}
+        assert view["choices"]["tables"] == {"orders": "keep_both"}
