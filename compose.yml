@@ -87,6 +87,7 @@ services:
     command: ["python", "-m", "da_agent.api", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       DA_AGENT_DATABASE_URL: *database-url
+      DA_AGENT_MAX_DATASET_VERSIONS: ${DA_AGENT_MAX_DATASET_VERSIONS:-20}
       DA_AGENT_DAILY_BUDGET_USD: ${DA_AGENT_DAILY_BUDGET_USD:-5.0}
       DA_AGENT_TRACE_UI_URL: ${DA_AGENT_TRACE_UI_URL:-}
       # Login links point here, and browser requests must come from this origin (ADR 0025).

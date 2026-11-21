@@ -41,6 +41,12 @@ def test_optional_settings_are_read_and_checked() -> None:
     assert Settings.from_env(REQUIRED).trace_ui_url is None
 
 
+def test_the_dataset_version_limit_defaults_to_twenty_and_can_be_set() -> None:
+    assert Settings.from_env(REQUIRED).max_dataset_versions == 20
+    env = REQUIRED | {"DA_AGENT_MAX_DATASET_VERSIONS": "5"}
+    assert Settings.from_env(env).max_dataset_versions == 5
+
+
 def test_the_public_url_defaults_to_the_local_compose_ui() -> None:
     assert Settings.from_env(REQUIRED).public_url == "http://127.0.0.1:8080"
     env = REQUIRED | {"DA_AGENT_PUBLIC_URL": "https://da.example/"}
@@ -52,6 +58,7 @@ def test_the_public_url_defaults_to_the_local_compose_ui() -> None:
     [
         ({"DA_AGENT_DATA_DIR": "/srv"}, "DA_AGENT_DATABASE_URL"),
         (REQUIRED | {"DA_AGENT_DAILY_BUDGET_USD": "lots"}, "DA_AGENT_DAILY_BUDGET_USD"),
+        (REQUIRED | {"DA_AGENT_MAX_DATASET_VERSIONS": "0"}, "DA_AGENT_MAX_DATASET_VERSIONS"),
         (REQUIRED | {"DA_AGENT_RUN_BUDGET_USD": "-1"}, "DA_AGENT_RUN_BUDGET_USD"),
         (REQUIRED | {"DA_AGENT_TRACE_UI_URL": "javascript:alert(1)"}, "DA_AGENT_TRACE_UI_URL"),
         (REQUIRED | {"DA_AGENT_PUBLIC_URL": "da.example"}, "DA_AGENT_PUBLIC_URL"),

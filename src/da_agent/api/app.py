@@ -39,10 +39,16 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 from da_agent.agent.answer import AgentResult, result_from_json
 from da_agent.agent.verify import evidence_indices
+from da_agent.api.versions import (
+    ApprovalInvalidError,
+    checked_choices,
+    checked_edits,
+    checked_repairs,
+)
 from da_agent.reports.explain import Labels, explain_result
 from da_agent.reports.html import CONTENT_SECURITY_POLICY, render_report
 from da_agent.reports.metric import (
@@ -55,7 +61,11 @@ from da_agent.reports.metric import (
 from da_agent.runner.runner import MAX_SQL_CHARS
 from da_agent.security.sql_guard import SqlRejectedError, validate_select
 from da_agent.storage import audit, feedback, ops
-from da_agent.storage.dataset_versions import DatasetVersionStore, payload_version
+from da_agent.storage.dataset_versions import (
+    DatasetVersionStore,
+    VersionRecord,
+    payload_version,
+)
 from da_agent.storage.datasets import (
     DatasetNotFoundError,
     DatasetRecord,
@@ -112,6 +122,7 @@ class ApiSettings:
     schema: str | None = None
     max_files: int = 50
     max_file_bytes: int = 200 * 1024 * 1024
+    max_dataset_versions: int = 20
     # Event streams: how often to look for new events, when to send a keep-alive comment, and
     # how long one connection lasts before the client reconnects with Last-Event-ID.
     events_poll_seconds: float = 0.5
@@ -213,6 +224,22 @@ class MetricRequest(BaseModel):
     candidate_index: int = Field(ge=0, description="The measure, as in metric_candidates.")
     name: str = Field(min_length=1, max_length=MAX_NAME)
     aliases: list[str] = Field(default_factory=list, max_length=MAX_ALIASES)
+
+
+class VersionApproveRequest(BaseModel):
+    choices: dict[str, Literal["replace", "drop_overlap", "keep_both"]] = Field(
+        default_factory=dict, description="What to do with each table whose new rows overlap."
+    )
+    replace_files: dict[str, str] = Field(
+        default_factory=dict, description="Per table chosen replace, the stored file it replaces."
+    )
+    spec: dict[str, Any] | None = Field(
+        default=None, description="Edited specs of the new tables. Omit it to keep the proposal."
+    )
+    repairs: list[dict[str, Any]] = Field(
+        default_factory=list, description="The proposed repairs the user accepts."
+    )
+    apply_anyway: StrictBool = False
 
 
 class ConversationRequest(BaseModel):
@@ -609,6 +636,21 @@ def upload_dataset(
     return {"id": str(dataset_id), "status": "uploaded", "files": stored}
 
 
+def _version_view(version: VersionRecord) -> dict[str, Any]:
+    return {
+        "version": version.version,
+        "status": version.status,
+        "files": version.files,
+        "changes": version.changes,
+        "repairs": version.repairs,
+        "error": version.error,
+        "created_at": version.created_at,
+    }
+
+
+OPEN_STATUSES = frozenset({"uploaded", "checking", "needs_choice", "proposed", "building"})
+
+
 @router.get("/datasets")
 def list_datasets(conn: Db, caller: Caller) -> dict[str, Any]:
     return {"datasets": DatasetStore(conn).in_workspace(caller.workspace_id)}
@@ -619,7 +661,181 @@ def get_dataset(dataset_id: str, conn: Db, caller: Caller) -> dict[str, Any]:
     record = DatasetStore(conn).get(_uuid(dataset_id), caller.workspace_id)
     if record is None:
         raise _not_found()
-    return _dataset_view(record)
+    versions = DatasetVersionStore(conn).list(caller.workspace_id, record.id)
+    current = conn.execute(
+        "SELECT current_version FROM datasets WHERE id = %s", (record.id,)
+    ).fetchone()
+    opened = next((v for v in versions if v.status in OPEN_STATUSES), None)
+    return _dataset_view(record) | {
+        "current_version": current[0] if current else None,
+        "open_version": _version_view(opened) if opened else None,
+    }
+
+
+# Adding files: each upload is a new version of the dataset (docs/design/2026-11-21-add-files.md)
+
+
+def _link_or_copy(source: Path, target: Path) -> None:
+    """Stored upload files never change, so a version folder can share them by hard link; a copy
+    is the fallback where links are not possible, such as across devices."""
+    try:
+        os.link(source, target)
+    except OSError:
+        shutil.copy2(source, target)
+
+
+@router.post("/datasets/{dataset_id}/files", status_code=202)
+def add_files(
+    dataset_id: str,
+    conn: Db,
+    caller: Caller,
+    settings: Settings,
+    files: Annotated[list[UploadFile], File()],
+    replaces: Annotated[
+        list[str] | None,
+        Form(description="Per file, in upload order, the stored name it replaces; empty to add."),
+    ] = None,
+) -> dict[str, Any]:
+    """Upload more files for a ready dataset as its next version. The check runs as a job; poll
+    the dataset or its versions."""
+    key = _uuid(dataset_id)
+    record = DatasetStore(conn).get(key, caller.workspace_id)
+    if record is None:
+        raise _not_found()
+    if record.status != "ready":
+        raise HTTPException(status_code=409, detail=f"the dataset is {record.status}, not ready")
+    _may_start_job(conn, caller, settings)
+    store = DatasetVersionStore(conn)
+    try:
+        current = store.current(key)
+    except DatasetStateError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    if replaces is not None and len(replaces) != len(files):
+        raise HTTPException(status_code=400, detail="send one replaces value for each file")
+    replaced = {name for name in replaces or [] if name}
+    older = {str(f.get("stored_as")) for f in current.files}
+    if replaced - older:
+        names = ", ".join(sorted(replaced - older))
+        raise HTTPException(status_code=400, detail=f"not files of the dataset: {names}")
+    kept = [f for f in current.files if f.get("stored_as") not in replaced]
+    if len(kept) + len(files) > settings.max_files:
+        raise HTTPException(status_code=413, detail=f"at most {settings.max_files} files")
+    taken = {str(f.get("stored_as")) for f in kept}
+    names: list[str] = []
+    try:
+        for upload in files:
+            name = storage_name(upload.filename or "", taken)
+            taken.add(name)
+            names.append(name)
+    except UploadRejectedError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    version = max(v.version for v in store.list(caller.workspace_id, key)) + 1
+    upload_dir = f"{key}-v{version}"
+    folder = settings.uploads_root / upload_dir
+    try:
+        folder.mkdir(parents=True)
+    except FileExistsError as error:
+        # Another upload took this version number; its folder is not ours to remove.
+        raise HTTPException(status_code=409, detail="a version is already open") from error
+    try:
+        source = settings.uploads_root / current.upload_dir
+        for item in kept:
+            _link_or_copy(source / str(item["stored_as"]), folder / str(item["stored_as"]))
+        added = [
+            {
+                "name": upload.filename,
+                "stored_as": stored_name,
+                "bytes": _save(upload, folder / stored_name, settings.max_file_bytes),
+            }
+            for upload, stored_name in zip(files, names, strict=True)
+        ]
+        with conn.transaction():
+            opened = store.open_version(
+                caller.workspace_id, key, [*kept, *added], upload_dir, settings.max_dataset_versions
+            )
+            log(
+                conn, caller, "dataset.files_add", dataset_id,
+                version=opened, added=len(added), replaced=len(replaced),
+            )  # fmt: skip
+    except BaseException as error:
+        shutil.rmtree(folder, ignore_errors=True)
+        if isinstance(error, DatasetNotFoundError):
+            raise _not_found() from error
+        if isinstance(error, DatasetStateError):
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        raise
+    return {"dataset_id": dataset_id, "version": opened, "status": "uploaded"}
+
+
+@router.get("/datasets/{dataset_id}/versions")
+def list_versions(dataset_id: str, conn: Db, caller: Caller) -> dict[str, Any]:
+    key = _uuid(dataset_id)
+    if DatasetStore(conn).get(key, caller.workspace_id) is None:
+        raise _not_found()
+    versions = DatasetVersionStore(conn).list(caller.workspace_id, key)
+    return {"versions": [_version_view(v) for v in versions]}
+
+
+@router.post("/datasets/{dataset_id}/versions/{version}/approve")
+def approve_version(
+    dataset_id: str, version: int, body: VersionApproveRequest, conn: Db, caller: Caller
+) -> dict[str, Any]:
+    """Send the user's decisions on a version that waits for them. The build runs as a job."""
+    key = _uuid(dataset_id)
+    store = DatasetVersionStore(conn)
+    record = DatasetStore(conn).get(key, caller.workspace_id)
+    found = store.get(caller.workspace_id, key, version)
+    if record is None or found is None:
+        raise _not_found()
+    if found.status not in ("needs_choice", "proposed"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"the version is {found.status}; only one that needs a decision can be approved",
+        )
+    entries = found.changes or []
+    try:
+        choices = checked_choices(
+            entries, body.choices, body.replace_files, store.current(key).files, body.apply_anyway
+        )
+        edits = checked_edits(entries, body.spec)
+        repairs = checked_repairs(body.repairs, found.repairs or [], record.spec)
+    except ApprovalInvalidError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    try:
+        with conn.transaction():
+            status = store.approve(caller.workspace_id, key, version, choices, edits, repairs)
+            log(conn, caller, "dataset.version_approve", dataset_id, version=version)
+    except DatasetNotFoundError as error:
+        raise _not_found() from error
+    except DatasetStateError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return {"dataset_id": dataset_id, "version": version, "status": status}
+
+
+@router.post("/datasets/{dataset_id}/versions/{version}/discard", status_code=204)
+def discard_version(
+    dataset_id: str, version: int, conn: Db, caller: Caller, settings: Settings
+) -> Response:
+    """Drop a version that waits for the user, and its uploaded files. Its slot is free again."""
+    key = _uuid(dataset_id)
+    store = DatasetVersionStore(conn)
+    found = store.get(caller.workspace_id, key, version)
+    if found is None:
+        raise _not_found()
+    try:
+        with conn.transaction():
+            store.discard(caller.workspace_id, key, version)
+            log(conn, caller, "dataset.version_discard", dataset_id, version=version)
+    except DatasetNotFoundError as error:
+        raise _not_found() from error
+    except DatasetStateError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    # Version 1's folder and the current version's are never removed. A discardable version has
+    # no build directory: that is installed only right before it is applied.
+    protected = {str(key), store.current(key).upload_dir}
+    if found.upload_dir not in protected and f"{key}-v" in found.upload_dir:
+        shutil.rmtree(settings.uploads_root / found.upload_dir, ignore_errors=True)
+    return Response(status_code=204)
 
 
 @router.post("/datasets/{dataset_id}/approve")

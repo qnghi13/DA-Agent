@@ -23,6 +23,7 @@ def api_settings(settings: Settings) -> ApiSettings:
         uploads_root=settings.uploads_root,
         schema=settings.schema,
         daily_budget_usd=settings.daily_budget_usd,
+        max_dataset_versions=settings.max_dataset_versions,
         trace_ui_url=settings.trace_ui_url,
         public_url=settings.public_url,
         exports_root=settings.exports_root,

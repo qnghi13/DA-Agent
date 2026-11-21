@@ -7,6 +7,7 @@
 | DA_AGENT_SANDBOX_IMAGE | da-agent-sandbox:dev | Image the Runner starts |
 | DA_AGENT_ROUTES | none; the worker needs it | Model routes, such as groq:openai/gpt-oss-20b |
 | DA_AGENT_DAILY_BUDGET_USD | 5.0 | Model spending per workspace per day, unless it has its own |
+| DA_AGENT_MAX_DATASET_VERSIONS | 20 | Versions per dataset; adding files past it returns 409 |
 | DA_AGENT_RUN_BUDGET_USD | 0.25 | Model spending per job |
 | DA_AGENT_RUN_MAX_TOKENS | 60000 | Tokens per job |
 | DA_AGENT_OTLP_ENDPOINT | none | Where traces go, such as http://phoenix:6006/v1/traces |
@@ -78,6 +79,15 @@ def _http_url(env: Mapping[str, str], name: str) -> str | None:
     return raw.rstrip("/")
 
 
+def _count(env: Mapping[str, str], name: str, default: int) -> int:
+    raw = env.get(name, "").strip()
+    if not raw:
+        return default
+    if not raw.isdecimal() or int(raw) < 1:
+        raise ConfigError(f"{name} must be a whole number of at least 1, not {raw!r}")
+    return int(raw)
+
+
 def _number(env: Mapping[str, str], name: str, default: float) -> float:
     raw = env.get(name, "").strip()
     if not raw:
@@ -131,6 +141,8 @@ class Settings:
     routes: str | None = None
     daily_budget_usd: float = 5.0
     run_budget_usd: float = 0.25
+    # Versions one dataset may have (docs/design/2026-11-21-add-files.md, Retention).
+    max_dataset_versions: int = 20
     run_max_tokens: int = 60_000
     # Wall time for one run (ADR 0042).
     run_max_seconds: float = 300.0
@@ -176,6 +188,9 @@ class Settings:
             routes=env.get("DA_AGENT_ROUTES", "").strip() or None,
             daily_budget_usd=_number(env, "DA_AGENT_DAILY_BUDGET_USD", cls.daily_budget_usd),
             run_budget_usd=_number(env, "DA_AGENT_RUN_BUDGET_USD", cls.run_budget_usd),
+            max_dataset_versions=_count(
+                env, "DA_AGENT_MAX_DATASET_VERSIONS", cls.max_dataset_versions
+            ),
             run_max_tokens=int(_number(env, "DA_AGENT_RUN_MAX_TOKENS", cls.run_max_tokens)),
             run_max_seconds=_seconds(env, "DA_AGENT_RUN_MAX_SECONDS", cls.run_max_seconds),
             metrics_port=_port(env, "DA_AGENT_METRICS_PORT"),
