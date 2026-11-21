@@ -39,6 +39,8 @@ class Job:
     trace_ids: list[str] = field(default_factory=list)
     # A user asked to stop it (ADR 0042); a running job keeps this until its worker stops.
     cancel_requested: bool = False
+    # Set by claim: seconds from queueing to this claim, on the database clock (ADR 0044).
+    queue_wait_seconds: float | None = None
 
 
 @dataclass(frozen=True)
@@ -95,7 +97,8 @@ class JobQueue:
                 FOR UPDATE SKIP LOCKED
                 LIMIT 1)
             RETURNING id, workspace_id, kind, payload, status, attempts, max_attempts,
-                last_error, result
+                last_error, result,
+                extract(epoch FROM now() - created_at)::float8 AS queue_wait_seconds
             """,
             (worker_id, lease_seconds),
         )

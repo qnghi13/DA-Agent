@@ -15,9 +15,11 @@ import {
   GROUPS,
   groupOutcomes,
   groupSeries,
+  type OpsAlert,
   type OpsSummary,
   OUTCOME_LABELS,
   STOP_LABELS,
+  sortAlerts,
   type Window,
 } from "./ops";
 
@@ -148,6 +150,7 @@ export function OpsDashboard({ api }: { api: Api }) {
   const [window_, setWindow] = useState<Window>("24h");
   const [summary, setSummary] = useState<OpsSummary | null>(null);
   const [failures, setFailures] = useState<FailureRow[]>([]);
+  const [firing, setFiring] = useState<{ alerts: OpsAlert[]; available: boolean } | null>(null);
   const [moreFailures, setMoreFailures] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -157,6 +160,8 @@ export function OpsDashboard({ api }: { api: Api }) {
     setLoading(true);
     try {
       const [next, recent] = await Promise.all([api.getOpsSummary(window_), api.getOpsFailures()]);
+      // Alerts come from Alertmanager; when it is down, the rest of the dashboard still loads.
+      setFiring(await api.getOpsAlerts().catch(() => ({ alerts: [], available: false })));
       setSummary(next);
       setFailures(recent.failures);
       setMoreFailures(recent.failures.length === 25);
@@ -228,6 +233,7 @@ export function OpsDashboard({ api }: { api: Api }) {
           {error}
         </p>
       )}
+      {firing && <AlertList alerts={firing.alerts} available={firing.available} />}
       {summary ? (
         <Panels
           summary={summary}
@@ -739,5 +745,52 @@ function KindLine({ title, counts }: { title: string; counts: Record<string, num
         {entries.map(([kind, n]) => `${kind.replaceAll("_", " ")}: ${formatCount(n)}`).join(" · ")}
       </p>
     </div>
+  );
+}
+
+function AlertList({ alerts, available }: { alerts: OpsAlert[]; available: boolean }) {
+  if (!available) {
+    return (
+      <p className="text-muted-foreground text-sm">
+        Alerts are unavailable: Alertmanager could not be reached.
+      </p>
+    );
+  }
+  if (alerts.length === 0) {
+    return <p className="text-muted-foreground text-sm">No alerts are firing.</p>;
+  }
+  return (
+    <section aria-labelledby="alerts-title" className="flex flex-col gap-2">
+      <h2 id="alerts-title" className="text-lg font-semibold">
+        Alerts firing
+      </h2>
+      <ul className="flex flex-col gap-2">
+        {sortAlerts(alerts).map((alert) => (
+          <li
+            key={`${alert.name}-${JSON.stringify(alert.labels)}-${alert.started_at}`}
+            className={cn(
+              "flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-lg border px-3 py-2 text-sm",
+              alert.severity === "page" ? "border-danger/40 bg-danger/5" : "bg-card",
+            )}
+          >
+            <span
+              className={cn(
+                "rounded px-1.5 py-0.5 text-xs font-medium uppercase",
+                alert.severity === "page" ? "bg-danger text-white" : "bg-muted",
+              )}
+            >
+              {alert.severity}
+            </span>
+            <span className="font-medium">{alert.name}</span>
+            <span className="text-muted-foreground">{alert.summary}</span>
+            {alert.started_at && (
+              <span className="text-muted-foreground ml-auto text-xs">
+                since {new Date(alert.started_at).toLocaleString()}
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

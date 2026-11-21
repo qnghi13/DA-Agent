@@ -93,6 +93,9 @@ services:
       DA_AGENT_PUBLIC_URL: ${DA_AGENT_PUBLIC_URL:-http://127.0.0.1:${DA_AGENT_WEB_PORT:-8080}}
       # The API is reachable only through the web proxy, which sets X-Forwarded-For itself.
       FORWARDED_ALLOW_IPS: "*"
+      # Prometheus scrapes port 9100 inside the Compose networks; it is never published.
+      DA_AGENT_METRICS_PORT: "9100"
+      DA_AGENT_ALERTMANAGER_URL: http://alertmanager:9093
     networks: [backend, edge]
     depends_on:
       postgres:
@@ -109,6 +112,7 @@ services:
     environment:
       DA_AGENT_DATABASE_URL: *database-url
       DA_AGENT_ROUTES: ${DA_AGENT_ROUTES:-groq:openai/gpt-oss-20b}
+      DA_AGENT_METRICS_PORT: "9100"
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
@@ -157,6 +161,36 @@ services:
       - phoenix-data:/mnt/data
     networks: [backend, edge]
 
+  # SLOs and alerts (ADR 0044): Prometheus scrapes api and every worker on port 9100, records
+  # SLIs, and sends alerts to Alertmanager, which groups them and calls the webhook.
+  prometheus:
+    image: prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    volumes:
+      - ./deploy/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${DA_AGENT_PROMETHEUS_PORT:-9090}:9090"
+    networks: [backend, edge]
+
+  alertmanager:
+    image: prom/alertmanager:v0.35.0@sha256:e638797febd034838eca8b98cdbd46f951e9bf7f178777aa8669167406a9946c
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/etc/alertmanager/start.sh"]
+    environment:
+      DA_AGENT_ALERT_WEBHOOK_URL: ${DA_AGENT_ALERT_WEBHOOK_URL:-}
+    volumes:
+      - ./deploy/alertmanager:/etc/alertmanager:ro
+      - alertmanager-data:/alertmanager
+    ports:
+      - "127.0.0.1:${DA_AGENT_ALERTMANAGER_PORT:-9093}:9093"
+    # edge reaches the webhook; backend reaches Prometheus and the API.
+    networks: [backend, edge]
+
 networks:
   # No route out: postgres and the runner live only here.
   backend:
@@ -169,3 +203,5 @@ volumes:
     name: da-agent-data
   postgres-data:
   phoenix-data:
+  prometheus-data:
+  alertmanager-data:

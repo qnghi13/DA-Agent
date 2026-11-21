@@ -8,10 +8,13 @@ import os
 import sys
 
 import uvicorn
+from prometheus_client import REGISTRY
 
 from da_agent.api.app import ApiSettings, create_app
 from da_agent.config import ConfigError, Settings
 from da_agent.storage.db import connect, migrate
+from da_agent.telemetry.db_metrics import DatabaseCollector
+from da_agent.telemetry.metrics import api_metrics, serve
 
 
 def api_settings(settings: Settings) -> ApiSettings:
@@ -23,6 +26,7 @@ def api_settings(settings: Settings) -> ApiSettings:
         trace_ui_url=settings.trace_ui_url,
         public_url=settings.public_url,
         exports_root=settings.exports_root,
+        alertmanager_url=settings.alertmanager_url,
     )
 
 
@@ -39,7 +43,19 @@ def main() -> int:
     settings.uploads_root.mkdir(parents=True, exist_ok=True)
     with connect(settings.database_url) as conn:
         migrate(conn)
-    uvicorn.run(create_app(api_settings(settings)), host=args.host, port=args.port)
+    metrics = None
+    if settings.metrics_port is not None:
+        # Prometheus scrapes this port on the internal network only (ADR 0044). The API also
+        # reports what lives in Postgres: the queue, budgets, and recent ratings.
+        metrics = api_metrics()
+        REGISTRY.register(
+            DatabaseCollector(
+                lambda: connect(settings.database_url, schema=settings.schema),
+                default_daily_usd=settings.daily_budget_usd,
+            )
+        )
+        serve(settings.metrics_port)
+    uvicorn.run(create_app(api_settings(settings), metrics), host=args.host, port=args.port)
     return 0
 
 

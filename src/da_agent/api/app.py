@@ -20,6 +20,7 @@ from typing import Annotated, Any, BinaryIO, Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
+import httpx
 import psycopg
 from fastapi import (
     APIRouter,
@@ -95,6 +96,7 @@ from da_agent.storage.sessions import (
     revoke_session,
 )
 from da_agent.storage.uploads import UploadRejectedError, storage_name
+from da_agent.telemetry.metrics import ApiMetrics
 
 CHUNK_BYTES = 1024 * 1024
 
@@ -127,6 +129,10 @@ class ApiSettings:
     public_url: str = "http://127.0.0.1:8080"
     # Result exports (docs/design/2026-11-14-result-export.md). Unset, they sit beside uploads.
     exports_root: Path | None = None
+    # Alertmanager, for the operator's alert list (ADR 0044). Unset, the list is unavailable.
+    alertmanager_url: str | None = None
+    # For tests: how requests to Alertmanager are sent.
+    alert_transport: httpx.BaseTransport | None = None
 
     @property
     def exports_dir(self) -> Path:
@@ -548,10 +554,13 @@ def logout(request: Request, conn: Db, settings: Settings) -> Response:
     return response
 
 
-def create_app(settings: ApiSettings) -> FastAPI:
+def create_app(settings: ApiSettings, metrics: ApiMetrics | None = None) -> FastAPI:
     app = FastAPI(title="DA-Agent", version="0.1.0")
     app.state.settings = settings
     app.include_router(router)
+    if metrics is not None:
+        # Request counts for the API availability SLO (ADR 0044).
+        metrics.install(app)
     return app
 
 
@@ -1233,6 +1242,44 @@ def ops_summary(
             row["budget_usd"] = settings.daily_budget_usd
     data["daily_budget_default_usd"] = settings.daily_budget_usd
     return JSONResponse(data, headers=NO_STORE)
+
+
+ALERT_TIMEOUT_SECONDS = 2.0
+_SEVERITY_ORDER = {"page": 0, "ticket": 1}
+
+
+@router.get("/ops/alerts")
+def ops_alerts(caller: Operator, settings: Settings) -> JSONResponse:
+    """Alerts firing now, from Alertmanager (ADR 0044): not silenced or inhibited, pages first.
+    When Alertmanager cannot be reached, the list is empty and marked unavailable."""
+    if settings.alertmanager_url is None:
+        return JSONResponse({"alerts": [], "available": False}, headers=NO_STORE)
+    try:
+        with httpx.Client(
+            timeout=ALERT_TIMEOUT_SECONDS, transport=settings.alert_transport
+        ) as http:
+            response = http.get(
+                f"{settings.alertmanager_url.rstrip('/')}/api/v2/alerts",
+                params={"active": "true", "silenced": "false", "inhibited": "false"},
+            )
+            response.raise_for_status()
+            raw = response.json()
+    except (httpx.HTTPError, ValueError) as error:
+        logger.warning("could not read alerts from Alertmanager: %s", error)
+        return JSONResponse({"alerts": [], "available": False}, headers=NO_STORE)
+    alerts = []
+    for alert in raw if isinstance(raw, list) else []:
+        labels = dict(alert.get("labels") or {})
+        name = labels.pop("alertname", "unknown")
+        severity = labels.pop("severity", "ticket")
+        alerts.append({
+            "name": name, "severity": severity,
+            "summary": (alert.get("annotations") or {}).get("summary", ""),
+            "started_at": alert.get("startsAt"), "labels": labels,
+        })  # fmt: skip
+    # Pages before tickets; within each, the one firing longest first.
+    alerts.sort(key=lambda a: (_SEVERITY_ORDER.get(a["severity"], 2), a["started_at"] or ""))
+    return JSONResponse({"alerts": alerts, "available": True}, headers=NO_STORE)
 
 
 @router.get("/ops/failures")

@@ -581,3 +581,102 @@ def test_the_time_travel_cli_lists_and_shows_a_run(
     assert main(["show", str(job_id), "missing"]) == 1
     assert "no checkpoint" in capsys.readouterr().err
     assert main(["list", "no-such-run"]) == 1
+
+
+def metric(registry: Any, name: str, **labels: str) -> float:
+    found = registry.get_sample_value(name, labels)
+    return 0.0 if found is None else found
+
+
+@pytest.mark.parametrize(
+    ("handler_result", "attempt", "outcome"),
+    [
+        (
+            {"stop_reason": "answered", "answer": {"kind": "number", "value": 1}},
+            "succeeded",
+            "answered",
+        ),
+        ({"stop_reason": "llm_error"}, "succeeded", "model_error"),
+        ({"stop_reason": "cancelled"}, "cancelled", "cancelled"),
+        (PermanentJobError("no dataset"), "failed", "failed"),
+    ],
+)
+def test_finished_run_jobs_are_counted_for_the_slos(
+    schema: str, conn: psycopg.Connection, workspace: UUID,
+    handler_result: Any, attempt: str, outcome: str,
+) -> None:  # fmt: skip
+    from prometheus_client import CollectorRegistry
+
+    from da_agent.telemetry.metrics import WorkerMetrics
+
+    JobQueue(conn).enqueue(workspace, "run", {})
+    registry = CollectorRegistry()
+
+    def handle(job: Job, lost: Any) -> dict[str, Any]:
+        if isinstance(handler_result, Exception):
+            raise handler_result
+        return handler_result
+
+    worker = Worker(
+        config(schema, "w1"), {"run": handle}, tracer=trace.NoOpTracer(),
+        metrics=WorkerMetrics(registry),
+    )  # fmt: skip
+    worker.run_once()
+
+    assert metric(registry, "da_agent_runs_total", outcome=outcome) == 1
+    assert metric(registry, "da_agent_job_attempts_total", kind="run", result=attempt) == 1
+    assert metric(registry, "da_agent_run_duration_seconds_count") == 1
+    assert metric(registry, "da_agent_queue_wait_seconds_count") == 1
+
+
+def test_retries_count_as_attempts_and_wait_only_once(
+    schema: str, conn: psycopg.Connection, workspace: UUID
+) -> None:
+    from prometheus_client import CollectorRegistry
+
+    from da_agent.telemetry.metrics import WorkerMetrics
+
+    JobQueue(conn).enqueue(workspace, "run", {})
+    registry = CollectorRegistry()
+    results: list[Any] = [RetryableJobError("provider down"), {"stop_reason": "answered"}]
+
+    def handle(job: Job, lost: Any) -> dict[str, Any]:
+        step = results.pop(0)
+        if isinstance(step, Exception):
+            raise step
+        return step
+
+    worker = Worker(
+        config(schema, "w1", retry_delays=(0,)), {"run": handle}, tracer=trace.NoOpTracer(),
+        metrics=WorkerMetrics(registry),
+    )  # fmt: skip
+    worker.run_once()
+    worker.run_once()
+
+    assert metric(registry, "da_agent_job_attempts_total", kind="run", result="retry") == 1
+    assert metric(registry, "da_agent_job_attempts_total", kind="run", result="succeeded") == 1
+    assert metric(registry, "da_agent_runs_total", outcome="answered") == 1
+    assert metric(registry, "da_agent_queue_wait_seconds_count") == 1
+
+
+def test_a_lost_job_is_an_attempt_but_not_a_finished_run(
+    schema: str, conn: psycopg.Connection, workspace: UUID
+) -> None:
+    from prometheus_client import CollectorRegistry
+
+    from da_agent.telemetry.metrics import WorkerMetrics
+
+    JobQueue(conn).enqueue(workspace, "run", {})
+    registry = CollectorRegistry()
+
+    def lose(job: Job, lost: Any) -> dict[str, Any]:
+        lost.set()
+        return {"stop_reason": "lease_lost"}
+
+    Worker(
+        config(schema, "w1"), {"run": lose}, tracer=trace.NoOpTracer(),
+        metrics=WorkerMetrics(registry),
+    ).run_once()  # fmt: skip
+
+    assert metric(registry, "da_agent_job_attempts_total", kind="run", result="lost") == 1
+    assert metric(registry, "da_agent_runs_total", outcome="answered") == 0

@@ -193,3 +193,15 @@ def test_the_worker_limits_in_memory_by_default(
 
     llm = worker.handlers["run"].llm  # type: ignore[attr-defined]
     assert type(llm._limiter).__name__ == "MemoryRateLimiter"
+
+
+def test_the_worker_records_metrics(tmp_path: Path, schema: str, conn: psycopg.Connection) -> None:
+    from da_agent.telemetry.metrics import llm_metrics, worker_metrics
+
+    env = {"DA_AGENT_ROUTES": "groq:openai/gpt-oss-20b", "GROQ_API_KEY": "test-key"}
+
+    worker = build_worker(settings(tmp_path, schema, **env), env)
+
+    assert worker._metrics is worker_metrics()  # type: ignore[attr-defined]
+    llm = worker.handlers["run"].llm  # type: ignore[attr-defined]
+    assert llm._metrics is llm_metrics()

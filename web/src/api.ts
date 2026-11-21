@@ -2,7 +2,7 @@
 
 import type { Me } from "./auth";
 import type { FeedbackReason, Rating, RunFeedback } from "./feedback";
-import type { FailureRow, OpsSummary, Window } from "./ops";
+import type { FailureRow, OpsAlert, OpsSummary, Window } from "./ops";
 import type { Answer } from "./run";
 import { type SseEvent, streamEvents } from "./sse";
 
@@ -306,6 +306,11 @@ export class Api {
   /** Operator dashboard panels for a window (docs/adr/0026). */
   getOpsSummary(window: Window): Promise<OpsSummary> {
     return this.request(`/v1/ops/summary?window=${window}`);
+  }
+
+  /** Alerts firing now, read from Alertmanager (docs/adr/0044). */
+  getOpsAlerts(): Promise<{ alerts: OpsAlert[]; available: boolean }> {
+    return this.request("/v1/ops/alerts");
   }
 
   /** Jobs that failed, wait to retry, or stopped without an answer; newest first. */

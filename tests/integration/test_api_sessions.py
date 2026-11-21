@@ -3,9 +3,11 @@
 Needs Postgres (DA_AGENT_TEST_POSTGRES_URL).
 """
 
+import dataclasses
 from pathlib import Path
 from uuid import UUID
 
+import httpx
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
@@ -338,3 +340,68 @@ def test_the_dashboard_fills_in_default_budgets_and_trace_links(
     assert today[0]["budget_usd"] == traced.daily_budget_usd
     assert failed[0]["traces"] == [{"attempt": 1, "url": "http://phoenix:6006/redirects/traces/t1"}]
     assert "trace_ids" not in failed[0]
+
+
+def alertmanager(payload: object, status: int = 200) -> httpx.MockTransport:
+    def answer(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v2/alerts"
+        return httpx.Response(status, json=payload)
+
+    return httpx.MockTransport(answer)
+
+
+def test_the_operator_sees_firing_alerts_from_alertmanager(
+    settings: ApiSettings, conn: psycopg.Connection, workspace: UUID
+) -> None:
+    firing = [
+        {
+            "labels": {"alertname": "QueueStuck", "severity": "page"},
+            "annotations": {"summary": "A job has waited more than 5 minutes."},
+            "startsAt": "2026-11-21T10:00:00Z",
+            "status": {"state": "active", "inhibitedBy": [], "silencedBy": []},
+        },
+        {
+            "labels": {"alertname": "BudgetNearlyUsed", "severity": "ticket", "workspace_id": "w1"},
+            "annotations": {"summary": "80% used."},
+            "startsAt": "2026-11-21T09:00:00Z",
+            "status": {"state": "active", "inhibitedBy": [], "silencedBy": []},
+        },
+    ]
+    settings = dataclasses.replace(
+        settings, alertmanager_url="http://alertmanager:9093", alert_transport=alertmanager(firing)
+    )
+    client = TestClient(create_app(settings))
+
+    sign_in(client, conn, workspace)
+    assert client.get("/v1/ops/alerts").status_code == 404
+    sign_in(client, conn, None)
+    shown = client.get("/v1/ops/alerts").json()
+
+    assert shown["available"] is True
+    assert [alert["name"] for alert in shown["alerts"]] == ["QueueStuck", "BudgetNearlyUsed"]
+    assert shown["alerts"][0] == {
+        "name": "QueueStuck",
+        "severity": "page",
+        "summary": "A job has waited more than 5 minutes.",
+        "started_at": "2026-11-21T10:00:00Z",
+        "labels": {},
+    }
+    assert shown["alerts"][1]["labels"] == {"workspace_id": "w1"}
+
+
+@pytest.mark.parametrize("transport", [None, "broken"])
+def test_an_unreachable_alertmanager_is_not_a_server_error(
+    settings: ApiSettings, conn: psycopg.Connection, transport: str | None
+) -> None:
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("refused", request=request)
+
+    url = "http://alertmanager:9093" if transport else None
+    settings = dataclasses.replace(
+        settings, alertmanager_url=url,
+        alert_transport=httpx.MockTransport(refuse) if transport else None,
+    )  # fmt: skip
+    client = TestClient(create_app(settings))
+    sign_in(client, conn, None)
+
+    assert client.get("/v1/ops/alerts").json() == {"alerts": [], "available": False}

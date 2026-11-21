@@ -200,3 +200,11 @@ def test_the_run_deadline_is_read() -> None:
 def test_a_bad_run_deadline_names_the_variable(value: str) -> None:
     with pytest.raises(ConfigError, match="DA_AGENT_RUN_MAX_SECONDS"):
         Settings.from_env(REQUIRED | {"DA_AGENT_RUN_MAX_SECONDS": value})
+
+
+def test_the_metrics_port_is_off_unless_set() -> None:
+    assert Settings.from_env(REQUIRED).metrics_port is None
+    assert Settings.from_env(REQUIRED | {"DA_AGENT_METRICS_PORT": "9100"}).metrics_port == 9100
+    for bad in ("0", "70000", "http"):
+        with pytest.raises(ConfigError, match="DA_AGENT_METRICS_PORT"):
+            Settings.from_env(REQUIRED | {"DA_AGENT_METRICS_PORT": bad})

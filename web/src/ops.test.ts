@@ -102,3 +102,20 @@ describe("stopped runs", () => {
     expect(OUTCOME_LABELS.deadline_exceeded).toBe("Stopped: the run ran out of time");
   });
 });
+
+describe("alerts", () => {
+  it("lists pages before tickets, each oldest first", async () => {
+    const { sortAlerts } = await import("./ops");
+    const alert = (name: string, severity: string, started_at: string) => ({
+      name, severity, summary: "", started_at, labels: {},
+    });
+
+    const sorted = sortAlerts([
+      alert("Budget", "ticket", "2026-11-21T08:00:00Z"),
+      alert("QueueStuck", "page", "2026-11-21T10:00:00Z"),
+      alert("WorkerDown", "page", "2026-11-21T09:00:00Z"),
+    ]);
+
+    expect(sorted.map((a) => a.name)).toEqual(["WorkerDown", "QueueStuck", "Budget"]);
+  });
+});

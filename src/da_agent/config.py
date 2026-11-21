@@ -98,6 +98,15 @@ def _seconds(env: Mapping[str, str], name: str, default: float) -> float:
     return value
 
 
+def _port(env: Mapping[str, str], name: str) -> int | None:
+    raw = env.get(name, "").strip()
+    if not raw:
+        return None
+    if not raw.isdigit() or not 1 <= int(raw) <= 65535:
+        raise ConfigError(f"{name} must be a port number from 1 to 65535")
+    return int(raw)
+
+
 def _token(env: Mapping[str, str], name: str) -> str:
     value = _required(env, name)
     if len(value) < MIN_TOKEN_CHARS:
@@ -125,6 +134,10 @@ class Settings:
     run_max_tokens: int = 60_000
     # Wall time for one run (ADR 0042).
     run_max_seconds: float = 300.0
+    # Where this process serves Prometheus metrics (ADR 0044); None serves none.
+    metrics_port: int | None = None
+    # Alertmanager, read by the operator's alert list (ADR 0044).
+    alertmanager_url: str | None = None
     otlp_endpoint: str | None = None
     trace_ui_url: str | None = None
     public_url: str = "http://127.0.0.1:8080"
@@ -165,6 +178,8 @@ class Settings:
             run_budget_usd=_number(env, "DA_AGENT_RUN_BUDGET_USD", cls.run_budget_usd),
             run_max_tokens=int(_number(env, "DA_AGENT_RUN_MAX_TOKENS", cls.run_max_tokens)),
             run_max_seconds=_seconds(env, "DA_AGENT_RUN_MAX_SECONDS", cls.run_max_seconds),
+            metrics_port=_port(env, "DA_AGENT_METRICS_PORT"),
+            alertmanager_url=_http_url(env, "DA_AGENT_ALERTMANAGER_URL"),
             otlp_endpoint=env.get("DA_AGENT_OTLP_ENDPOINT", "").strip() or None,
             trace_ui_url=_http_url(env, "DA_AGENT_TRACE_UI_URL"),
             public_url=_http_url(env, "DA_AGENT_PUBLIC_URL") or cls.public_url,

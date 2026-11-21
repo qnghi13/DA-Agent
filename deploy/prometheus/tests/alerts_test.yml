@@ -1,0 +1,182 @@
+# promtool test rules deploy/prometheus/tests/alerts_test.yml (ADR 0044).
+rule_files:
+  - ../rules/slo.yml
+  - ../rules/alerts.yml
+
+evaluation_interval: 30s
+
+tests:
+  # One run in five fails, for an hour and a half: both burn alerts fire.
+  - interval: 1m
+    input_series:
+      - series: 'da_agent_runs_total{outcome="answered"}'
+        values: '0+1x90'
+      - series: 'da_agent_runs_total{outcome="failed"}'
+        values: '0+0.25x90'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: RunSuccessBudgetBurn
+        exp_alerts:
+          - exp_labels: {severity: page, slo: runs}
+            exp_annotations:
+              summary: "Runs are failing fast enough to spend the 7-day error budget in about half a day."
+          - exp_labels: {severity: ticket, slo: runs}
+            exp_annotations:
+              summary: "Runs are failing steadily; the 7-day error budget will run out in about a day."
+
+  # A quiet hour: one run of two fails, both inside the short window. Too few events to page.
+  - interval: 1m
+    input_series:
+      - series: 'da_agent_runs_total{outcome="answered"}'
+        values: '0x61 1x29'
+      - series: 'da_agent_runs_total{outcome="failed"}'
+        values: '0x62 1x28'
+    alert_rule_test:
+      - eval_time: 66m
+        alertname: RunSuccessBudgetBurn
+        exp_alerts: []
+
+  # Cancelled runs and budget stops are not failures.
+  - interval: 1m
+    input_series:
+      - series: 'da_agent_runs_total{outcome="answered"}'
+        values: '0+1x90'
+      - series: 'da_agent_runs_total{outcome="cancelled"}'
+        values: '0+1x90'
+      - series: 'da_agent_runs_total{outcome="budget_exceeded"}'
+        values: '0+1x90'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: RunSuccessBudgetBurn
+        exp_alerts: []
+
+  # Four runs in five take longer than 60 s.
+  - interval: 1m
+    input_series:
+      - series: 'da_agent_run_duration_seconds_bucket{le="60.0"}'
+        values: '0+0.2x90'
+      - series: 'da_agent_run_duration_seconds_count'
+        values: '0+1x90'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: RunLatencyBudgetBurn
+        exp_alerts:
+          - exp_labels: {severity: page, slo: latency}
+            exp_annotations:
+              summary: "Most runs take longer than 60 s."
+          - exp_labels: {severity: ticket, slo: latency}
+            exp_annotations:
+              summary: "Many runs take longer than 60 s."
+
+  # Half of the API requests fail with 500.
+  - interval: 1m
+    input_series:
+      - series: 'da_agent_http_requests_total{route="/v1/runs",method="GET",status="200"}'
+        values: '0+1x90'
+      - series: 'da_agent_http_requests_total{route="/v1/runs",method="GET",status="500"}'
+        values: '0+1x90'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: ApiErrorBudgetBurn
+        exp_alerts:
+          - exp_labels: {severity: page, slo: api}
+            exp_annotations:
+              summary: "The API is answering many requests with server errors."
+          - exp_labels: {severity: ticket, slo: api}
+            exp_annotations:
+              summary: "The API keeps answering some requests with server errors."
+
+  # The only worker is down; QueueStuck fires as a rule too (Alertmanager inhibits it).
+  - interval: 1m
+    input_series:
+      - series: 'up{job="worker",instance="10.0.0.5:9100"}'
+        values: '0x10'
+      - series: 'up{job="api",instance="api:9100"}'
+        values: '1x10'
+      - series: 'da_agent_queue_oldest_seconds'
+        values: '400x10'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: WorkerDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: WorkerDown
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: "No worker is up: no question or upload is being processed."
+      - eval_time: 6m
+        alertname: QueueStuck
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: "A job has waited more than 5 minutes for a worker."
+      - eval_time: 6m
+        alertname: ApiDown
+        exp_alerts: []
+
+  # One of two workers is down: the other still serves the queue.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="worker",instance="10.0.0.5:9100"}'
+        values: '0x10'
+      - series: 'up{job="worker",instance="10.0.0.6:9100"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: WorkerDown
+        exp_alerts: []
+
+  # Provider failures on a third of calls.
+  - interval: 1m
+    input_series:
+      - series: 'da_agent_llm_calls_total{provider="groq",model="m",result="ok"}'
+        values: '0+2x40'
+      - series: 'da_agent_llm_calls_total{provider="groq",model="m",result="transient"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ModelErrorsHigh
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "More than a fifth of model calls fail at the provider."
+
+  - interval: 1m
+    input_series:
+      - series: 'da_agent_budget_used_ratio{workspace_id="w1"}'
+        values: '0.85x5'
+      - series: 'da_agent_budget_used_ratio{workspace_id="w2"}'
+        values: '0.3x5'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: BudgetNearlyUsed
+        exp_alerts:
+          - exp_labels: {severity: ticket, workspace_id: w1}
+            exp_annotations:
+              summary: "A workspace has used more than 80% of today's model budget."
+
+  # 15 good of 25 ratings (60%) fires; 5 of 8 does not, too few ratings.
+  - interval: 1m
+    input_series:
+      - series: 'da_agent_feedback_7d{rating="up"}'
+        values: '15x40'
+      - series: 'da_agent_feedback_7d{rating="down"}'
+        values: '10x40'
+    alert_rule_test:
+      - eval_time: 31m
+        alertname: FeedbackLow
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "Fewer than 70% of rated answers in the last 7 days were rated good."
+  - interval: 1m
+    input_series:
+      - series: 'da_agent_feedback_7d{rating="up"}'
+        values: '5x40'
+      - series: 'da_agent_feedback_7d{rating="down"}'
+        values: '3x40'
+    alert_rule_test:
+      - eval_time: 31m
+        alertname: FeedbackLow
+        exp_alerts: []

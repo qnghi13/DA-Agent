@@ -1,0 +1,112 @@
+# Alerts (ADR 0044). SLO alerts use multiwindow burn rates from the Google SRE workbook: "page"
+# when the error budget burns 14.4 times too fast over 1 h and 5 m, "ticket" at 6 times over 6 h
+# and 30 m. The short window makes an alert stop soon after the problem does. Each also needs a
+# minimum number of events, so one bad run on a quiet hour does not page anyone.
+#
+# Budgets (1 - objective): runs 0.01, latency 0.05, queue 0.01, api 0.005.
+groups:
+  - name: slo-burn
+    rules:
+      - alert: RunSuccessBudgetBurn
+        expr: slo:runs:ratio_rate1h > 14.4 * 0.01 and slo:runs:ratio_rate5m > 14.4 * 0.01 and slo:runs:events1h >= 10
+        for: 2m
+        labels: {severity: page, slo: runs}
+        annotations:
+          summary: "Runs are failing fast enough to spend the 7-day error budget in about half a day."
+      - alert: RunSuccessBudgetBurn
+        expr: slo:runs:ratio_rate6h > 6 * 0.01 and slo:runs:ratio_rate30m > 6 * 0.01 and slo:runs:events6h >= 20
+        for: 15m
+        labels: {severity: ticket, slo: runs}
+        annotations:
+          summary: "Runs are failing steadily; the 7-day error budget will run out in about a day."
+
+      - alert: RunLatencyBudgetBurn
+        expr: slo:latency:ratio_rate1h > 14.4 * 0.05 and slo:latency:ratio_rate5m > 14.4 * 0.05 and slo:latency:events1h >= 10
+        for: 2m
+        labels: {severity: page, slo: latency}
+        annotations:
+          summary: "Most runs take longer than 60 s."
+      - alert: RunLatencyBudgetBurn
+        expr: slo:latency:ratio_rate6h > 6 * 0.05 and slo:latency:ratio_rate30m > 6 * 0.05 and slo:latency:events6h >= 20
+        for: 15m
+        labels: {severity: ticket, slo: latency}
+        annotations:
+          summary: "Many runs take longer than 60 s."
+
+      - alert: QueueWaitBudgetBurn
+        expr: slo:queue:ratio_rate1h > 14.4 * 0.01 and slo:queue:ratio_rate5m > 14.4 * 0.01 and slo:queue:events1h >= 10
+        for: 2m
+        labels: {severity: page, slo: queue}
+        annotations:
+          summary: "Runs wait more than 30 s for a worker."
+      - alert: QueueWaitBudgetBurn
+        expr: slo:queue:ratio_rate6h > 6 * 0.01 and slo:queue:ratio_rate30m > 6 * 0.01 and slo:queue:events6h >= 20
+        for: 15m
+        labels: {severity: ticket, slo: queue}
+        annotations:
+          summary: "Runs often wait more than 30 s for a worker; consider another worker."
+
+      - alert: ApiErrorBudgetBurn
+        expr: slo:api:ratio_rate1h > 14.4 * 0.005 and slo:api:ratio_rate5m > 14.4 * 0.005 and slo:api:events1h >= 20
+        for: 2m
+        labels: {severity: page, slo: api}
+        annotations:
+          summary: "The API is answering many requests with server errors."
+      - alert: ApiErrorBudgetBurn
+        expr: slo:api:ratio_rate6h > 6 * 0.005 and slo:api:ratio_rate30m > 6 * 0.005 and slo:api:events6h >= 50
+        for: 15m
+        labels: {severity: ticket, slo: api}
+        annotations:
+          summary: "The API keeps answering some requests with server errors."
+
+  - name: health
+    rules:
+      - alert: WorkerDown
+        expr: (sum(up{job="worker"}) or vector(0)) == 0
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "No worker is up: no question or upload is being processed."
+      - alert: ApiDown
+        expr: (sum(up{job="api"}) or vector(0)) == 0
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "The API is down."
+      - alert: QueueStuck
+        expr: da_agent_queue_oldest_seconds > 300
+        for: 5m
+        labels: {severity: page}
+        annotations:
+          summary: "A job has waited more than 5 minutes for a worker."
+      - alert: ModelErrorsHigh
+        expr: >-
+          sum(rate(da_agent_llm_calls_total{result=~"rate_limited|transient|permanent"}[10m]))
+          / sum(rate(da_agent_llm_calls_total[10m])) > 0.2
+          and sum(increase(da_agent_llm_calls_total[10m])) >= 10
+        for: 10m
+        labels: {severity: ticket}
+        annotations:
+          summary: "More than a fifth of model calls fail at the provider."
+      - alert: MetricsDatabaseUnreadable
+        expr: da_agent_db_metrics_up == 0
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: "The API cannot read queue and budget metrics from Postgres."
+
+  - name: business
+    rules:
+      - alert: BudgetNearlyUsed
+        expr: da_agent_budget_used_ratio > 0.8
+        labels: {severity: ticket}
+        annotations:
+          summary: "A workspace has used more than 80% of today's model budget."
+      - alert: FeedbackLow
+        expr: >-
+          sum(da_agent_feedback_7d{rating="up"}) / sum(da_agent_feedback_7d) < 0.7
+          and sum(da_agent_feedback_7d) >= 20
+        for: 30m
+        labels: {severity: ticket}
+        annotations:
+          summary: "Fewer than 70% of rated answers in the last 7 days were rated good."

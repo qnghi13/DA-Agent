@@ -1,0 +1,25 @@
+# Alertmanager for DA-Agent (ADR 0044). Compose starts it through start.sh, which picks the
+# receiver: "webhook" when DA_AGENT_ALERT_WEBHOOK_URL is set, "none" otherwise. With "none",
+# alerts still show in Alertmanager and on the ops dashboard; nothing is sent.
+route:
+  receiver: RECEIVER
+  group_by: [alertname, severity]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+# While no worker is up, the queue waits for that reason: one alert, not three.
+inhibit_rules:
+  - source_matchers: [alertname="WorkerDown"]
+    target_matchers: [alertname=~"QueueStuck|QueueWaitBudgetBurn"]
+  - source_matchers: [alertname="ApiDown"]
+    target_matchers: [alertname=~"ApiErrorBudgetBurn|MetricsDatabaseUnreadable"]
+
+receivers:
+  - name: none
+  - name: webhook
+    webhook_configs:
+      # Alertmanager's JSON (version 4); a small adapter can turn it into Slack or Telegram text.
+      - url_file: /tmp/alertmanager/webhook_url
+        send_resolved: true
+        max_alerts: 20

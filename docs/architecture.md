@@ -124,6 +124,12 @@ browser ─127.0.0.1:8080─> web (nginx: UI files, /v1 proxy)
   case, which operators rerun against current code with `python -m da_agent.goldens`, in-process
   and outside the job queue. The ops summary shows feedback counts, reasons, and the 👍 rate per
   agent version; notes never leave the workspace's own views.
+- **SLOs and alerts** ([ADR 0044](adr/0044-slo-alerts.md)): the worker and the API count run
+  outcomes, latency, queue wait, model calls, and requests with `prometheus_client` and serve them
+  on port 9100 inside the Compose networks; the API adds queue, budget, and feedback state read
+  from Postgres. Prometheus records four SLIs with 7-day objectives and fires multiwindow
+  burn-rate and health alerts; Alertmanager groups and inhibits them and posts to a webhook. The
+  ops dashboard lists firing alerts.
 
 ## Request flow
 

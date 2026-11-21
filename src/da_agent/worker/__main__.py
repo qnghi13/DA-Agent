@@ -27,6 +27,7 @@ from da_agent.runner.runner import Runner, RunnerConfig, SandboxRunner
 from da_agent.storage.db import connect, migrate
 from da_agent.storage.ledger import PostgresCostLedger
 from da_agent.storage.versions import register_version
+from da_agent.telemetry.metrics import llm_metrics, serve, worker_metrics
 from da_agent.telemetry.tracing import configure_tracing
 from da_agent.worker.datasets import BuildHandler, DatasetOpener, IngestHandler
 from da_agent.worker.exports import ExportHandler
@@ -75,8 +76,9 @@ def build_worker(
         connect=lambda: limiter_connection(settings.database_url, schema=settings.schema),
     )  # fmt: skip
     llm = LLMClient(
-        routes, PostgresCostLedger(conn), breaker_policy=settings.breaker_policy, limiter=limiter
-    )
+        routes, PostgresCostLedger(conn), breaker_policy=settings.breaker_policy, limiter=limiter,
+        metrics=llm_metrics(),
+    )  # fmt: skip
     agent_limits = AgentLimits(max_seconds=settings.run_max_seconds)
     # Which agent this worker runs, recorded on every attempt (ADR 0038).
     limits = {
@@ -111,7 +113,7 @@ def build_worker(
     worker_config = WorkerConfig(
         url=settings.database_url, schema=settings.schema, agent_version=manifest.version
     )
-    return Worker(worker_config, handlers)
+    return Worker(worker_config, handlers, metrics=worker_metrics())
 
 
 def main() -> int:
@@ -125,6 +127,9 @@ def main() -> int:
         tracing = configure_tracing(
             settings.otlp_endpoint, service_name="da-agent-worker", set_global=True
         )
+    if settings.metrics_port is not None:
+        # Prometheus scrapes this port on the internal network only (ADR 0044).
+        serve(settings.metrics_port)
     stop = threading.Event()
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, lambda *_: stop.set())

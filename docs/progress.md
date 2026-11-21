@@ -1,6 +1,6 @@
 # Progress
 
-Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-20 (feedback, golden cases)
+Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-21 (SLOs and alerts)
 **Phase:** optimisation. Challenge rules: ≤15B params in total, offline Docker, 2×5090, 6 h,
 re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for the submission.
 
@@ -9,9 +9,8 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
 - Done (559f88a): code-computed periods, Vietnamese shorthand and Telex expansion, `vllm:` route.
   Test shops are new and rulebooks differ per split: ingestion runs in the container; the
   semantic layer holds data facts only, never rules.
-- Public test (`public_test/`, 14 shops): `prepare --all-shops` on Groq $0.10, 14/14 built;
-  spec repairs in code (dev_013 dates 63% -> 100%); ADR 0029 excludes proven subtotals.
-- GPU kit (a24a501): runbook, `serve.sh`, preflight, `--workers`. Memory: ADR 0030 (9806563).
+- Public test (`public_test/`, 14 shops): 14/14 built; spec repairs in code; ADR 0029.
+- GPU kit (a24a501): runbook, `serve.sh`, preflight, `--workers`.
 - GPU run 1 (2026-11-13, 1x5090, vLLM 0.33.0, `gemma-4-12B-it` bf16, batch-invariant): preflight
   ok (tool calls, identical alone vs busy). `regression` on `datasets-dev`, 3 workers: **+56**
   (99/43/8) vs Groq +53; ~12.7 s/question wall. Failure analysis ($0): 14 right values with the
@@ -29,17 +28,18 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
    3.1, pass^3 50%, pass@3 67%, $0.205: one-run gains under ~9 points are noise); breaker and
    outbound limits (ADR 0041, note 20); cancel with a Stop button, run deadline, time travel CLI
    (ADR 0042, note 21); feedback with reasons, golden cases, 👍 rate per version (ADR 0043,
-   note 22, $0). Next: alerts and SLOs; later an LLM judge checked against feedback.
+   note 22); SLOs and alerts, Prometheus and Alertmanager (ADR 0044, note 23). Harness done.
+   Later: an LLM judge checked against feedback.
 1. v0.1.0 released (ADR 0028); holdout ran once (+44, never rerun). Open: run 97d7bc1f guessed
    an absent `product_id` (audit: a UI guardrail, not a score fix); `\uXXXX` escapes written into
    SQL text (2 runs in all reports).
 ## Baselines (Groq `gpt-oss-20b`, before 559f88a): `regression` +53 (93/40/17), holdout +44.
 ## Done
-- ADRs 0001–0043, notes 01–22. Scorer 3000/3000; splits in `eval/splits/splits.json`.
+- ADRs 0001–0044, notes 01–23. Scorer 3000/3000; splits in `eval/splits/splits.json`.
 - Agent: `LLMClient`, SQL guard, LangGraph with checkpoints and verify, Groq `gpt-oss-20b`.
   Sandbox: all escape tests pass; ingestion and agent SQL run in it (ADRs 0009–0012).
   `datasets-dev/`: 24/24 ok, parse 99.98%+, exclusion precision and recall 100%.
-- Backend (ADRs 0017–0022) end to end over HTTP ($0.0014); reports ($0.017); RAG cut (note 05).
+- Backend (ADRs 0017–0022) over HTTP; reports; RAG cut (note 05).
 
 ## Not verified
 - Pyright: 24 old errors. No real call: Gemini, `openrouter`, `vllm` (serve.sh untested on a

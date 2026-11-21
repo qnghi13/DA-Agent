@@ -9,6 +9,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode, Tracer
@@ -30,6 +31,9 @@ from da_agent.llm.types import (
     TransientLLMError,
     Usage,
 )
+
+if TYPE_CHECKING:
+    from da_agent.telemetry.metrics import LLMMetrics
 
 BASE_WAIT_SECONDS = 1.0
 DEFAULT_BREAKER = BreakerPolicy()
@@ -171,6 +175,7 @@ class LLMClient:
         clock: Callable[[], float] = time.monotonic,
         limiter: RateLimiter | None = None,
         max_throttle_wait: float = 300.0,
+        metrics: "LLMMetrics | None" = None,
     ) -> None:
         if not routes:
             raise ValueError("LLMClient needs at least one route")
@@ -191,6 +196,8 @@ class LLMClient:
         # How long the last route waits for its limit. Earlier routes wait only max_wait and then
         # fall back; the last has nothing to fall back to, so queueing beats failing the run.
         self._max_throttle_wait = max(max_throttle_wait, max_wait)
+        # Prometheus counters for SLOs and alerts (ADR 0044). None records nothing.
+        self._metrics = metrics
 
     def complete(
         self,
@@ -226,7 +233,14 @@ class LLMClient:
                 raise
             except LLMError as error:
                 failures.append(f"{route.adapter.provider}/{route.model}: {error}")
+            finally:
+                self._report_breaker(route, breaker)
         raise AllRoutesFailedError("; ".join(failures))
+
+    def _report_breaker(self, route: Route, breaker: CircuitBreaker | None) -> None:
+        if self._metrics is not None and breaker is not None:
+            key = route_key(route.adapter.provider, route.model)
+            self._metrics.breaker(key, breaker.state != "closed")
 
     def _check_budget(self, run_id: str, budget: RunBudget | None) -> None:
         if budget is None:
@@ -243,6 +257,8 @@ class LLMClient:
             span.set_attribute("llm.model_name", route.model)
             span.set_attribute("da_agent.run_id", run_id)
             span.add_event("circuit_open")
+        if self._metrics is not None:
+            self._metrics.breaker(route_key(route.adapter.provider, route.model), True)
 
     def _complete_with_retries(
         self,
@@ -342,6 +358,8 @@ class LLMClient:
                 span.set_status(Status(StatusCode.ERROR, type(error).__name__))
                 if isinstance(error, CallInterruptedError):
                     raise  # No call went out, so the ledger has nothing to record.
+                if self._metrics is not None:
+                    self._metrics.call(route.adapter.provider, route.model, error_kind(error))
                 self._ledger.record(
                     CostRecord(
                         run_id=run_id, provider=route.adapter.provider, model=route.model,
@@ -375,6 +393,11 @@ class LLMClient:
             span.set_attribute("llm.token_count.completion", response.usage.output_tokens)
             span.set_attribute("llm.token_count.total", response.usage.total_tokens)
             span.set_attribute("da_agent.cost_usd", cost)
+            if self._metrics is not None:
+                self._metrics.call(
+                    route.adapter.provider, route.model, "ok", latency,
+                    response.usage.input_tokens, response.usage.output_tokens, cost,
+                )  # fmt: skip
             if self._record_content:
                 span.set_attribute(
                     "output.value", response.model_dump_json(include={"content", "tool_calls"})

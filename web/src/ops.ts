@@ -234,3 +234,23 @@ export function formatPercent(share: number | null): string {
 export function formatCount(n: number): string {
   return n.toLocaleString("en-US");
 }
+
+/** One alert firing in Alertmanager (docs/adr/0044). */
+export interface OpsAlert {
+  name: string;
+  severity: string;
+  summary: string;
+  started_at: string | null;
+  labels: Record<string, string>;
+}
+
+const SEVERITY_ORDER: Record<string, number> = { page: 0, ticket: 1 };
+
+/** Pages before tickets; within each, the alert firing longest first. */
+export function sortAlerts(alerts: OpsAlert[]): OpsAlert[] {
+  return [...alerts].sort(
+    (a, b) =>
+      (SEVERITY_ORDER[a.severity] ?? 2) - (SEVERITY_ORDER[b.severity] ?? 2) ||
+      (a.started_at ?? "").localeCompare(b.started_at ?? ""),
+  );
+}

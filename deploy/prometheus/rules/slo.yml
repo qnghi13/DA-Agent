@@ -1,0 +1,77 @@
+# SLIs as recorded series (ADR 0044). Each slo:<name>:ratio_rate<window> is the share of bad
+# events in the window; slo:<name>:events<window> counts all events, so alerts can require enough
+# traffic before they fire.
+#
+# SLOs, each over 7 days:
+#   runs     99%   of finished runs end without a failure or a model error
+#   latency  95%   of run attempts finish within 60 s
+#   queue    99%   of first attempts start within 30 s of being queued
+#   api      99.5% of API requests do not answer 5xx
+groups:
+  - name: slo-runs
+    rules:
+      - record: slo:runs:ratio_rate5m
+        expr: sum(rate(da_agent_runs_total{outcome=~"failed|model_error"}[5m])) / sum(rate(da_agent_runs_total[5m]))
+      - record: slo:runs:ratio_rate30m
+        expr: sum(rate(da_agent_runs_total{outcome=~"failed|model_error"}[30m])) / sum(rate(da_agent_runs_total[30m]))
+      - record: slo:runs:ratio_rate1h
+        expr: sum(rate(da_agent_runs_total{outcome=~"failed|model_error"}[1h])) / sum(rate(da_agent_runs_total[1h]))
+      - record: slo:runs:ratio_rate6h
+        expr: sum(rate(da_agent_runs_total{outcome=~"failed|model_error"}[6h])) / sum(rate(da_agent_runs_total[6h]))
+      - record: slo:runs:ratio_rate7d
+        expr: sum(rate(da_agent_runs_total{outcome=~"failed|model_error"}[7d])) / sum(rate(da_agent_runs_total[7d]))
+      - record: slo:runs:events1h
+        expr: sum(increase(da_agent_runs_total[1h]))
+      - record: slo:runs:events6h
+        expr: sum(increase(da_agent_runs_total[6h]))
+
+  - name: slo-latency
+    rules:
+      - record: slo:latency:ratio_rate5m
+        expr: 1 - sum(rate(da_agent_run_duration_seconds_bucket{le="60.0"}[5m])) / sum(rate(da_agent_run_duration_seconds_count[5m]))
+      - record: slo:latency:ratio_rate30m
+        expr: 1 - sum(rate(da_agent_run_duration_seconds_bucket{le="60.0"}[30m])) / sum(rate(da_agent_run_duration_seconds_count[30m]))
+      - record: slo:latency:ratio_rate1h
+        expr: 1 - sum(rate(da_agent_run_duration_seconds_bucket{le="60.0"}[1h])) / sum(rate(da_agent_run_duration_seconds_count[1h]))
+      - record: slo:latency:ratio_rate6h
+        expr: 1 - sum(rate(da_agent_run_duration_seconds_bucket{le="60.0"}[6h])) / sum(rate(da_agent_run_duration_seconds_count[6h]))
+      - record: slo:latency:ratio_rate7d
+        expr: 1 - sum(rate(da_agent_run_duration_seconds_bucket{le="60.0"}[7d])) / sum(rate(da_agent_run_duration_seconds_count[7d]))
+      - record: slo:latency:events1h
+        expr: sum(increase(da_agent_run_duration_seconds_count[1h]))
+      - record: slo:latency:events6h
+        expr: sum(increase(da_agent_run_duration_seconds_count[6h]))
+
+  - name: slo-queue
+    rules:
+      - record: slo:queue:ratio_rate5m
+        expr: 1 - sum(rate(da_agent_queue_wait_seconds_bucket{le="30.0"}[5m])) / sum(rate(da_agent_queue_wait_seconds_count[5m]))
+      - record: slo:queue:ratio_rate30m
+        expr: 1 - sum(rate(da_agent_queue_wait_seconds_bucket{le="30.0"}[30m])) / sum(rate(da_agent_queue_wait_seconds_count[30m]))
+      - record: slo:queue:ratio_rate1h
+        expr: 1 - sum(rate(da_agent_queue_wait_seconds_bucket{le="30.0"}[1h])) / sum(rate(da_agent_queue_wait_seconds_count[1h]))
+      - record: slo:queue:ratio_rate6h
+        expr: 1 - sum(rate(da_agent_queue_wait_seconds_bucket{le="30.0"}[6h])) / sum(rate(da_agent_queue_wait_seconds_count[6h]))
+      - record: slo:queue:ratio_rate7d
+        expr: 1 - sum(rate(da_agent_queue_wait_seconds_bucket{le="30.0"}[7d])) / sum(rate(da_agent_queue_wait_seconds_count[7d]))
+      - record: slo:queue:events1h
+        expr: sum(increase(da_agent_queue_wait_seconds_count[1h]))
+      - record: slo:queue:events6h
+        expr: sum(increase(da_agent_queue_wait_seconds_count[6h]))
+
+  - name: slo-api
+    rules:
+      - record: slo:api:ratio_rate5m
+        expr: sum(rate(da_agent_http_requests_total{status=~"5.."}[5m])) / sum(rate(da_agent_http_requests_total[5m]))
+      - record: slo:api:ratio_rate30m
+        expr: sum(rate(da_agent_http_requests_total{status=~"5.."}[30m])) / sum(rate(da_agent_http_requests_total[30m]))
+      - record: slo:api:ratio_rate1h
+        expr: sum(rate(da_agent_http_requests_total{status=~"5.."}[1h])) / sum(rate(da_agent_http_requests_total[1h]))
+      - record: slo:api:ratio_rate6h
+        expr: sum(rate(da_agent_http_requests_total{status=~"5.."}[6h])) / sum(rate(da_agent_http_requests_total[6h]))
+      - record: slo:api:ratio_rate7d
+        expr: sum(rate(da_agent_http_requests_total{status=~"5.."}[7d])) / sum(rate(da_agent_http_requests_total[7d]))
+      - record: slo:api:events1h
+        expr: sum(increase(da_agent_http_requests_total[1h]))
+      - record: slo:api:events6h
+        expr: sum(increase(da_agent_http_requests_total[6h]))

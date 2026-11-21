@@ -1,0 +1,28 @@
+# Prometheus for DA-Agent (ADR 0044). It scrapes each process's /metrics on port 9100 over the
+# internal network, records SLIs, and sends alerts to Alertmanager.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 30s
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  - job_name: api
+    static_configs:
+      - targets: ["api:9100"]
+  # Every worker replica: the Compose service name resolves to all of them.
+  - job_name: worker
+    dns_sd_configs:
+      - names: ["worker"]
+        type: A
+        port: 9100
+        refresh_interval: 30s
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]

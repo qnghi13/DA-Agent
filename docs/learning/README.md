@@ -31,3 +31,4 @@ Mỗi cột mốc có một ghi chú tiếng Việt, theo khung sau:
 | [20. Circuit breaker và rate limit](20-circuit-breaker-rate-limit.md) | Harness: ngắt route đang lỗi, token bucket trong bộ nhớ và qua Postgres, fail open |
 | [21. Hủy, thời hạn và time travel](21-cancel-deadline-time-travel.md) | Harness: dừng hợp tác, ba nguồn dừng, nút Stop, fork từ checkpoint |
 | [22. Phản hồi, golden case, đánh giá trực tuyến](22-feedback-goldens.md) | Harness: 👍/👎 kèm lý do, golden case chạy lại khi đổi code, tỷ lệ 👍 theo phiên bản |
+| [23. SLO và cảnh báo](23-slo-alerts.md) | Harness: SLI, SLO, error budget, burn rate hai cửa sổ, Prometheus và Alertmanager |

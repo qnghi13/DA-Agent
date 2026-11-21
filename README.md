@@ -222,6 +222,10 @@ uv run python -m da_agent.goldens list --workspace $WORKSPACE      # cases and r
 uv run python -m da_agent.goldens run --workspace $WORKSPACE --yes # same / changed / error
 ```
 
+Compose also runs Prometheus (`127.0.0.1:9090`) and Alertmanager (`127.0.0.1:9093`) for SLOs and
+alerts ([ADR 0044](docs/adr/0044-slo-alerts.md)). Set `DA_AGENT_ALERT_WEBHOOK_URL` in `.env` to
+receive alerts; rules are in `deploy/prometheus/rules/` and their tests run with `uv run pytest`.
+
 Traces go to any OpenTelemetry (OTLP) endpoint set in `DA_AGENT_OTLP_ENDPOINT`, such as a local
 Phoenix (`http://127.0.0.1:6006/v1/traces`). Setting `DA_AGENT_TRACE_UI_URL=http://127.0.0.1:6006`
 on the API adds an "Open trace" link to each run in the UI. Phoenix shows every workspace's
