@@ -1,5 +1,6 @@
 // The operator dashboard's data (docs/adr/0026): types for /v1/ops, and the small pure functions
 // the page uses to group, judge, and format it.
+import { ApiError } from "./api";
 
 export type Window = "24h" | "7d" | "30d";
 
@@ -253,4 +254,27 @@ export function sortAlerts(alerts: OpsAlert[]): OpsAlert[] {
       (SEVERITY_ORDER[a.severity] ?? 2) - (SEVERITY_ORDER[b.severity] ?? 2) ||
       (a.started_at ?? "").localeCompare(b.started_at ?? ""),
   );
+}
+
+/**
+ * Alerts for the dashboard. When Alertmanager cannot be reached they are marked unavailable; a
+ * signed-out session still surfaces as one, so the page can send the operator to sign in.
+ */
+export async function fetchAlerts(api: {
+  getOpsAlerts: () => Promise<{ alerts: OpsAlert[]; available: boolean }>;
+}): Promise<{ alerts: OpsAlert[]; available: boolean }> {
+  try {
+    return await api.getOpsAlerts();
+  } catch (caught) {
+    if (caught instanceof ApiError && caught.status === 401) throw caught;
+    return { alerts: [], available: false };
+  }
+}
+
+/** The labels that tell two alerts of one kind apart, such as which workspace, in name order. */
+export function alertDetail(labels: Record<string, string>): string {
+  return Object.keys(labels)
+    .sort()
+    .map((key) => `${key} ${labels[key]}`)
+    .join(" · ");
 }

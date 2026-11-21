@@ -78,3 +78,11 @@ def test_floats_in_lists_and_tables_match_within_the_tolerance() -> None:
     table = {"columns": ["product", "share"], "rows": [["Tea", 0.333333], ["Coffee", 0.666667]]}
     close = {"columns": ["product", "share"], "rows": [["Coffee", 0.6666671], ["Tea", 0.3333331]]}
     assert compare_answers(answer("table", table), answer("table", close)) == "same"
+
+
+def test_tables_with_repeated_column_names_match_by_position() -> None:
+    table = {"columns": ["total", "total"], "rows": [[1, 2], [3, 4]]}
+
+    assert compare_answers(answer("table", table), answer("table", table)) == "same"
+    other = {"columns": ["total", "total"], "rows": [[2, 1], [3, 4]]}
+    assert compare_answers(answer("table", table), answer("table", other)) == "changed"

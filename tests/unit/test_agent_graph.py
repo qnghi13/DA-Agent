@@ -1062,3 +1062,19 @@ def test_a_cancel_during_a_throttle_wait_stops_the_run_at_once(dataset: SqliteDa
     assert result.stop_reason == "cancelled"
     assert len(adapter.requests) == 1
     assert len(waits) == 3
+
+
+def test_a_stop_after_the_answer_was_written_keeps_the_answer(dataset: SqliteDataset) -> None:
+    from da_agent.agent.stop import StopToken
+
+    stop = StopToken()
+
+    def on_event(event: dict[str, Any]) -> None:
+        if event.get("type") == "done":  # the answer node has written the answer
+            stop.cancel("cancelled")
+
+    adapter = ScriptedAdapter([plan(), sql(), submit("number", 350)])
+    result = run_stoppable(dataset, adapter, stop, on_event=on_event)
+
+    assert result.stop_reason == "answered"
+    assert result.answer is not None and result.answer.value == 350

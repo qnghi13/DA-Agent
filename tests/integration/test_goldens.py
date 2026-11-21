@@ -164,3 +164,48 @@ def test_a_report_folder_that_cannot_be_written_stops_before_spending(
     missing = tmp_path / "missing" / "report.jsonl"
     args = ["run", "--workspace", str(workspace), "--yes", "--output", str(missing)]
     assert main(args, handler_factory=no_handler) == 1
+
+
+class FixedHandler:
+    def __init__(self, result: dict[str, Any]) -> None:
+        self.result = result
+
+    def rerun(self, job: Job, run_id: str) -> dict[str, Any]:
+        return self.result
+
+
+def test_a_rerun_that_did_not_answer_is_no_answer_even_with_the_same_value(
+    conn: psycopg.Connection, workspace: UUID
+) -> None:
+    liked_run(conn, workspace, SHOP, 350)
+    unverified = {"stop_reason": "unverified", "answer": {"kind": "number", "value": 350}}
+
+    (row,) = rerun_cases(conn, golden_cases(conn, workspace), FixedHandler(unverified))  # type: ignore[arg-type]
+
+    assert row["outcome"] == "no_answer"
+
+
+def test_list_filters_by_dataset_and_shows_notes(
+    conn: psycopg.Connection, workspace: UUID, schema: str, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:  # fmt: skip
+    from psycopg.conninfo import make_conninfo
+
+    for dataset_id, note in ((SHOP, "shop note"), (GONE, "other note")):
+        run = liked_run(conn, workspace, dataset_id, 1)
+        set_feedback(conn, run, "down", ["wrong_number"], note, "member")
+    assert POSTGRES_URL is not None
+    url = make_conninfo(POSTGRES_URL, options=f"-c search_path={schema}")
+    monkeypatch.setenv("DA_AGENT_DATABASE_URL", url)
+    monkeypatch.setenv("DA_AGENT_DATA_DIR", str(tmp_path))
+
+    assert main(["list", "--workspace", str(workspace), "--dataset", str(SHOP)]) == 0
+
+    out = capsys.readouterr().out
+    assert "shop note" in out and "other note" not in out
+
+
+@pytest.mark.parametrize("limit", ["0", "-1"])
+def test_a_limit_must_be_positive(limit: str, capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        main(["run", "--workspace", str(SHOP), "--limit", limit])

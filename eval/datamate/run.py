@@ -121,6 +121,8 @@ def eval_routes(
     replay_dir/cassette.jsonl: a miss stops the question and no key is needed, or with live it calls
     the model, and the whole new cassette, replayed and live, goes to output_dir."""
     if replay_dir is None:
+        if replay_miss == "live":
+            raise ValueError("--replay-miss live needs --replay RUN_DIR")
         routes = build_routes(spec, env)
         return (record_routes(routes, output_dir / CASSETTE) if record else routes), None
     if replay_dir.resolve() == output_dir.resolve():

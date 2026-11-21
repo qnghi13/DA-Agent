@@ -592,3 +592,60 @@ def test_a_call_asked_after_a_stop_never_goes_out() -> None:
         client.complete(REQUEST, run_id="r", interrupted=lambda: True)
 
     assert primary.calls == 0 and ledger.records() == []
+
+
+def test_an_interrupted_wait_gives_its_request_slot_back() -> None:
+    from da_agent.llm.ratelimit import MemoryRateLimiter, RouteLimit
+    from da_agent.llm.types import CallInterruptedError
+
+    limiter = MemoryRateLimiter({"groq:groq-model": RouteLimit(rpm=1)}, clock=lambda: 0.0)
+    adapter = ScriptedAdapter("groq", [reply(), reply()])
+    client, _, waits = make_client(adapter, limiter=limiter, max_throttle_wait=300.0)
+    client.complete(REQUEST, run_id="r")
+    with pytest.raises(CallInterruptedError):
+        client.complete(REQUEST, run_id="r", interrupted=lambda: len(waits) >= 1)
+    waits.clear()
+
+    client.complete(REQUEST, run_id="r")
+
+    # One request queued behind the first: 60 s, not 120 s for a slot the stopped call held.
+    assert sum(waits) == pytest.approx(60.0)
+
+
+def test_a_breaker_opened_during_a_retry_wait_stops_the_retry() -> None:
+    from da_agent.llm.breaker import BreakerPolicy
+
+    primary = ScriptedAdapter("groq", [TransientLLMError("down"), reply("late")])
+    backup = ScriptedAdapter("gemini", [reply("backup")])
+    holder: dict[str, LLMClient] = {}
+
+    def sleep(seconds: float) -> None:
+        # Other runs on this route fail meanwhile, and open its breaker.
+        for _ in range(5):
+            holder["client"]._breakers[0].record_failure()
+
+    client = LLMClient(
+        [Route(primary, "groq-model"), Route(backup, "gemini-model")], CostLedger(),
+        sleep=sleep, max_retries=2, breaker_policy=BreakerPolicy(failures=5),
+    )  # fmt: skip
+    holder["client"] = client
+
+    assert client.complete(REQUEST, run_id="r").content == "backup"
+    assert primary.calls == 1
+
+
+def test_a_throttled_attempt_is_marked_on_its_span() -> None:
+    from da_agent.llm.types import ThrottledError
+
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    client, _, _ = make_client(
+        ScriptedAdapter("groq", []), ScriptedAdapter("gemini", [reply()]),
+        limiter=FakeLimiter([ThrottledError("busy"), 0.0]), tracer=provider.get_tracer("t"),
+    )  # fmt: skip
+
+    client.complete(REQUEST, run_id="r")
+
+    throttled = [s for s in exporter.get_finished_spans() if s.attributes.get("da_agent.throttled")]
+    assert len(throttled) == 1

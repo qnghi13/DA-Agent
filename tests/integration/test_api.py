@@ -631,3 +631,16 @@ def test_a_note_with_a_nul_character_is_refused_not_a_server_error(
     )
 
     assert response.status_code == 422
+
+
+def test_removing_a_rating_needs_a_finished_run_and_logs_only_a_real_change(
+    client: TestClient, conn: psycopg.Connection, key: str
+) -> None:
+    run_id = answered_run(client, conn, key)
+    dataset_id = ready_dataset(client, conn, key)
+    queued = ask(client, key, dataset_id, "Total?")
+
+    assert client.delete(f"/v1/runs/{queued}/feedback", headers=auth(key)).status_code == 409
+    assert client.delete(f"/v1/runs/{run_id}/feedback", headers=auth(key)).status_code == 204
+
+    assert "run.feedback" not in audit_actions(conn)

@@ -65,11 +65,20 @@ def rerun_cases(
             done({**row, "outcome": "error", "actual": None, "error": str(error)[:500]})
             continue
         actual = result.get("answer")
-        outcome = compare_answers(case.expected, actual)
+        # An answer the run did not stand behind (unverified, stopped) is no answer.
+        answered = result.get("stop_reason") == "answered"
+        outcome = compare_answers(case.expected, actual if answered else None)
         done(
             {**row, "outcome": outcome, "actual": actual, "stop_reason": result.get("stop_reason")}
         )
     return rows
+
+
+def _positive(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return value
 
 
 def _worker_handler(settings: Settings, conn: psycopg.Connection) -> RunHandler:
@@ -96,7 +105,7 @@ def main(
         command.add_argument("--dataset", type=uuid.UUID)
     commands.choices["list"].add_argument("--json", action="store_true")
     run = commands.choices["run"]
-    run.add_argument("--limit", type=int)
+    run.add_argument("--limit", type=_positive)
     run.add_argument("--yes", action="store_true", help="rerun them; this calls the model")
     run.add_argument(
         "--output", type=Path, help="JSONL report; default DATA_DIR/goldens/goldens-<time>.jsonl"
@@ -108,7 +117,7 @@ def main(
         with connect(settings.database_url, schema=settings.schema) as conn:
             cases = golden_cases(conn, args.workspace, args.dataset)
             if args.command == "list":
-                disliked = disliked_runs(conn, args.workspace, limit=50)
+                disliked = disliked_runs(conn, args.workspace, limit=50, dataset_id=args.dataset)
                 if args.json:
                     shown = {"cases": _cases_view(cases), "disliked": disliked}
                     print(json.dumps(shown, indent=2, ensure_ascii=False, default=str))
@@ -116,9 +125,10 @@ def main(
                     for case in cases:
                         print(f"case {case.id}  {case.question}  -> {json.dumps(case.expected)}")
                     for row in disliked:
-                        print(
-                            f"down {row['run_id']}  {row['question']}  {','.join(row['reasons'])}"
-                        )
+                        reasons = ",".join(row["reasons"]) or "-"
+                        print(f"down {row['run_id']}  {row['question']}  {reasons}")
+                        if row["note"]:
+                            print(f"     note: {row['note']}")
                 return 0
             if args.limit is not None:
                 cases = cases[: args.limit]

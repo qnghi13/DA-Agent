@@ -45,6 +45,7 @@ class StopToken:
         self._probe = probe
         self._probe_every = probe_every
         self._probed_at = float("-inf")
+        self._probe_failed = False
 
     def cancel(self, reason: str) -> None:
         """Ask the run to stop. The first reason given wins."""
@@ -67,8 +68,12 @@ class StopToken:
                 self._probed_at = now
                 try:
                     self._reason = self._probe()
+                    self._probe_failed = False
                 except Exception:
-                    logger.exception("the stop probe failed; the run goes on")
+                    # Once per outage, not once a second: the run goes on either way.
+                    if not self._probe_failed:
+                        logger.exception("the stop probe failed; the run goes on")
+                    self._probe_failed = True
             return self._reason
 
     def check(self) -> None:

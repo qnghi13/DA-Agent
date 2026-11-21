@@ -384,6 +384,7 @@ def test_the_operator_sees_firing_alerts_from_alertmanager(
         "severity": "page",
         "summary": "A job has waited more than 5 minutes.",
         "started_at": "2026-11-21T10:00:00Z",
+        "state": "active",
         "labels": {},
     }
     assert shown["alerts"][1]["labels"] == {"workspace_id": "w1"}
@@ -405,3 +406,28 @@ def test_an_unreachable_alertmanager_is_not_a_server_error(
     sign_in(client, conn, None)
 
     assert client.get("/v1/ops/alerts").json() == {"alerts": [], "available": False}
+
+
+def test_malformed_alerts_are_skipped_and_states_are_shown(
+    settings: ApiSettings, conn: psycopg.Connection
+) -> None:
+    good = {
+        "labels": {"alertname": "WorkerDown", "severity": "page"},
+        "annotations": {"summary": "No worker."},
+        "startsAt": "2026-11-21T10:00:00Z",
+        "status": {"state": "active"},
+    }
+    payload = ["junk", {"labels": ["not", "a", "dict"]}, {**good, "startsAt": 5}, good]
+    settings = dataclasses.replace(
+        settings, alertmanager_url="http://alertmanager:9093", alert_transport=alertmanager(payload)
+    )
+    client = TestClient(create_app(settings))
+    sign_in(client, conn, None)
+
+    shown = client.get("/v1/ops/alerts").json()
+
+    assert shown["available"] is True
+    assert [(a["name"], a["state"]) for a in shown["alerts"]] == [
+        ("WorkerDown", "active"), ("WorkerDown", "active"),
+    ]  # fmt: skip
+    assert {a["started_at"] for a in shown["alerts"]} == {None, "2026-11-21T10:00:00Z"}

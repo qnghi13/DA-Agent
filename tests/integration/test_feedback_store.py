@@ -145,3 +145,32 @@ def test_feedback_stays_in_its_workspace(conn: psycopg.Connection, workspace: UU
         ["misunderstood"],
         "not this",
     )
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        {"kind": "list", "value": [], "reason": None},
+        {"kind": "text", "value": "  ", "reason": None},
+        {"kind": "table", "value": {"columns": ["a"], "rows": []}, "reason": None},
+        {"kind": "number", "value": None, "reason": None},
+    ],
+)
+def test_an_empty_answer_makes_no_golden_case(
+    conn: psycopg.Connection, workspace: UUID, answer: dict[str, Any]
+) -> None:
+    run = finished_run(conn, workspace, {"stop_reason": "answered", "answer": answer})
+
+    set_feedback(conn, run, "up", [], None, "member")
+
+    assert golden_cases(conn, workspace) == []
+
+
+def test_clearing_reports_whether_there_was_a_rating(
+    conn: psycopg.Connection, workspace: UUID
+) -> None:
+    run = finished_run(conn, workspace)
+    set_feedback(conn, run, "up", [], None, "member")
+
+    assert clear_feedback(conn, run.id, workspace) is True
+    assert clear_feedback(conn, run.id, workspace) is False

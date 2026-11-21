@@ -1064,3 +1064,8 @@ def test_the_run_deadline_reaches_the_agent_and_the_manifest(
     args.max_seconds = 120.0
     manifest = eval_manifest(args, [Route(ScriptedAdapter([]), "m")])
     assert manifest["limits"]["agent"]["max_seconds"] == 120.0
+
+
+def test_live_replay_misses_need_a_replay(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="--replay"):
+        eval_routes("groq:m", {}, tmp_path, record=False, replay_dir=None, replay_miss="live")

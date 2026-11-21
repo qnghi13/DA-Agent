@@ -180,3 +180,20 @@ tests:
       - eval_time: 31m
         alertname: FeedbackLow
         exp_alerts: []
+
+  # Our own limiter refuses many calls; those never reach the provider and must not dilute it.
+  - interval: 1m
+    input_series:
+      - series: 'da_agent_llm_calls_total{provider="groq",model="m",result="ok"}'
+        values: '0+2x40'
+      - series: 'da_agent_llm_calls_total{provider="groq",model="m",result="transient"}'
+        values: '0+1x40'
+      - series: 'da_agent_llm_calls_total{provider="groq",model="m",result="throttled"}'
+        values: '0+30x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: ModelErrorsHigh
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "More than a fifth of model calls fail at the provider."

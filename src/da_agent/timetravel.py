@@ -30,7 +30,8 @@ from psycopg.rows import DictRow, dict_row
 from da_agent.agent.graph import build_graph
 from da_agent.config import ConfigError, Settings
 from da_agent.storage.db import connect, search_path_option
-from da_agent.storage.jobs import JobQueue
+from da_agent.storage.jobs import Job, JobQueue
+from da_agent.worker.worker import PermanentJobError
 
 MAX_ITEMS = 50
 
@@ -132,10 +133,11 @@ def copy_checkpoint(
 
 
 def _print_rows(rows: Sequence[CheckpointRow]) -> None:
-    print(f"{'step':>4}  {'checkpoint':<38}  {'ran':<14}  {'next':<14}  iter  stop")
+    print(f"{'step':>4}  {'saved':<26}  {'checkpoint':<38}  {'ran':<14}  {'next':<14}  iter  stop")
     for row in rows:
+        saved = (row.created_at or "-")[:26]
         print(
-            f"{row.step:>4}  {row.checkpoint_id:<38}  {','.join(row.ran):<14}  "
+            f"{row.step:>4}  {saved:<26}  {row.checkpoint_id:<38}  {','.join(row.ran):<14}  "
             f"{','.join(row.next) or '-':<14}  {row.iterations:>4}  {row.stop_reason or '-'}"
         )
 
@@ -148,18 +150,23 @@ def _checkpoint_connection(settings: Settings) -> psycopg.Connection[DictRow]:
     )
 
 
-def _run_fork(settings: Settings, run_id: str, fork_id: str) -> dict[str, Any]:
-    """Run the fork as the worker would run the job: same dataset, documents, routes, and
-    limits. Imported here, since only a fork needs model routes and the sandbox."""
-    from da_agent.worker.__main__ import build_worker
-
+def _find_run(settings: Settings, run_id: str) -> Job:
     with connect(settings.database_url, schema=settings.schema) as conn:
         try:
             job = JobQueue(conn).find_run(uuid.UUID(run_id))
         except ValueError as error:
             raise LookupError(f"{run_id!r} is not a run id") from error
-        if job is None:
-            raise LookupError(f"no run {run_id}")
+    if job is None:
+        raise LookupError(f"no run {run_id}")
+    return job
+
+
+def _run_fork(settings: Settings, job: Job, fork_id: str) -> dict[str, Any]:
+    """Run the fork as the worker would run the job: same dataset, documents, routes, and
+    limits. Imported here, since only a fork needs model routes and the sandbox."""
+    from da_agent.worker.__main__ import build_worker
+
+    with connect(settings.database_url, schema=settings.schema) as conn:
         handler = build_worker(settings, os.environ, ledger_conn=conn).handlers["run"]
         return handler.fork(job, fork_id)
 
@@ -196,12 +203,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(json.dumps(state, indent=2, ensure_ascii=False, default=str))
             else:
                 # Named after the run, so the ledger charges the fork to its workspace.
+                # Check the run before writing anything, so a bad id leaves no thread behind.
+                job = _find_run(settings, args.run_id)
                 fork_id = f"fork-{args.run_id}-{uuid.uuid4().hex[:8]}"
                 copy_checkpoint(saver, args.run_id, args.checkpoint_id, fork_id)
                 print(f"fork {fork_id}", file=sys.stderr, flush=True)
-                result = _run_fork(settings, args.run_id, fork_id)
+                result = _run_fork(settings, job, fork_id)
                 print(json.dumps(result, indent=2, ensure_ascii=False, default=str))
-    except (LookupError, ValueError, ConfigError, psycopg.Error) as error:
+    except (LookupError, ValueError, ConfigError, PermanentJobError, psycopg.Error) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     return 0

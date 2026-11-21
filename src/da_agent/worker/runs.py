@@ -135,6 +135,9 @@ class RunHandler:
         ):
             events = RunEvents(events_conn)
             queue = JobQueue(events_conn)
+            # The stop probe reads through this connection on the run's thread: a stalled
+            # database must not stall the run with it.
+            events_conn.execute("SET statement_timeout = '5s'")
 
             def stop_asked() -> str | None:
                 # A lost lease means another worker owns the job now: stop spending at once.

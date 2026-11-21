@@ -44,6 +44,11 @@ answer was right, and nothing turned real questions into regression checks.
 - Reusing the DataMate scorer: competition-specific, and the core must not depend on `eval/`.
 
 **Consequences:**
+- Follow-ups (2026-11-21): an empty answer (no value, blank text, no list items or table rows)
+  makes no case; a rerun that does not end `answered` counts as `no_answer` even when its value
+  matches; removing a rating needs a finished run and is audited only when there was one, in the
+  same transaction; the ops panel counts ratings by when they were given; tables with repeated
+  column names compare by position.
 - A 👍 says the user believes the answer, and they can be wrong. `changed` means look again, not
   failed; a case whose expected answer was wrong is retired by rating the run down.
 - A rerun reads the dataset as it is now: a rebuilt dataset can change answers, so a `changed` may

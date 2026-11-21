@@ -48,6 +48,11 @@ watched the system between visits: no SLOs, no error budgets, no alerts.
 - Grafana for now: Prometheus and the ops dashboard are enough; it can be added later.
 
 **Consequences:**
+- Follow-ups (2026-11-21): ModelErrorsHigh leaves calls our own limiter refused out; no
+  `_created` series; a failed attempt is counted with the status the queue gave the job, so a
+  failure after a cancel request counts as cancelled; malformed Alertmanager items are skipped and
+  each alert shows its state and labels; an automated test checks that WorkerDown inhibits
+  QueueStuck.
 - Process counters reset on restart; `rate()` and `increase()` account for it.
 - With little traffic, burn-rate alerts need their minimum event counts; a real outage on a quiet
   hour may only reach the ticket alert, or WorkerDown and QueueStuck.

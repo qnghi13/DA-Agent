@@ -119,3 +119,23 @@ describe("alerts", () => {
     expect(sorted.map((a) => a.name)).toEqual(["WorkerDown", "QueueStuck", "Budget"]);
   });
 });
+
+describe("loading alerts", () => {
+  it("marks Alertmanager unavailable on its own errors, but lets a sign-out through", async () => {
+    const { fetchAlerts } = await import("./ops");
+    const { ApiError } = await import("./api");
+
+    const down = { getOpsAlerts: async () => { throw new ApiError(502, "bad gateway"); } };
+    const signedOut = { getOpsAlerts: async () => { throw new ApiError(401, "signed out"); } };
+
+    expect(await fetchAlerts(down)).toEqual({ alerts: [], available: false });
+    await expect(fetchAlerts(signedOut)).rejects.toThrow("signed out");
+  });
+
+  it("names the labels that tell two alerts of one kind apart", async () => {
+    const { alertDetail } = await import("./ops");
+
+    expect(alertDetail({ workspace_id: "w1", route: "groq:m" })).toBe("route groq:m · workspace_id w1");
+    expect(alertDetail({})).toBe("");
+  });
+});

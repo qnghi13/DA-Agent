@@ -48,9 +48,23 @@ def _golden_answer(job: Job) -> dict[str, Any] | None:
     answer = result.get("answer")
     if result.get("stop_reason") != "answered" or not isinstance(answer, dict):
         return None
-    if answer.get("kind") == "unanswerable":
+    if answer.get("kind") == "unanswerable" or _empty(answer.get("value")):
         return None
     return answer
+
+
+def _empty(value: Any) -> bool:
+    """An answer with nothing in it checks nothing: no value, blank text, or no list items or
+    table rows."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, list):
+        return not value
+    if isinstance(value, dict):
+        return not value.get("rows")
+    return False
 
 
 def set_feedback(
@@ -110,13 +124,15 @@ def _retire(conn: psycopg.Connection, job_id: UUID) -> None:
     )
 
 
-def clear_feedback(conn: psycopg.Connection, job_id: UUID, workspace_id: UUID) -> None:
+def clear_feedback(conn: psycopg.Connection, job_id: UUID, workspace_id: UUID) -> bool:
+    """Take a rating back. Returns whether there was one."""
     with conn.transaction():
-        conn.execute(
+        deleted = conn.execute(
             "DELETE FROM run_feedback WHERE job_id = %s AND workspace_id = %s",
             (job_id, workspace_id),
-        )
+        ).rowcount
         _retire(conn, job_id)
+    return deleted > 0
 
 
 def feedback_of(conn: psycopg.Connection, job_id: UUID, workspace_id: UUID) -> Feedback | None:
@@ -145,12 +161,17 @@ def golden_cases(
         ).fetchall()
 
 
-def disliked_runs(conn: psycopg.Connection, workspace_id: UUID, limit: int) -> list[dict[str, Any]]:
+def disliked_runs(
+    conn: psycopg.Connection, workspace_id: UUID, limit: int, dataset_id: UUID | None = None
+) -> list[dict[str, Any]]:
     """Runs rated down, newest first, with their reasons and notes: for an operator to review."""
+    dataset = str(dataset_id) if dataset_id is not None else None
     with conn.cursor(row_factory=dict_row) as cursor:
         return cursor.execute(
             "SELECT f.job_id AS run_id, j.payload ->> 'question' AS question, f.reasons, f.note, "
             "f.updated_at FROM run_feedback f JOIN jobs j ON j.id = f.job_id "
-            "WHERE f.workspace_id = %s AND f.rating = 'down' ORDER BY f.updated_at DESC LIMIT %s",
-            (workspace_id, limit),
+            "WHERE f.workspace_id = %s AND f.rating = 'down' "
+            "AND (%s::text IS NULL OR j.payload ->> 'dataset_id' = %s) "
+            "ORDER BY f.updated_at DESC LIMIT %s",
+            (workspace_id, dataset, dataset, limit),
         ).fetchall()

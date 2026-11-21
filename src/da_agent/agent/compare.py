@@ -79,9 +79,14 @@ def _same_table(expected: Any, actual: Any) -> bool:
         return False
     names = [str(name).strip().casefold() for name in columns]
     other_names = [str(name).strip().casefold() for name in other_columns]
-    if sorted(names) != sorted(other_names) or len(set(names)) != len(names):
+    if sorted(names) != sorted(other_names):
         return False
-    order = [other_names.index(name) for name in names]
+    if len(set(names)) == len(names):
+        order = [other_names.index(name) for name in names]
+    elif names == other_names:
+        order = list(range(len(names)))  # Repeated names: only the same order can match.
+    else:
+        return False
     try:
         reordered = [[row[i] for i in order] for row in other_rows]
     except (IndexError, TypeError):

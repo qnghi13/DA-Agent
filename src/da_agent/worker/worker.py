@@ -61,6 +61,17 @@ class WorkerConfig:
     agent_version: str | None = None
 
 
+def _failure_ending(status: str | None) -> dict[str, Any]:
+    """How a failed attempt ended, from the status the queue gave the job: queued again (a
+    retry), failed or cancelled for good, or None when another worker holds it now."""
+    if status == "queued":
+        return {"attempt": "retry", "status": None, "result": None}
+    if status is None:
+        return {"attempt": "lost", "status": None, "result": None}
+    attempt = "cancelled" if status == "cancelled" else "failed"
+    return {"attempt": attempt, "status": status, "result": None}
+
+
 class Worker:
     def __init__(
         self,
@@ -130,27 +141,29 @@ class Worker:
         try:
             handler = self.handlers.get(job.kind)
             if handler is None:
-                queue.fail(job.id, self.worker_id, f"no handler for {job.kind!r} jobs",
-                           retry_in_seconds=None)  # fmt: skip
+                status = queue.fail(job.id, self.worker_id, f"no handler for {job.kind!r} jobs",
+                                    retry_in_seconds=None)  # fmt: skip
+                ending = _failure_ending(status)
                 return
             try:
                 result = handler(job, lost)
             except PermanentJobError as error:
                 message = str(error)[:MAX_ERROR_CHARS]
-                queue.fail(job.id, self.worker_id, message, retry_in_seconds=None)
+                status = queue.fail(job.id, self.worker_id, message, retry_in_seconds=None)
+                ending = _failure_ending(status)
                 return
             except RetryableJobError as error:
                 delays = self.config.retry_delays
                 delay = delays[min(job.attempts, len(delays)) - 1] if delays else 0.0
                 message = str(error)[:MAX_ERROR_CHARS]
-                queue.fail(job.id, self.worker_id, message, retry_in_seconds=delay)
-                if job.attempts < job.max_attempts:
-                    ending = {"attempt": "retry", "status": None, "result": None}
+                status = queue.fail(job.id, self.worker_id, message, retry_in_seconds=delay)
+                ending = _failure_ending(status)
                 return
             except Exception as error:  # Any crash fails the job, by design.
                 trace.get_current_span().record_exception(error)
                 message = f"the job failed unexpectedly ({type(error).__name__})"
-                queue.fail(job.id, self.worker_id, message, retry_in_seconds=None)
+                status = queue.fail(job.id, self.worker_id, message, retry_in_seconds=None)
+                ending = _failure_ending(status)
                 return
             if lost.is_set():
                 # Another worker may own the job now; its result is the one that counts.

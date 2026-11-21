@@ -316,3 +316,15 @@ def test_feedback_by_reason_and_agent_version(conn: psycopg.Connection, shop: UU
     assert by_version["v2"]["up_rate"] == pytest.approx(1.0)
     assert (by_version["unknown"]["up"], by_version["unknown"]["down"]) == (0, 1)
     assert "SECRET-NOTE" not in json.dumps(data, default=str)
+
+
+def test_ratings_count_when_given_not_when_the_run_was_made(
+    conn: psycopg.Connection, shop: UUID
+) -> None:
+    old = job(conn, shop, status="succeeded", result=answered(), age="3 days")
+    rate(conn, old, shop, "down", ["unclear"])
+
+    panel = summary(conn, "24h")["feedback"]
+
+    assert (panel["up"], panel["down"]) == (0, 1)
+    assert panel["reasons"] == {"unclear": 1}

@@ -45,6 +45,10 @@ another worker had taken over. Postgres kept a checkpoint after every node, but 
 - Time travel in the UI: frontend work, and forks spend a workspace's budget.
 
 **Consequences:**
+- Follow-ups (2026-11-21): a stop seen once the final state is written keeps the answer; a wait
+  for the rate limiter that is interrupted gives its request slot back; the stop probe logs a
+  failure once per outage and its queries time out after 5 s; `fork` checks the run before it
+  copies anything, and `list` shows when each step was saved.
 - A stop waits for the model call or query in flight, so it takes up to that call's timeout. It
   never starts another call: the client checks before each route and attempt, and during waits.
   Tried in the UI while a run waited on its rate limit: the job ended `cancelled` in 1.4 s.

@@ -77,3 +77,62 @@ def test_the_alertmanager_config_is_valid_for_both_receivers(receiver: str, tmp_
     )  # fmt: skip
 
     assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_worker_down_inhibits_the_queue_alerts_it_causes(tmp_path: Path) -> None:
+    import json
+    import time
+    import urllib.request
+
+    template = (ROOT / "deploy" / "alertmanager" / "alertmanager.yml").read_text(encoding="utf-8")
+    (tmp_path / "config.yml").write_text(template.replace("RECEIVER", "none"), encoding="utf-8")
+    tmp_path.chmod(0o755)
+    (tmp_path / "config.yml").chmod(0o644)
+    started = subprocess.run(
+        ["docker", "run", "-d", "--rm", "-p", "127.0.0.1::9093", "-v", f"{tmp_path}:/etc/am:ro",
+         _image("alertmanager"), "--config.file=/etc/am/config.yml", "--cluster.listen-address="],
+        capture_output=True, text=True, check=True,
+    )  # fmt: skip
+    container = started.stdout.strip()
+    try:
+        port = (
+            subprocess.run(
+                ["docker", "port", container, "9093"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            .stdout.split(":")[-1]
+            .strip()
+        )
+        base = f"http://127.0.0.1:{port}/api/v2"
+        for _ in range(50):
+            try:
+                urllib.request.urlopen(f"{base}/status", timeout=1)  # noqa: S310 - local test container
+                break
+            except OSError:
+                time.sleep(0.2)
+        alerts = [
+            {"labels": {"alertname": name, "severity": "page"}}
+            for name in ("WorkerDown", "QueueStuck")
+        ]
+        request = urllib.request.Request(  # noqa: S310
+            f"{base}/alerts", data=json.dumps(alerts).encode(), method="POST",
+            headers={"Content-Type": "application/json"},
+        )  # fmt: skip
+        urllib.request.urlopen(request, timeout=5)  # noqa: S310
+        shown: dict[str, list] = {}
+        for _ in range(50):
+            with urllib.request.urlopen(f"{base}/alerts", timeout=5) as response:  # noqa: S310
+                shown = {
+                    a["labels"]["alertname"]: a["status"]["inhibitedBy"]
+                    for a in json.loads(response.read())
+                }
+            if shown.get("QueueStuck"):
+                break
+            time.sleep(0.2)
+    finally:
+        subprocess.run(["docker", "rm", "-f", container], capture_output=True, check=False)
+
+    assert shown["WorkerDown"] == []
+    assert shown["QueueStuck"], "QueueStuck must be inhibited while WorkerDown fires"

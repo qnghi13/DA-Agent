@@ -79,11 +79,12 @@ groups:
         labels: {severity: page}
         annotations:
           summary: "A job has waited more than 5 minutes for a worker."
+      # Calls our own limiter refused never reached the provider, so they are left out.
       - alert: ModelErrorsHigh
         expr: >-
           sum(rate(da_agent_llm_calls_total{result=~"rate_limited|transient|permanent"}[10m]))
-          / sum(rate(da_agent_llm_calls_total[10m])) > 0.2
-          and sum(increase(da_agent_llm_calls_total[10m])) >= 10
+          / sum(rate(da_agent_llm_calls_total{result!="throttled"}[10m])) > 0.2
+          and sum(increase(da_agent_llm_calls_total{result!="throttled"}[10m])) >= 10
         for: 10m
         labels: {severity: ticket}
         annotations:

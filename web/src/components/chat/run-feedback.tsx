@@ -84,7 +84,24 @@ export function RunFeedbackControl({ api, run }: { api: Api; run: Run }) {
   return (
     <>
       <div className="ml-auto flex items-center gap-1">
-        {thanks && <span className="text-muted-foreground text-xs">Thanks</span>}
+        <span className="text-muted-foreground text-xs" aria-live="polite">
+          {thanks ? "Thanks" : ""}
+        </span>
+        {rating === "down" && !asking && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 text-xs"
+            onClick={() => {
+              setReasons(feedback?.reasons ?? []);
+              setNote(feedback?.note ?? "");
+              setThanks(false);
+              setAsking(true);
+            }}
+          >
+            Say why
+          </Button>
+        )}
         <Button
           variant="ghost"
           size="icon"
@@ -120,6 +137,7 @@ export function RunFeedbackControl({ api, run }: { api: Api; run: Run }) {
                 type="button"
                 variant={reasons.includes(reason.value) ? "secondary" : "outline"}
                 size="sm"
+                disabled={busy}
                 aria-pressed={reasons.includes(reason.value)}
                 onClick={() => toggle(reason.value)}
               >
@@ -132,11 +150,18 @@ export function RunFeedbackControl({ api, run }: { api: Api; run: Run }) {
             placeholder="Anything else? For example, the right figure."
             maxLength={MAX_NOTE}
             rows={2}
+            disabled={busy}
             value={note}
             onChange={(event) => setNote(event.target.value)}
           />
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="ghost" size="sm" onClick={() => setAsking(false)}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={() => setAsking(false)}
+            >
               Skip
             </Button>
             <Button type="button" size="sm" disabled={busy} onClick={send}>

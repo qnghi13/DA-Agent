@@ -138,3 +138,13 @@ def test_every_labelled_series_starts_at_zero_so_the_first_event_counts() -> Non
         labels = {"provider": "groq", "model": "m", "result": result}
         assert registry.get_sample_value("da_agent_llm_calls_total", labels) == 0
     assert registry.get_sample_value("da_agent_breaker_open", {"route": "groq:m"}) == 0
+
+
+def test_no_created_timestamp_series_double_the_count() -> None:
+    registry = CollectorRegistry()
+    WorkerMetrics(registry)
+    LLMMetrics(registry).prepare([("groq", "m")])
+
+    names = {sample.name for family in registry.collect() for sample in family.samples}
+
+    assert not any(name.endswith("_created") for name in names)

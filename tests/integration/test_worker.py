@@ -719,3 +719,78 @@ def test_a_strange_result_never_crashes_the_worker_loop(
     )  # fmt: skip
 
     assert worker.run_once()
+
+
+@pytest.mark.parametrize("error", [PermanentJobError("no data"), RetryableJobError("down")])
+def test_a_failure_after_a_cancel_counts_as_cancelled_like_the_database(
+    schema: str, conn: psycopg.Connection, workspace: UUID, error: Exception
+) -> None:
+    from prometheus_client import CollectorRegistry
+
+    from da_agent.telemetry.metrics import WorkerMetrics
+
+    job_id = JobQueue(conn).enqueue(workspace, "run", {})
+    registry = CollectorRegistry()
+
+    def cancelled_then_fails(job: Job, lost: Any) -> dict[str, Any]:
+        JobQueue(conn).request_cancel(job_id, workspace)
+        raise error
+
+    Worker(
+        config(schema, "w1"), {"run": cancelled_then_fails}, tracer=trace.NoOpTracer(),
+        metrics=WorkerMetrics(registry),
+    ).run_once()  # fmt: skip
+
+    assert job(conn, job_id, workspace).status == "cancelled"
+    assert metric(registry, "da_agent_runs_total", outcome="cancelled") == 1
+    assert metric(registry, "da_agent_runs_total", outcome="failed") == 0
+
+
+def test_a_fork_of_a_run_that_is_gone_leaves_no_thread_behind(
+    schema: str, conn: psycopg.Connection, workspace: UUID, dataset: SqliteDataset,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:  # fmt: skip
+    from psycopg.conninfo import make_conninfo
+
+    from da_agent.timetravel import main
+
+    job_id = enqueue_run(conn, workspace)
+    adapter = ScriptedAdapter([plan(), sql(), submit("number", 350)])
+    Worker(config(schema, "w1"), {"run": run_handler(adapter, dataset, schema)}).run_once()
+    assert URL is not None
+    url = make_conninfo(URL, options=f"-c search_path={schema}")
+    monkeypatch.setenv("DA_AGENT_DATABASE_URL", url)
+    monkeypatch.setenv("DA_AGENT_DATA_DIR", str(tmp_path))
+    assert main(["list", str(job_id), "--json"]) == 0
+    checkpoint = json.loads(capsys.readouterr().out)[1]["checkpoint_id"]
+    conn.execute("DELETE FROM jobs WHERE id = %s", (job_id,))
+
+    assert main(["fork", str(job_id), checkpoint]) == 1
+
+    forks = conn.execute("SELECT count(*) FROM checkpoints WHERE thread_id LIKE 'fork-%'")
+    assert forks.fetchone() == (0,)
+    assert "no run" in capsys.readouterr().err
+
+
+def test_the_checkpoint_list_shows_when_each_step_was_saved(
+    schema: str, conn: psycopg.Connection, workspace: UUID, dataset: SqliteDataset,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:  # fmt: skip
+    from psycopg.conninfo import make_conninfo
+
+    from da_agent.timetravel import main
+
+    job_id = enqueue_run(conn, workspace)
+    adapter = ScriptedAdapter([plan(), sql(), submit("number", 350)])
+    Worker(config(schema, "w1"), {"run": run_handler(adapter, dataset, schema)}).run_once()
+    assert URL is not None
+    monkeypatch.setenv(
+        "DA_AGENT_DATABASE_URL", make_conninfo(URL, options=f"-c search_path={schema}")
+    )
+    monkeypatch.setenv("DA_AGENT_DATA_DIR", str(tmp_path))
+
+    assert main(["list", str(job_id)]) == 0
+
+    header, first = capsys.readouterr().out.splitlines()[:2]
+    assert "saved" in header
+    assert "20" in first  # the year of an ISO timestamp

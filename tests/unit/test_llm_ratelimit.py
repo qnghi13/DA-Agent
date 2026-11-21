@@ -116,3 +116,13 @@ def test_the_estimate_counts_messages_tools_and_the_output_cap() -> None:
     estimate = estimate_tokens(request)
 
     assert 600 <= estimate <= 700
+
+
+def test_release_returns_the_request_and_its_tokens() -> None:
+    limits, _ = limiter(rpm=60, tpm=6000)
+    for _ in range(60):
+        limits.acquire(KEY, 100, max_wait=30)
+
+    limits.release(KEY, 100)
+
+    assert limits.acquire(KEY, 100, max_wait=30) == 0.0

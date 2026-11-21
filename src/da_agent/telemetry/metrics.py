@@ -20,10 +20,15 @@ from prometheus_client import (
     Counter,
     Gauge,
     Histogram,
+    disable_created_metrics,
     start_http_server,
 )
 
 logger = logging.getLogger(__name__)
+
+# Each counter and histogram would also export a _created timestamp series, doubling the series
+# for nothing the rules use.
+disable_created_metrics()
 
 RUN_SECONDS = (1, 2, 5, 10, 20, 30, 60, 120, 300)
 WAIT_SECONDS = (1, 2, 5, 10, 20, 30, 60, 120, 300, 600)

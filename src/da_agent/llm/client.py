@@ -297,6 +297,9 @@ class LLMClient:
                 if breaker is not None and not breaker.allow():
                     raise
                 self._wait(wait, interrupted)
+                # Other calls may have opened the breaker while this one waited.
+                if breaker is not None and breaker.state == "open":
+                    raise
                 attempt += 1
             except Exception:
                 # A bug or an interruption says nothing about the provider either.
@@ -356,8 +359,15 @@ class LLMClient:
                 response = route.adapter.complete(request, route.model)
             except LLMError as error:
                 if self._limiter is not None and reserved:
-                    self._limiter.settle(key, reserved, 0)
+                    if isinstance(error, CallInterruptedError):
+                        # Stopped while waiting its turn: the request never went out.
+                        self._limiter.release(key, reserved)
+                    else:
+                        self._limiter.settle(key, reserved, 0)
                 span.set_status(Status(StatusCode.ERROR, type(error).__name__))
+                if isinstance(error, ThrottledError):
+                    # Refused by our own limit: no call reached the provider.
+                    span.set_attribute("da_agent.throttled", True)
                 if isinstance(error, CallInterruptedError):
                     raise  # No call went out, so the ledger has nothing to record.
                 if self._metrics is not None:

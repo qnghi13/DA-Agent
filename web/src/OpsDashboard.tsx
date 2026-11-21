@@ -20,6 +20,8 @@ import {
   OUTCOME_LABELS,
   STOP_LABELS,
   sortAlerts,
+  alertDetail,
+  fetchAlerts,
   type Window,
 } from "./ops";
 
@@ -159,9 +161,13 @@ export function OpsDashboard({ api }: { api: Api }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [next, recent] = await Promise.all([api.getOpsSummary(window_), api.getOpsFailures()]);
       // Alerts come from Alertmanager; when it is down, the rest of the dashboard still loads.
-      setFiring(await api.getOpsAlerts().catch(() => ({ alerts: [], available: false })));
+      const [next, recent, alerts] = await Promise.all([
+        api.getOpsSummary(window_),
+        api.getOpsFailures(),
+        fetchAlerts(api),
+      ]);
+      setFiring(alerts);
       setSummary(next);
       setFailures(recent.failures);
       setMoreFailures(recent.failures.length === 25);
@@ -783,6 +789,11 @@ function AlertList({ alerts, available }: { alerts: OpsAlert[]; available: boole
             </span>
             <span className="font-medium">{alert.name}</span>
             <span className="text-muted-foreground">{alert.summary}</span>
+            {alertDetail(alert.labels) && (
+              <span className="text-muted-foreground font-mono text-xs">
+                {alertDetail(alert.labels)}
+              </span>
+            )}
             {alert.started_at && (
               <span className="text-muted-foreground ml-auto text-xs">
                 since {new Date(alert.started_at).toLocaleString()}

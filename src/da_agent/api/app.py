@@ -913,17 +913,23 @@ def rate_run(run_id: str, body: FeedbackRequest, conn: Db, caller: Caller) -> di
     job = run_job(run_id, conn, caller)
     if job.status != "succeeded":
         raise HTTPException(status_code=409, detail=f"the run is {job.status}")
-    feedback.set_feedback(conn, job, body.rating, list(body.reasons), body.note, _author(caller))
-    # The rating only: notes are the user's words and stay out of the audit log.
-    log(conn, caller, "run.feedback", run_id, rating=body.rating)
+    with conn.transaction():
+        feedback.set_feedback(
+            conn, job, body.rating, list(body.reasons), body.note, _author(caller)
+        )
+        # The rating only: notes are the user's words and stay out of the audit log.
+        log(conn, caller, "run.feedback", run_id, rating=body.rating)
     return _feedback_view(feedback.feedback_of(conn, job.id, caller.workspace_id)) or {}
 
 
 @router.delete("/runs/{run_id}/feedback", status_code=204)
 def unrate_run(run_id: str, conn: Db, caller: Caller) -> Response:
     job = run_job(run_id, conn, caller)
-    feedback.clear_feedback(conn, job.id, caller.workspace_id)
-    log(conn, caller, "run.feedback", run_id, rating=None)
+    if job.status != "succeeded":
+        raise HTTPException(status_code=409, detail=f"the run is {job.status}")
+    with conn.transaction():
+        if feedback.clear_feedback(conn, job.id, caller.workspace_id):
+            log(conn, caller, "run.feedback", run_id, rating=None)
     return Response(status_code=204)
 
 
@@ -1245,6 +1251,29 @@ def ops_summary(
 
 
 ALERT_TIMEOUT_SECONDS = 2.0
+
+
+def _text(value: Any) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _alert_view(alert: Any) -> dict[str, Any] | None:
+    """One Alertmanager alert for the dashboard, or None when it is not the shape v2 returns."""
+    if not isinstance(alert, dict) or not isinstance(alert.get("labels"), dict):
+        return None
+    labels = {str(key): str(value) for key, value in alert["labels"].items()}
+    annotations = alert.get("annotations") if isinstance(alert.get("annotations"), dict) else {}
+    status = alert.get("status") if isinstance(alert.get("status"), dict) else {}
+    return {
+        "name": labels.pop("alertname", "unknown"),
+        "severity": labels.pop("severity", "ticket"),
+        "summary": _text(annotations.get("summary")) or "",
+        "started_at": _text(alert.get("startsAt")),
+        "state": _text(status.get("state")) or "unknown",
+        "labels": labels,
+    }
+
+
 _SEVERITY_ORDER = {"page": 0, "ticket": 1}
 
 
@@ -1267,16 +1296,9 @@ def ops_alerts(caller: Operator, settings: Settings) -> JSONResponse:
     except (httpx.HTTPError, ValueError) as error:
         logger.warning("could not read alerts from Alertmanager: %s", error)
         return JSONResponse({"alerts": [], "available": False}, headers=NO_STORE)
-    alerts = []
-    for alert in raw if isinstance(raw, list) else []:
-        labels = dict(alert.get("labels") or {})
-        name = labels.pop("alertname", "unknown")
-        severity = labels.pop("severity", "ticket")
-        alerts.append({
-            "name": name, "severity": severity,
-            "summary": (alert.get("annotations") or {}).get("summary", ""),
-            "started_at": alert.get("startsAt"), "labels": labels,
-        })  # fmt: skip
+    alerts = (
+        [shown for alert in raw if (shown := _alert_view(alert))] if isinstance(raw, list) else []
+    )
     # Pages before tickets; within each, the one firing longest first.
     alerts.sort(key=lambda a: (_SEVERITY_ORDER.get(a["severity"], 2), a["started_at"] or ""))
     return JSONResponse({"alerts": alerts, "available": True}, headers=NO_STORE)

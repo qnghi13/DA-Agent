@@ -123,9 +123,10 @@ class JobQueue:
 
     def fail(
         self, job_id: UUID, worker_id: str, error: str, *, retry_in_seconds: float | None
-    ) -> bool:
+    ) -> str | None:
         """Record a failure. With retry_in_seconds the job is queued again after that delay,
-        unless it has used its last attempt."""
+        unless it has used its last attempt; a job with a cancel request ends cancelled. Returns
+        the status the job now has, or None when this worker no longer held it."""
         cursor = self._conn.execute(
             """
             UPDATE jobs SET last_error = %s, lease_until = NULL, updated_at = now(),
@@ -137,10 +138,12 @@ class JobQueue:
                                    THEN NULL ELSE now() END,
                 run_after = now() + make_interval(secs => coalesce(%s::float8, 0))
             WHERE id = %s AND worker_id = %s AND status = 'running'
+            RETURNING status
             """,
             (error, retry_in_seconds, retry_in_seconds, retry_in_seconds, job_id, worker_id),
         )
-        return cursor.rowcount == 1
+        row = cursor.fetchone()
+        return str(row[0]) if row else None
 
     def fail_expired(self) -> list[tuple[str, str]]:
         """End jobs whose lease ran out on their last attempt, and cancelled jobs whose worker

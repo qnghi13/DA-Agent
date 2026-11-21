@@ -154,3 +154,14 @@ def test_the_limiter_connection_gives_up_quickly(schema: str) -> None:
         }
 
     assert settings == {"statement_timeout": "2s", "lock_timeout": "2s", "search_path": schema}
+
+
+def test_release_gives_back_the_request_and_its_tokens(
+    conn: psycopg.Connection, schema: str
+) -> None:
+    limits = limiter(schema, rpm=1, tpm=1000)
+    limits.acquire(KEY, 1000, max_wait=30)
+
+    limits.release(KEY, 1000)
+
+    assert limits.acquire(KEY, 1000, max_wait=30) < 0.5

@@ -38,6 +38,10 @@ class RateLimiter(Protocol):
         """Replace a reservation of tokens with what the call used."""
         ...
 
+    def release(self, route_key: str, reserved: int) -> None:
+        """Give back a reservation whose call never went out: the request and its tokens."""
+        ...
+
 
 def route_key(provider: str, model: str) -> str:
     return f"{provider}:{model}"
@@ -123,3 +127,13 @@ class MemoryRateLimiter:
                 return
             reserved_cost = min(max(reserved, 0), limit.tpm)
             bucket.level = min(bucket.capacity, bucket.level + reserved_cost - max(used, 0))
+
+    def release(self, route_key: str, reserved: int) -> None:
+        limit = self._limits.get(route_key)
+        if limit is None:
+            return
+        with self._lock:
+            for kind, _, cost in bucket_costs(limit, reserved):
+                bucket = self._buckets.get((route_key, kind))
+                if bucket is not None:
+                    bucket.level = min(bucket.capacity, bucket.level + cost)

@@ -254,8 +254,9 @@ def _cost_panel(conn: psycopg.Connection, params: dict[str, Any]) -> dict[str, A
 
 
 def _feedback_panel(conn: psycopg.Connection, params: dict[str, Any]) -> dict[str, Any]:
-    """User ratings of the window's finished runs (ADR 0043): counts, the fixed reason words, and
-    the thumbs-up rate per agent version (ADR 0038). Notes are user text and never read here."""
+    """Ratings given in the window (ADR 0043): counts, the fixed reason words, and the thumbs-up
+    rate per agent version (ADR 0038); and the share of the window's finished runs that have a
+    rating. Notes are user text and never read here."""
     # A run's version is the one of its latest attempt; runs from before attempts were recorded
     # count as "unknown".
     rated = """
@@ -264,7 +265,7 @@ def _feedback_panel(conn: psycopg.Connection, params: dict[str, Any]) -> dict[st
             SELECT agent_version FROM job_attempts a WHERE a.job_id = j.id
             ORDER BY a.attempt DESC LIMIT 1
         ) v ON true
-        WHERE j.kind = 'run' AND j.created_at >= now() - %(span)s
+        WHERE j.kind = 'run' AND f.updated_at >= now() - %(span)s
     """
     totals = _one(
         conn,
@@ -272,17 +273,18 @@ def _feedback_panel(conn: psycopg.Connection, params: dict[str, Any]) -> dict[st
         "count(*) FILTER (WHERE f.rating = 'down') AS down " + rated,
         params,
     )
-    finished = _one(
+    share = _one(
         conn,
-        "SELECT count(*) AS n FROM jobs WHERE kind = 'run' AND status = 'succeeded' "
-        "AND created_at >= now() - %(span)s",
+        "SELECT count(*) AS finished, count(f.job_id) AS rated FROM jobs j "
+        "LEFT JOIN run_feedback f ON f.job_id = j.id "
+        "WHERE j.kind = 'run' AND j.status = 'succeeded' AND j.created_at >= now() - %(span)s",
         params,
-    )["n"]
+    )
     reasons = _rows(
         conn,
         "SELECT reason, count(*) AS n FROM jobs j JOIN run_feedback f ON f.job_id = j.id, "
         "unnest(f.reasons) AS reason "
-        "WHERE j.kind = 'run' AND j.created_at >= now() - %(span)s GROUP BY 1",
+        "WHERE j.kind = 'run' AND f.updated_at >= now() - %(span)s GROUP BY 1",
         params,
     )
     versions = _rows(
@@ -292,11 +294,11 @@ def _feedback_panel(conn: psycopg.Connection, params: dict[str, Any]) -> dict[st
         "count(*) FILTER (WHERE f.rating = 'down') AS down " + rated + " GROUP BY 1 ORDER BY 1",
         params,
     )
-    rated_count = totals["up"] + totals["down"]
+    finished = share["finished"]
     return {
         "up": totals["up"],
         "down": totals["down"],
-        "rated_share": rated_count / finished if finished else None,
+        "rated_share": share["rated"] / finished if finished else None,
         "reasons": {row["reason"]: row["n"] for row in reasons},
         "by_version": [
             {**row, "up_rate": row["up"] / (row["up"] + row["down"])} for row in versions

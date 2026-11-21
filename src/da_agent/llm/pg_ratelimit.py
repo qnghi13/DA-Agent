@@ -37,6 +37,9 @@ ON CONFLICT (route_key, kind) DO UPDATE SET
 RETURNING level
 """
 _RESERVE = "UPDATE rate_buckets SET level = level - %s WHERE route_key = %s AND kind = %s"
+_RELEASE = (
+    "UPDATE rate_buckets SET level = least(%s, level + %s) WHERE route_key = %s AND kind = %s"
+)
 _REFUND = (
     "UPDATE rate_buckets SET level = least(%s, level + %s) WHERE route_key = %s AND kind = 'tokens'"
 )
@@ -125,6 +128,19 @@ class PostgresRateLimiter:
             except Exception as error:  # Fail open on anything: the limiter must not stop calls.
                 self._fail_open(error)
                 return 0.0
+
+    def release(self, route_key: str, reserved: int) -> None:
+        limit = self._limits.get(route_key)
+        if limit is None:
+            return
+        with self._lock:
+            try:
+                conn = self._connection()
+                with conn.transaction():
+                    for kind, capacity, cost in bucket_costs(limit, reserved):
+                        conn.execute(_RELEASE, (capacity, cost, route_key, kind))
+            except Exception as error:  # Fail open, as in acquire.
+                self._fail_open(error)
 
     def settle(self, route_key: str, reserved: int, used: int) -> None:
         limit = self._limits.get(route_key)

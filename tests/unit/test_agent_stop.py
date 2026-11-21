@@ -78,3 +78,18 @@ def test_a_failing_probe_never_stops_the_run() -> None:
 
     token.check()
     assert token.reason is None
+
+
+def test_a_failing_probe_is_logged_once_not_every_check(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    def probe() -> str | None:
+        raise RuntimeError("database down")
+
+    token = StopToken(probe=probe, probe_every=0.0)
+
+    with caplog.at_level(logging.WARNING, logger="da_agent.agent.stop"):
+        for _ in range(5):
+            token.check()
+
+    assert len([r for r in caplog.records if r.levelno >= logging.WARNING]) == 1
