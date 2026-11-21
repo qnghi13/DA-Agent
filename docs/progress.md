@@ -18,6 +18,9 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
   (Groq +55). Then status variants and line-vs-header revenue (~12, checked by hand SQL), debt
   4, budget abstains 8 (SQLite functions, made-up columns). Semantic layer: private folder.
 ## Next step
+- **Add files to a dataset (2026-11-21):** spec approved (`docs/design/2026-11-21-add-files.md`),
+  plan written (`...-add-files-plan.md`, 9 tasks); not started. Versions in one dataset, ask on
+  overlap, labelled old answers, model repairs the user approves.
 0. Metric definitions on `main` (ADR 0036, note 16): saved from an answer's SQL, matched by
    code; eval +1 -> +7 (20 dev questions, $0.095). Phase 2, other readings with the answer, was
    built on a branch and removed (ADR 0037): `gpt-oss-20b` never flagged the ambiguity (4 real
