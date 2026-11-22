@@ -141,6 +141,9 @@ browser ─127.0.0.1:8080─> web (nginx: UI files, /v1 proxy)
 6. The result is a structured `AgentAnswer` with citations to tool results and artifacts.
 7. Reading a run, the API explains the answer's queries in plain words, read from the SQL with
    sqlglot; no model call ([ADR 0035](adr/0035-plain-explanation-from-sql.md)).
+8. To add files to a `ready` dataset, the client posts them to `/v1/datasets/{id}/files`. The API
+   stores them in a new folder and opens a dataset **version**; a `version` job checks it while
+   chat keeps using the current version ([ADR 0045](adr/0045-dataset-versions.md)).
 
 ## Ingestion
 
@@ -182,6 +185,23 @@ Implemented in `src/da_agent/ingestion/`:
 - The build also profiles each visible column (distinct values, number range and mean, frequent
   values) for the data overview people see; the agent's prompt does not use it
   ([ADR 0034](adr/0034-column-profile-at-build.md)).
+
+### Dataset versions
+
+Adding files makes a new row in `dataset_versions`; `datasets.current_version` is what runs read,
+and each run records the version it started on. The `version` job (Worker, ingestion in the
+sandbox) matches each raw table to the current version by header: unchanged, grown, or new. It
+builds with the existing spec and decides in code ([ADR 0045](adr/0045-dataset-versions.md)):
+
+- same shape, no overlap, new rows pass the quality checks: apply, no model call;
+- overlap by key, exact row, or date range: wait for a choice per table (replace, drop the
+  overlapping new rows, keep both);
+- a new table or failing quality: the model proposes spec entries for new tables only and
+  before/after repairs for failing columns; the user approves. Existing table specs are never
+  changed by the model.
+
+Only `apply` changes `current_version`, in one transaction. Version folders are siblings named
+`<dataset id>-v<n>`. Turns answered on an older version are labelled in the prompt and the UI.
 
 ## Agent graph
 
