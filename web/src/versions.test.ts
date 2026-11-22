@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DatasetVersion } from "./api";
 import {
   addedFiles,
+  earlierNewFilesText,
   isOlderVersion,
   isOpenVersion,
   missingDecisions,
@@ -139,5 +140,21 @@ describe("missingDecisions", () => {
   it("needs a file for a replace choice", () => {
     expect(missingDecisions(changes, { orders: "replace" }, {})).toEqual(["orders"]);
     expect(missingDecisions(changes, { orders: "replace" }, { orders: "a.csv" })).toEqual([]);
+  });
+});
+
+describe("earlierNewFilesText", () => {
+  it("names the files of the same upload that already hold the rows", () => {
+    expect(earlierNewFilesText({ earlier_new_files: ["dec.csv"] })).toBe(
+      "Some of these rows are also in dec.csv, sent in this same upload.",
+    );
+    expect(earlierNewFilesText({ earlier_new_files: ["a.csv", "b.csv"] })).toBe(
+      "Some of these rows are also in a.csv, b.csv, sent in this same upload.",
+    );
+  });
+
+  it("says nothing when the rows repeat only older data", () => {
+    expect(earlierNewFilesText({ earlier_new_files: [] })).toBeNull();
+    expect(earlierNewFilesText({})).toBeNull();
   });
 });

@@ -26,6 +26,11 @@ def runner(tmp_path_factory: pytest.TempPathFactory) -> Runner:
     again.mkdir()
     (again / "orders.csv").write_text("id,v\n1,a\n2,b\n", encoding="utf-8")
     (again / "orders_1.csv").write_text("id,v\n1,a\n2,b\n", encoding="utf-8")
+    twice = root / "uploads" / "up_twice"
+    twice.mkdir()
+    (twice / "orders.csv").write_text("id,v\n1,a\n2,b\n", encoding="utf-8")
+    for name in ("orders_dec_a.csv", "orders_dec_b.csv"):
+        (twice / name).write_text("id,v\n7,a\n8,b\n", encoding="utf-8")
     book = openpyxl.Workbook()
     book.active.append(["SỔ NHẬP"])
     book.active.append([])
@@ -119,3 +124,19 @@ def test_a_build_with_new_sources_reports_overlaps(runner: Runner) -> None:
     assert built.report is not None
     table = built.report.tables[0]
     assert (table.new_rows, [(o.kind, o.rows) for o in table.overlaps]) == (2, [("exact", 2)])
+
+
+def test_new_files_of_one_upload_are_compared_in_upload_order(runner: Runner) -> None:
+    ingested = runner.ingest(IngestRun(upload_id="up_twice", timeout_seconds=120))
+    assert ingested.output_dir is not None
+    spec = DatasetSpec(tables=[TableSpec(source="orders", name="orders")])
+    order = ["orders_dec_b.csv", "orders_dec_a.csv"]  # not name order
+
+    built = runner.build(BuildRun(ingest_id=ingested.output_dir.name, spec=spec, new_sources=order))
+
+    assert built.status == "ok", built.stderr
+    assert built.report is not None
+    overlaps = built.report.tables[0].overlaps
+    assert [(o.kind, o.rows, o.earlier_new_files) for o in overlaps] == [
+        ("exact", 2, ["orders_dec_b.csv"])
+    ]

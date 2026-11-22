@@ -803,7 +803,7 @@ def overlap_build(
         spec or orders_spec(),
         report,
         out,
-        new_sources=frozenset(new),
+        new_sources=list(new),
     )
 
 
@@ -859,6 +859,94 @@ def test_overlap_date_range(tmp_path: Path, out: Path) -> None:
     assert [(o.column, o.rows) for o in dates] == [("day", 1)]
     assert dates[0].examples == [{"day": "2025-01-15"}]
     assert [o for o in miss.tables[0].overlaps if o.kind == "date"] == []
+
+
+@pytest.mark.parametrize(("order", "later", "earlier"), [
+    (("orders_dec_b.csv", "orders_dec_a.csv"), "orders_dec_a.csv", "orders_dec_b.csv"),
+    (("orders_dec_a.csv", "orders_dec_b.csv"), "orders_dec_b.csv", "orders_dec_a.csv"),
+])  # fmt: skip
+def test_new_files_of_one_upload_are_checked_against_each_other_in_upload_order(
+    tmp_path: Path, out: Path, order: tuple[str, str], later: str, earlier: str
+) -> None:
+    old = "order_id,status\n1,paid\n2,paid\n"
+    december = "order_id,status\n7,paid\n8,open\n"
+    files = {"orders.csv": old, "orders_dec_a.csv": december, "orders_dec_b.csv": december}
+
+    result = overlap_build(tmp_path, out, files, new=order)
+
+    exact = [o for o in result.tables[0].overlaps if o.kind == "exact"]
+    assert [(o.rows, o.earlier_new_files) for o in exact] == [(2, [earlier])]
+    # Only the later file's rows are counted: the earlier one is compared with old rows only.
+    assert {e["order_id"] for e in exact[0].examples} == {"7", "8"}
+    assert len(exact[0].examples) == 2
+    assert result.tables[0].new_rows == 4
+    assert later not in exact[0].earlier_new_files
+
+
+def test_a_key_repeated_between_new_files_is_a_key_overlap(tmp_path: Path, out: Path) -> None:
+    old = "order_id,status\n1,open\n2,open\n3,open\n"
+    first = "order_id,status\n7,open\n"
+    second = "order_id,status\n7,paid\n9,open\n"
+    files = {"orders.csv": old, "orders_dec_1.csv": first, "orders_dec_2.csv": second}
+
+    result = overlap_build(tmp_path, out, files, new=("orders_dec_1.csv", "orders_dec_2.csv"))
+
+    assert [(o.kind, o.rows, o.key, o.earlier_new_files) for o in result.tables[0].overlaps] == [
+        ("key", 1, ["order_id"], ["orders_dec_1.csv"])
+    ]
+
+
+def test_an_overlap_with_old_rows_only_names_no_new_file(tmp_path: Path, out: Path) -> None:
+    text = "order_id,status\n1,paid\n"
+
+    result = overlap_build(tmp_path, out, {"orders.csv": text, "orders_1.csv": text})
+
+    assert [o.earlier_new_files for o in result.tables[0].overlaps] == [[]]
+
+
+def test_date_overlaps_compare_each_earlier_new_file_by_its_own_dates(
+    tmp_path: Path, out: Path
+) -> None:
+    old = "order_id,day\n1,2025-01-01\n2,2025-01-31\n"
+    december = "order_id,day\n5,2025-12-01\n6,2025-12-31\n"
+    november = "order_id,day\n7,2025-11-10\n"
+    late_december = "order_id,day\n8,2025-12-15\n"
+    spec = orders_spec(columns=[ColumnSpec(source="day", name="day", type="date")])
+    new = {
+        "orders_dec.csv": december,
+        "orders_nov.csv": november,
+        "orders_dec_2.csv": late_december,
+    }
+
+    result = overlap_build(tmp_path, out, {"orders.csv": old, **new}, spec, new=tuple(new))
+
+    # November falls between January and December but inside neither file's own dates.
+    dates = [o for o in result.tables[0].overlaps if o.kind == "date"]
+    assert [(o.rows, o.earlier_new_files, o.examples) for o in dates] == [
+        (1, ["orders_dec.csv"], [{"day": "2025-12-15"}])
+    ]
+
+
+def test_drop_overlap_against_an_earlier_new_file(tmp_path: Path, out: Path) -> None:
+    old = "order_id,status\n1,paid\n"
+    december = "order_id,status\n7,paid\n"
+    spec = orders_spec(
+        drop_overlap=[
+            OverlapDrop(file="orders_dec_b.csv", against=["orders.csv"], key=[]),
+            OverlapDrop(file="orders_dec_a.csv", against=["orders.csv", "orders_dec_b.csv"]),
+        ]
+    )
+    files = {"orders.csv": old, "orders_dec_a.csv": december, "orders_dec_b.csv": december}
+
+    overlap_build(tmp_path, out, files, spec, new=("orders_dec_b.csv", "orders_dec_a.csv"))
+
+    assert rows(out, "SELECT order_id, _source FROM orders ORDER BY _source") == [
+        ("1", "orders.csv"),
+        ("7", "orders_dec_b.csv"),
+    ]
+    assert rows(out, "SELECT reason, _source FROM _excluded") == [
+        ("already in orders.csv, orders_dec_b.csv", "orders_dec_a.csv")
+    ]
 
 
 def test_no_overlap_without_new_sources(tmp_path: Path, out: Path) -> None:
@@ -955,7 +1043,7 @@ def test_drop_overlap_quotes_names(tmp_path: Path, out: Path) -> None:
         tables=[TableSpec(source=report.tables[0].name, name="t", drop_overlap=[drop])]
     )
 
-    result = build(raw / RAW_DATABASE, spec, report, out, new_sources=frozenset({file_new}))
+    result = build(raw / RAW_DATABASE, spec, report, out, new_sources=[file_new])
 
     assert result.tables[0].error is None
     assert rows(out, "SELECT reason FROM _excluded") == [(f"already in {file_old}",)]

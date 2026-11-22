@@ -9,6 +9,7 @@ copied to `_excluded`, so nothing is dropped silently.
 """
 
 import itertools
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal
 
@@ -73,6 +74,8 @@ TOP_VALUES, TOP_VALUE_CHARS = 5, 60
 # A key identifies the older rows when its distinct values reach this share of them. The overlap
 # report lists this many example rows, each with at most this many columns.
 OVERLAP_KEY_SHARE, OVERLAP_EXAMPLES, OVERLAP_EXAMPLE_COLUMNS = 0.99, 5, 8
+# At most this many earlier new files are named on one overlap.
+MAX_NAMED_FILES = 20
 NUMBER_TYPES = ("integer", "number", "money", "quantity")
 # Excel serial numbers from 1954 to 2119. Five-digit numbers outside this range stay unparsed.
 EXCEL_SERIAL_MIN, EXCEL_SERIAL_MAX = 20000, 80000
@@ -129,6 +132,11 @@ class Overlap(BaseModel):
     key: list[str] = Field(default_factory=list, description="Raw key columns, for kind key.")
     column: str | None = Field(default=None, description="Clean date column, for kind date.")
     examples: list[dict[str, str | None]] = Field(default_factory=list)
+    earlier_new_files: list[str] = Field(
+        default_factory=list,
+        description="Files new in the same upload, earlier in upload order, that already hold "
+        "some of these rows. Empty when the rows repeat only older files.",
+    )
 
 
 class SubtotalCheck(BaseModel):
@@ -272,11 +280,14 @@ def build(
     spec: DatasetSpec,
     report: IngestReport,
     out_dir: Path,
-    new_sources: frozenset[str] = frozenset(),
+    new_sources: Sequence[str] = (),
 ) -> BuildReport:
     """Write dataset.duckdb to out_dir. One failing table is reported and the rest still build.
 
-    A row is new when the file part of its `_source` (the text before `#`) is in new_sources."""
+    A row is new when the file part of its `_source` (the text before `#`) is in new_sources.
+    new_sources is in upload order: each new file is checked against older files and the new
+    files before it, so two copies sent in one upload are found too."""
+    new_sources = tuple(dict.fromkeys(new_sources))
     result = BuildReport()
     raw_columns = {
         t.name: [c.name for c in t.columns if c.name not in META_COLUMNS] for t in report.tables
@@ -343,7 +354,7 @@ def _build_table(
     raw_columns: list[str],
     sensitive: set[str],
     raw_report: TableReport,
-    new_sources: frozenset[str] = frozenset(),
+    new_sources: tuple[str, ...] = (),
 ) -> TableBuild:
     new = _new_condition(new_sources)
     specs = {c.source: c for c in table.columns}
@@ -372,7 +383,9 @@ def _build_table(
     )
     proven = _exclude_proven_subtotals(connection, marked, table.source, raw_columns, raw_report)
     visible = [s for s in raw_columns if s not in hidden]
-    overlaps = _row_overlaps(connection, marked, raw_columns, visible, new) if new_sources else []
+    overlaps = (
+        _row_overlaps(connection, marked, raw_columns, visible, new_sources) if new_sources else []
+    )
     _drop_overlaps(connection, marked, raw_columns, table.drop_overlap)
     values = ", ".join(f"{lit(s)}, {q(s)}" for s in visible)
     raw_values = f"CAST(json_object({values}) AS VARCHAR)" if visible else "'{}'"
@@ -451,7 +464,7 @@ def _build_table(
             _check_column(connection, table.name, stage, c, scope=new, quarantine=False)
             for c in columns
         ]
-        report.overlaps += _date_overlaps(connection, table.name, columns, new)
+        report.overlaps += _date_overlaps(connection, table.name, columns, new_sources)
     connection.execute(f"DROP TABLE {q(stage)}")
     connection.execute(f"DROP TABLE {q(marked)}")
     return report
@@ -488,19 +501,56 @@ def _file_of(source: str = "_source") -> str:
     return f"split_part({source}, '#', 1)"
 
 
-def _new_condition(new_sources: frozenset[str]) -> str:
+def _new_condition(new_sources: Sequence[str]) -> str:
     """SQL that is true for a row of a new file."""
     if not new_sources:
         return "false"
     return f"{_file_of()} IN ({', '.join(lit(s) for s in sorted(new_sources))})"
 
 
-def _in_older_rows(marked: str, new: str, expression: str, guard: str = "true") -> str:
-    """A test that a new row's expression equals the expression of an older, kept row."""
-    return (
-        f"{guard} AND {expression} IN (SELECT {expression} FROM {q(marked)} "
-        f"WHERE __excluded IS NULL AND NOT ({new}) AND {guard})"
-    )
+def _rank(new_sources: Sequence[str], alias: str) -> str:
+    """SQL for a row's place in upload order: 0 for a row of an older file, i for a row of the
+    i-th new file. A row is compared only with rows of a lower rank."""
+    branches = " ".join(f"WHEN {lit(f)} THEN {i}" for i, f in enumerate(new_sources, start=1))
+    return f"CASE {_file_of(f'{alias}._source')} {branches} ELSE 0 END"
+
+
+def _columns(alias: str, columns: Sequence[str], wrap: str = "{}") -> str:
+    return f"list_value({', '.join(wrap.format(f'{alias}.{q(c)}') for c in columns)})"
+
+
+class _Earlier:
+    """Tests that a new row (alias n) repeats a kept row (alias o) that comes before it: a row of
+    an older file, or of a new file earlier in upload order."""
+
+    def __init__(self, marked: str, new_sources: Sequence[str]) -> None:
+        self.marked = q(marked)
+        self.rank_n, self.rank_o = _rank(new_sources, "n"), _rank(new_sources, "o")
+        self.base = f"n.__excluded IS NULL AND {self.rank_n} > 0"
+
+    def repeats(self, expression_n: str, expression_o: str, guard_n: str, guard_o: str) -> str:
+        return (
+            f"{guard_n} AND {expression_n} IN (SELECT {expression_o} FROM {self.marked} o "
+            f"WHERE o.__excluded IS NULL AND {self.rank_o} < {self.rank_n} AND {guard_o})"
+        )
+
+    def new_files(
+        self,
+        connection: duckdb.DuckDBPyConnection,
+        where: str,
+        expression_n: str,
+        expression_o: str,
+        guard_o: str,
+    ) -> list[str]:
+        """The new files, in upload order, that hold an earlier copy of a row matching where."""
+        found = connection.execute(
+            f"SELECT {_file_of('o._source')} AS f, min({self.rank_o}) AS r "
+            f"FROM {self.marked} n JOIN {self.marked} o ON {expression_n} = {expression_o} "
+            f"AND {self.rank_o} > 0 AND {self.rank_o} < {self.rank_n} "
+            f"AND o.__excluded IS NULL AND {guard_o} "
+            f"WHERE {where} GROUP BY f ORDER BY r LIMIT {MAX_NAMED_FILES}"
+        ).fetchall()
+        return [str(row[0]) for row in found]
 
 
 def _row_overlaps(
@@ -508,46 +558,56 @@ def _row_overlaps(
     marked: str,
     raw_columns: list[str],
     visible: list[str],
-    new: str,
+    new_sources: Sequence[str],
 ) -> list[Overlap]:
-    """Exact and key overlaps between kept new rows and kept older rows, before fill-down and
-    dedupe, so a `dedupe` flag cannot hide a re-sent file."""
+    """Exact and key overlaps between kept new rows and the kept rows before them, before
+    fill-down and dedupe, so a `dedupe` flag cannot hide a re-sent file."""
     found: list[Overlap] = []
     if not raw_columns:
         return found
-    base = f"FROM {q(marked)} WHERE __excluded IS NULL AND {new}"
-    whole = f"list_value({', '.join(q(c) for c in raw_columns)})"
-    exact = _in_older_rows(marked, new, whole)
+    earlier = _Earlier(marked, new_sources)
+    source = f"FROM {q(marked)} n WHERE"
+    whole_n, whole_o = _columns("n", raw_columns), _columns("o", raw_columns)
+    exact = earlier.repeats(whole_n, whole_o, "true", "true")
+    where = f"{earlier.base} AND {exact}"
     shown = visible[:OVERLAP_EXAMPLE_COLUMNS]
-    count = _scalar(connection, f"SELECT count(*) {base} AND {exact}")
+    count = _scalar(connection, f"SELECT count(*) {source} {where}")
     if count:
         found.append(
             Overlap(
                 kind="exact",
                 rows=count,
-                examples=_examples(connection, f"{base} AND {exact}", shown),
+                examples=_examples(connection, f"{source} {where}", shown, "n"),
+                earlier_new_files=earlier.new_files(connection, where, whole_n, whole_o, "true"),
             )
         )
-    key = _overlap_key(connection, marked, visible, new)
+    key = _overlap_key(connection, marked, visible, _new_condition(new_sources))
     if key:
-        parts = [f"trim({q(c)})" for c in key]
-        filled = " AND ".join(f"{p} <> ''" for p in parts)
-        same_key = _in_older_rows(marked, new, f"list_value({', '.join(parts)})", filled)
-        where = f"{base} AND {same_key} AND NOT ({exact})"
-        count = _scalar(connection, f"SELECT count(*) {where}")
+        key_n, key_o = _columns("n", key, "trim({})"), _columns("o", key, "trim({})")
+        filled_n = " AND ".join(f"trim(n.{q(c)}) <> ''" for c in key)
+        filled_o = " AND ".join(f"trim(o.{q(c)}) <> ''" for c in key)
+        same_key = earlier.repeats(key_n, key_o, filled_n, filled_o)
+        where = f"{earlier.base} AND {same_key} AND NOT ({exact})"
+        count = _scalar(connection, f"SELECT count(*) {source} {where}")
         if count:
             found.append(
-                Overlap(kind="key", rows=count, key=key, examples=_examples(connection, where, key))
+                Overlap(
+                    kind="key",
+                    rows=count,
+                    key=key,
+                    examples=_examples(connection, f"{source} {where}", key, "n"),
+                    earlier_new_files=earlier.new_files(connection, where, key_n, key_o, filled_o),
+                )
             )
     return found
 
 
 def _examples(
-    connection: duckdb.DuckDBPyConnection, source: str, columns: list[str]
+    connection: duckdb.DuckDBPyConnection, source: str, columns: list[str], alias: str
 ) -> list[dict[str, str | None]]:
     rows = connection.execute(
-        f"SELECT {', '.join(q(c) for c in columns)} {source} ORDER BY _source, __row "
-        f"LIMIT {OVERLAP_EXAMPLES}"
+        f"SELECT {', '.join(f'{alias}.{q(c)}' for c in columns)} {source} "
+        f"ORDER BY {alias}._source, {alias}.__row LIMIT {OVERLAP_EXAMPLES}"
     ).fetchall()
     return [
         {
@@ -590,27 +650,51 @@ def _overlap_key(
 
 
 def _date_overlaps(
-    connection: duckdb.DuckDBPyConnection, table: str, columns: list[ColumnSpec], new: str
+    connection: duckdb.DuckDBPyConnection,
+    table: str,
+    columns: list[ColumnSpec],
+    new_sources: Sequence[str],
 ) -> list[Overlap]:
-    """New rows dated within the span of the older rows, per date column of the clean table."""
+    """New rows dated within the span of the older rows, or within the dates of a new file
+    earlier in upload order, per date column of the clean table. Each earlier new file counts by
+    its own dates, so November sent after December is no overlap."""
     found = []
+    rank_n, rank_w = _rank(new_sources, "n"), _rank(new_sources, "w")
     for column in columns:
         if column.type not in ("date", "datetime"):
             continue
         name = q(column.name)
-        inside = (
-            f"FROM {q(table)} WHERE {new} AND {name} BETWEEN "
-            f"(SELECT min({name}) FROM {q(table)} WHERE NOT ({new})) AND "
-            f"(SELECT max({name}) FROM {q(table)} WHERE NOT ({new}))"
+        spans = (
+            f"(SELECT {_file_of('w._source')} AS f, min({rank_w}) AS r, min(w.{name}) AS lo, "
+            f"max(w.{name}) AS hi FROM {q(table)} w WHERE {rank_w} > 0 GROUP BY f)"
         )
+        in_new = f"s.r < {rank_n} AND n.{name} BETWEEN s.lo AND s.hi"
+        old = f"FROM {q(table)} o WHERE {_rank(new_sources, 'o')} = 0"
+        where = (
+            f"{rank_n} > 0 AND (n.{name} BETWEEN (SELECT min(o.{name}) {old}) "
+            f"AND (SELECT max(o.{name}) {old}) OR EXISTS (SELECT 1 FROM {spans} s WHERE {in_new}))"
+        )
+        inside = f"FROM {q(table)} n WHERE {where}"
         count = _scalar(connection, f"SELECT count(*) {inside}")
         if count:
             rows = connection.execute(
-                f"SELECT CAST({name} AS VARCHAR) {inside} ORDER BY {name}, _source, _row "
+                f"SELECT CAST(n.{name} AS VARCHAR) {inside} ORDER BY n.{name}, n._source, n._row "
                 f"LIMIT {OVERLAP_EXAMPLES}"
             ).fetchall()
             examples: list[dict[str, str | None]] = [{column.name: str(r[0])} for r in rows]
-            found.append(Overlap(kind="date", rows=count, column=column.name, examples=examples))
+            files = connection.execute(
+                f"SELECT s.f FROM {spans} s WHERE EXISTS "
+                f"(SELECT 1 {inside} AND {in_new}) ORDER BY s.r LIMIT {MAX_NAMED_FILES}"
+            ).fetchall()
+            found.append(
+                Overlap(
+                    kind="date",
+                    rows=count,
+                    column=column.name,
+                    examples=examples,
+                    earlier_new_files=[str(f[0]) for f in files],
+                )
+            )
     return found
 
 

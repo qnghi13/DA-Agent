@@ -186,22 +186,27 @@ def with_overlap_drops(
     spec: DatasetSpec,
     tables: set[str],
     report: IngestReport,
-    new_files: set[str],
+    new_files: list[str],
     keys: dict[str, list[str]],
 ) -> DatasetSpec:
     """For each table the user chose `drop_overlap` on, drop the rows of each new file that repeat
-    a row of the table's older files: by the key the check found, else by whole row."""
+    a row of the table's older files or of a new file before it in upload order (`new_files`):
+    by the key the check found, else by whole row."""
     raw_tables = {t.name: t for t in report.tables}
     updated = []
     for table in spec.tables:
         raw = raw_tables.get(table.source)
         if table.name in tables and raw is not None:
-            files = list(dict.fromkeys(file_of(s.source) for s in raw.sources))
-            older = [f for f in files if f not in new_files]
-            newer = [f for f in files if f in new_files]
-            if older and newer:
-                key = keys.get(table.name, [])
-                drops = [OverlapDrop(file=f, against=older, key=key) for f in newer]
+            files = set(file_of(s.source) for s in raw.sources)
+            older = sorted(files - set(new_files))
+            newer = [f for f in new_files if f in files]
+            key = keys.get(table.name, [])
+            drops = [
+                OverlapDrop(file=f, against=[*older, *newer[:i]], key=key)
+                for i, f in enumerate(newer)
+                if older or i
+            ]
+            if drops:
                 table = table.model_copy(update={"drop_overlap": [*table.drop_overlap, *drops]})
         updated.append(table)
     return spec.model_copy(update={"tables": updated})

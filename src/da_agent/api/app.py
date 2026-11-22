@@ -744,18 +744,25 @@ def add_files(
         source = settings.uploads_root / current.upload_dir
         for item in kept:
             _link_or_copy(source / str(item["stored_as"]), folder / str(item["stored_as"]))
+        # `added_in` tells the version job which files are new; their order is the upload order,
+        # in which files new in the same upload are checked against each other.
         added = [
             {
                 "name": upload.filename,
                 "stored_as": stored_name,
                 "bytes": _save(upload, folder / stored_name, settings.max_file_bytes),
+                "added_in": version,
             }
-            for upload, stored_name in zip(files, names, strict=True)
+            | ({"replaces": old} if old else {})
+            for upload, stored_name, old in zip(
+                files, names, replaces or [""] * len(files), strict=True
+            )
         ]
         with conn.transaction():
             opened = store.open_version(
-                caller.workspace_id, key, [*kept, *added], upload_dir, settings.max_dataset_versions
-            )
+                caller.workspace_id, key, [*kept, *added], upload_dir,
+                settings.max_dataset_versions, version=version,
+            )  # fmt: skip
             log(
                 conn, caller, "dataset.files_add", dataset_id,
                 version=opened, added=len(added), replaced=len(replaced),

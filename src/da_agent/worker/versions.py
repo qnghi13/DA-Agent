@@ -81,7 +81,7 @@ class _Matched:
     ingested: IngestResult
     changes: list[TableChange]
     spec: DatasetSpec  # the current spec, renamed to this version's raw tables
-    new_sources: frozenset[str]
+    new_sources: tuple[str, ...]  # stored names of the version's new files, in upload order
     names_before: dict[str, str]
 
     def names(self, kind: str) -> set[str]:
@@ -196,15 +196,16 @@ class _VersionRun:
             raise _VersionFailed(FAILURES["ingest_failed"])
         return result, result.report, result.output_dir.name
 
-    def build_spec(self, ingest_id: str, spec: DatasetSpec, new: frozenset[str]) -> BuildResult:
+    def build_spec(self, ingest_id: str, spec: DatasetSpec, new: tuple[str, ...]) -> BuildResult:
         with self.span("version.build"):
-            request = BuildRun(ingest_id=ingest_id, spec=spec, new_sources=sorted(new))
+            # Upload order: each new file is checked against the new files before it too.
+            request = BuildRun(ingest_id=ingest_id, spec=spec, new_sources=list(new))
             result = self.h.runner.build(request)
         if result.output_dir is not None:
             self.staging.append(result.output_dir)
         return result
 
-    def built(self, ingest_id: str, spec: DatasetSpec, new: frozenset[str]) -> BuildReport:
+    def built(self, ingest_id: str, spec: DatasetSpec, new: tuple[str, ...]) -> BuildReport:
         result = self.build_spec(ingest_id, spec, new)
         report = result.report
         if result.status != "ok" or report is None or any(t.error for t in report.tables):
@@ -226,14 +227,18 @@ class _VersionRun:
         return found
 
     def match(self, files: list[dict[str, Any]]) -> _Matched:
+        new = tuple(
+            str(f.get("stored_as")) for f in files if f.get("added_in") == self.record.version
+        )
+        if not new:
+            # Every upload brings a file. Without `added_in` all rows would count as old and the
+            # version would apply unchecked.
+            raise _VersionFailed(FAILURES["version_failed"])
         ingested, report, _ = self.ingest(self.record.upload_dir)
         previous = self.previous_headers()
         with self.span("version.match"):
             current = DatasetSpec.model_validate(self.current.spec or {"tables": []})
-            new = frozenset(
-                str(f.get("stored_as")) for f in files if f.get("added_in") == self.record.version
-            )
-            changes = match_tables(previous, report, new, current)
+            changes = match_tables(previous, report, frozenset(new), current)
             spec = pin_kept_tables(rename_sources(current, changes), current, previous, changes)
             before = table_names(current, previous)
         return _Matched(report, ingested, changes, spec, new, before)
@@ -292,7 +297,7 @@ class _VersionRun:
             spec = apply_repairs(spec, accepted)
             drop = {table for table, choice in chosen.items() if choice == "drop_overlap"}
             spec = with_overlap_drops(
-                spec, drop, m.report, set(m.new_sources), overlap_keys(entries)
+                spec, drop, m.report, list(m.new_sources), overlap_keys(entries)
             )
             spec = DatasetSpec.model_validate(spec.model_dump(mode="json"))
         except (ValidationError, ValueError, TypeError) as error:

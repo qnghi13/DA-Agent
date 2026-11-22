@@ -95,6 +95,20 @@ def test_open_version_numbers_stores_and_enqueues(
     assert jobs(conn) == [{"dataset_id": str(dataset_id), "version": 2, "step": "check"}]
 
 
+def test_open_version_refuses_a_number_another_upload_took(
+    conn: psycopg.Connection, workspace: UUID
+) -> None:
+    # The caller wrote `added_in` with the number it expected; a different one would mean the
+    # job finds no new file.
+    dataset_id = ready_dataset(conn, workspace)
+    store = DatasetVersionStore(conn)
+    with pytest.raises(DatasetStateError, match="changed while you uploaded"):
+        store.open_version(workspace, dataset_id, NEW, "v3", 20, version=3)
+    assert [v.version for v in store.list(workspace, dataset_id)] == [1]
+    assert jobs(conn) == []
+    assert store.open_version(workspace, dataset_id, NEW, "v2", 20, version=2) == 2
+
+
 def test_second_open_version_raises(conn: psycopg.Connection, workspace: UUID) -> None:
     dataset_id = ready_dataset(conn, workspace)
     store = DatasetVersionStore(conn)

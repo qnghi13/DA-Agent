@@ -1,6 +1,6 @@
 // Pure logic for adding files to a dataset (docs/design/2026-11-21-add-files.md).
 
-import type { DatasetVersion, OverlapChoice, VersionChange } from "./api";
+import type { DatasetVersion, OverlapChoice, VersionChange, VersionOverlap } from "./api";
 
 const OPEN: readonly DatasetVersion["status"][] = [
   "uploaded",
@@ -100,4 +100,11 @@ export function missingDecisions(
   return decisionTables(changes)
     .filter((c) => !chosen[c.table] || (chosen[c.table] === "replace" && !replaceFiles[c.table]))
     .map((c) => c.table);
+}
+
+/** A note when overlapping rows are also in another file of the same upload, or null. */
+export function earlierNewFilesText(overlap: Pick<VersionOverlap, "earlier_new_files">): string | null {
+  const files = overlap.earlier_new_files ?? [];
+  if (files.length === 0) return null;
+  return `Some of these rows are also in ${files.join(", ")}, sent in this same upload.`;
 }

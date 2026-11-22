@@ -92,7 +92,7 @@ def test_an_exact_overlap_on_a_deduplicated_table_is_reported_but_not_asked() ->
 
     assert entries[0]["overlaps"] == [
         {"kind": "exact", "rows": 2, "key": [], "column": None, "examples": [],
-         "removed_by_dedupe": True}
+         "earlier_new_files": [], "removed_by_dedupe": True}
     ]  # fmt: skip
     assert blocking_tables(entries) == set()
 
@@ -168,21 +168,31 @@ def test_a_metric_survives_when_a_new_table_takes_the_removed_name_with_its_colu
     assert stale_metrics([("Revenue", revenue)], {"orders"}, built) == {}
 
 
-def test_drop_overlap_names_each_new_file_against_the_older_files_of_its_table() -> None:
+def test_drop_overlap_names_each_new_file_against_older_and_earlier_new_files() -> None:
     report = IngestReport(
         tables=[raw_table("orders", "orders.csv", "orders_2.csv", "orders_3.xlsx#Sheet1")]
     )
     spec = DatasetSpec(tables=[orders()])
 
+    # Upload order, not name order: orders_3.xlsx was sent first.
     changed = with_overlap_drops(
-        spec, {"orders"}, report, {"orders_2.csv", "orders_3.xlsx"}, {"orders": ["id"]}
+        spec, {"orders"}, report, ["orders_3.xlsx", "orders_2.csv"], {"orders": ["id"]}
     )
 
     assert changed.tables[0].drop_overlap == [
-        OverlapDrop(file="orders_2.csv", against=["orders.csv"], key=["id"]),
         OverlapDrop(file="orders_3.xlsx", against=["orders.csv"], key=["id"]),
+        OverlapDrop(file="orders_2.csv", against=["orders.csv", "orders_3.xlsx"], key=["id"]),
     ]
     assert changed.tables[0].columns == orders().columns
+
+
+def test_a_table_of_new_files_only_drops_from_the_later_ones() -> None:
+    report = IngestReport(tables=[raw_table("orders", "a.csv", "b.csv")])
+    spec = DatasetSpec(tables=[orders()])
+
+    changed = with_overlap_drops(spec, {"orders"}, report, ["b.csv", "a.csv"], {})
+
+    assert changed.tables[0].drop_overlap == [OverlapDrop(file="a.csv", against=["b.csv"])]
 
 
 def test_drop_overlap_without_a_key_compares_whole_rows_and_keeps_earlier_drops() -> None:
@@ -190,7 +200,7 @@ def test_drop_overlap_without_a_key_compares_whole_rows_and_keeps_earlier_drops(
     report = IngestReport(tables=[raw_table("orders", "orders.csv", "orders_1.csv", "z.csv")])
     spec = DatasetSpec(tables=[orders(drop_overlap=[earlier])])
 
-    changed = with_overlap_drops(spec, {"orders"}, report, {"z.csv"}, {})
+    changed = with_overlap_drops(spec, {"orders"}, report, ["z.csv"], {})
 
     assert changed.tables[0].drop_overlap == [
         earlier,
@@ -202,7 +212,7 @@ def test_tables_without_a_drop_choice_are_untouched() -> None:
     report = IngestReport(tables=[raw_table("orders", "orders.csv", "orders_2.csv")])
     spec = DatasetSpec(tables=[orders()])
 
-    assert with_overlap_drops(spec, set(), report, {"orders_2.csv"}, {}) == spec
+    assert with_overlap_drops(spec, set(), report, ["orders_2.csv"], {}) == spec
 
 
 def test_only_a_file_of_the_current_version_can_be_replaced() -> None:

@@ -5,7 +5,6 @@ calls go to a scripted adapter. Needs Postgres (DA_AGENT_TEST_POSTGRES_URL).
 """
 
 import json
-import os
 import shutil
 import threading
 import uuid
@@ -16,8 +15,10 @@ from uuid import UUID
 import duckdb
 import psycopg
 import pytest
+from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+from da_agent.api.app import ApiSettings, create_app
 from da_agent.ingestion.build import CLEAN_DATABASE, build
 from da_agent.ingestion.raw import RAW_DATABASE, ingest
 from da_agent.ingestion.report import IngestReport
@@ -29,6 +30,7 @@ from da_agent.storage.dataset_versions import DatasetVersionStore, VersionRecord
 from da_agent.storage.datasets import DatasetStore
 from da_agent.storage.db import connect
 from da_agent.storage.jobs import Job, JobQueue
+from da_agent.storage.keys import create_key
 from da_agent.storage.ledger import PostgresCostLedger
 from da_agent.storage.memory import MemoryStore
 from da_agent.storage.sandbox_dataset import BUILD_REPORT
@@ -38,6 +40,7 @@ from da_agent.worker.datasets import FAILURES
 from da_agent.worker.limits import WorkspaceBudgets
 from da_agent.worker.versions import VersionHandler
 from tests.integration.conftest import POSTGRES_URL
+from tests.integration.test_api import auth
 from tests.unit.test_prepare_pipeline import Scripted
 
 pytestmark = pytest.mark.integration
@@ -94,9 +97,7 @@ class InProcessRunner:
         source = self.staging / request.ingest_id
         report = IngestReport.model_validate_json((source / "report.json").read_text("utf-8"))
         out = self._out("build")
-        result = build(
-            source / RAW_DATABASE, request.spec, report, out, frozenset(request.new_sources)
-        )
+        result = build(source / RAW_DATABASE, request.spec, report, out, request.new_sources)
         (out / BUILD_REPORT).write_text(result.model_dump_json(), encoding="utf-8")
         return BuildResult(status="ok", exit_code=0, stderr="", report=result, output_dir=out,
                            duration_seconds=0)  # fmt: skip
@@ -109,10 +110,14 @@ class Setup:
         self.runner = InProcessRunner(self.uploads, tmp / "staging")
         self.store = DatasetVersionStore(conn)
         self.dataset_id = self._ready_dataset()
+        assert POSTGRES_URL is not None
+        settings = ApiSettings(database_url=POSTGRES_URL, schema=schema, uploads_root=self.uploads)
+        self.client = TestClient(create_app(settings))
+        self.key = create_key(conn, workspace)
 
     def _ready_dataset(self) -> UUID:
         """Version 1 as the normal upload path leaves it: no stored headers."""
-        files = [{"name": "orders.csv", "stored_as": "orders.csv", "bytes": 10, "added_in": 1}]
+        files = [{"name": "orders.csv", "stored_as": "orders.csv", "bytes": len(ORDERS)}]
         datasets = DatasetStore(self.conn)
         dataset_id = datasets.create(self.workspace, "Shop", "Orders of one shop.", files=files)
         folder = self.uploads / str(dataset_id)
@@ -132,20 +137,20 @@ class Setup:
 
     @property
     def folder(self) -> str:
-        return f"{self.dataset_id}-v2"
+        """The upload folder of version 2, as the API named it."""
+        return self.version().upload_dir
 
-    def add_files(self, new: dict[str, str], keep: tuple[str, ...] = ("orders.csv",)) -> None:
-        """What the API does: a folder with kept files linked and new files saved."""
-        folder = self.uploads / self.folder
-        folder.mkdir()
-        files = []
-        for name in keep:
-            os.link(self.uploads / str(self.dataset_id) / name, folder / name)
-            files.append({"name": name, "stored_as": name, "bytes": 10, "added_in": 1})
-        for name, text in new.items():
-            (folder / name).write_text(text, encoding="utf-8")
-            files.append({"name": name, "stored_as": name, "bytes": len(text), "added_in": 2})
-        self.store.open_version(self.workspace, self.dataset_id, files, self.folder, 20)
+    def add_files(self, new: dict[str, str], replaces: dict[str, str] | None = None) -> None:
+        """Send new files through the real API route, as the UI does. `replaces` maps a new
+        file's name to the stored name of the file it replaces."""
+        replaced = [(replaces or {}).get(name, "") for name in new]
+        response = self.client.post(
+            f"/v1/datasets/{self.dataset_id}/files",
+            headers=auth(self.key),
+            data={"replaces": replaced} if replaces else None,
+            files=[("files", (name, text.encode())) for name, text in new.items()],
+        )
+        assert response.status_code == 202, response.text
 
     def handler(self, llm: LLMClient, **options: Any) -> VersionHandler:
         assert POSTGRES_URL is not None
@@ -229,6 +234,82 @@ def test_resent_file_waits_for_choice(setup: Setup) -> None:
     assert adapter.requests == []
 
 
+def test_the_same_file_sent_again_through_the_api_waits_with_an_exact_overlap(
+    setup: Setup,
+) -> None:
+    # The seam between the API and the job: the route must record which files are new.
+    setup.add_files({"orders.csv": ORDERS})
+    llm, _ = fake_llm()
+
+    setup.run(llm)
+
+    version = setup.version()
+    new = [f for f in version.files if f.get("added_in") == 2]
+    assert [f["name"] for f in new] == ["orders.csv"] and new[0]["stored_as"] != "orders.csv"
+    assert version.status == "needs_choice"
+    assert setup.entry("orders")["kind"] == "grown"
+    assert [o["kind"] for o in setup.entry("orders")["overlaps"]][:1] == ["exact"]
+    assert setup.current_version() == 1
+
+
+def test_a_new_file_records_the_file_it_replaces(setup: Setup) -> None:
+    setup.add_files({"sales.csv": "id,amount,day\n5,10,01/04/2026\n"}, {"sales.csv": "orders.csv"})
+
+    files = setup.version().files
+
+    assert files == [
+        {"name": "sales.csv", "stored_as": "sales.csv", "bytes": 30, "added_in": 2,
+         "replaces": "orders.csv"},
+    ]  # fmt: skip
+
+
+def test_two_identical_new_files_in_one_upload_overlap_each_other(setup: Setup) -> None:
+    december = "id,total,day\n7,700,01/12/2026\n8,800,02/12/2026\n"
+    setup.add_files({"orders_dec.csv": december, "orders_dec_1.csv": december})
+    llm, _ = fake_llm()
+
+    setup.run(llm)
+
+    assert setup.version().status == "needs_choice"
+    exact = [o for o in setup.entry("orders")["overlaps"] if o["kind"] == "exact"]
+    assert exact[0]["rows"] == 2
+    assert exact[0]["earlier_new_files"] == ["orders_dec.csv"]
+    assert setup.runner.builds[0].new_sources == ["orders_dec.csv", "orders_dec_1.csv"]
+
+
+def test_a_drop_choice_drops_rows_already_in_an_earlier_new_file(setup: Setup) -> None:
+    december = "id,total,day\n7,700,01/12/2026\n8,800,02/12/2026\n"
+    # Upload order, not name order: the second file sorts first.
+    setup.add_files({"orders_dec_b.csv": december, "orders_dec_a.csv": december})
+    llm, _ = fake_llm()
+    setup.run(llm)
+    choices = {"tables": {"orders": "drop_overlap"}, "replace_files": {}, "apply_anyway": False}
+    setup.store.approve(setup.workspace, setup.dataset_id, 2, choices, None, [])
+
+    setup.run(llm)
+
+    assert (setup.version().status, setup.current_version()) == ("applied", 2)
+    assert setup.rows("SELECT count(*) FROM orders") == [(4,)]
+    excluded = setup.rows("SELECT reason, _source FROM _excluded ORDER BY _row")
+    assert excluded == [("already in orders.csv, orders_dec_b.csv", "orders_dec_a.csv")] * 2
+
+
+def test_a_version_with_no_file_marked_new_fails_instead_of_applying(setup: Setup) -> None:
+    # A writer that forgets `added_in` must not get every file treated as old and applied.
+    folder = setup.uploads / f"{setup.dataset_id}-v2-0000beef"
+    folder.mkdir()
+    (folder / "orders_1.csv").write_text(ORDERS, encoding="utf-8")
+    files = [{"name": "orders_1.csv", "stored_as": "orders_1.csv", "bytes": len(ORDERS)}]
+    setup.store.open_version(setup.workspace, setup.dataset_id, files, folder.name, 20)
+    llm, _ = fake_llm()
+
+    setup.run(llm)
+
+    version = setup.version()
+    assert (version.status, version.error) == ("failed", FAILURES["version_failed"])
+    assert setup.current_version() == 1
+
+
 def test_new_table_proposes_and_keeps_old_spec(setup: Setup) -> None:
     setup.add_files({"customers.csv": "name,city\nAn,Hue\nBinh,Hanoi\n"})
     llm, adapter = fake_llm(CUSTOMERS_REPLY)
@@ -253,7 +334,7 @@ def test_replace_only_file_removes_table_and_lists_stale_metric(setup: Setup) ->
         text="Revenue is the sum of totals.", author="u", source_run_id=None,
     )  # fmt: skip
     # The user replaced orders.csv, the only file of `orders`, with a file of another shape.
-    setup.add_files({"sales.csv": "id,amount,day\n5,10,01/04/2026\n"}, keep=())
+    setup.add_files({"sales.csv": "id,amount,day\n5,10,01/04/2026\n"}, {"sales.csv": "orders.csv"})
     reply = json.dumps({"tables": [{"source": "sales", "name": "sales"}]})
     llm, _ = fake_llm(reply)
 
@@ -548,9 +629,10 @@ def test_an_exhausted_budget_fails_a_proposal_but_not_the_same_shape_path(
     setup: Setup,
 ) -> None:
     assert POSTGRES_URL is not None
-    set_daily_budget(setup.conn, setup.workspace, 0.0)
     budgets = WorkspaceBudgets(url=POSTGRES_URL, schema=setup.schema, daily_usd=5, run_usd=1)
     setup.add_files({"customers.csv": "name,city\nAn,Hue\n"})
+    # Spent after the upload was accepted, before the job proposes.
+    set_daily_budget(setup.conn, setup.workspace, 0.0)
     llm, adapter = fake_llm(CUSTOMERS_REPLY)
 
     setup.run(llm, budgets=budgets)

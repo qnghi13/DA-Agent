@@ -41,6 +41,7 @@ _JSON_FIELDS = frozenset(
         "repairs",
     }
 )
+CHANGED_WHILE_UPLOADING = "the data changed while you uploaded; try again"
 _TEXT_FIELDS = frozenset({"upload_dir", "build_dir", "error"})
 _COLUMNS = (
     "dataset_id, version, status, files, upload_dir, build_dir, spec, summary, documents, "
@@ -113,10 +114,15 @@ class DatasetVersionStore:
         files: list[dict[str, Any]],
         upload_dir: str,
         max_versions: int,
+        *,
+        version: int | None = None,
     ) -> int:
         """Insert the next version as `uploaded` and enqueue its check, in one transaction.
         Raises DatasetStateError if the dataset is not ready, a version is open, or the limit
-        is reached."""
+        is reached.
+
+        `version` is the number the caller wrote into `files` (`added_in`): when another upload
+        took that number meanwhile, nothing is inserted and DatasetStateError is raised."""
         try:
             with self._conn.transaction():
                 row = self._conn.execute(
@@ -133,7 +139,10 @@ class DatasetVersionStore:
                     "SELECT coalesce(max(version), 0) FROM dataset_versions WHERE dataset_id = %s",
                     (dataset_id,),
                 ).fetchone()
-                version = (last[0] if last else 0) + 1
+                number = (last[0] if last else 0) + 1
+                if version is not None and number != version:
+                    raise DatasetStateError(CHANGED_WHILE_UPLOADING)
+                version = number
                 if version > max_versions:
                     raise DatasetStateError(
                         f"the dataset already has {max_versions} versions; the limit is reached"

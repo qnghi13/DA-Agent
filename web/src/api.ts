@@ -119,6 +119,8 @@ export interface VersionOverlap {
   key?: string[];
   column?: string | null;
   examples?: Record<string, string | null>[];
+  /** Files of the same upload, earlier in upload order, that already hold some of these rows. */
+  earlier_new_files?: string[];
   removed_by_dedupe?: boolean;
 }
 

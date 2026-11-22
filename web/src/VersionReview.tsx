@@ -13,7 +13,7 @@ import {
 import { Button } from "./components/ui/button";
 import { Label } from "./components/ui/label";
 import { SpecEditor } from "./SpecEditor";
-import { decisionTables, missingDecisions } from "./versions";
+import { decisionTables, earlierNewFilesText, missingDecisions } from "./versions";
 
 const CHOICE_LABELS: Record<OverlapChoice, string> = {
   replace: "Replace old file",
@@ -266,6 +266,9 @@ function OverlapSection({
       {overlaps.map((overlap, i) => (
         <div key={i} className="flex flex-col gap-1 text-sm">
           <p>{KIND_TEXT[overlap.kind](overlap.rows, overlap.key, overlap.column)}</p>
+          {earlierNewFilesText(overlap) && (
+            <p className="text-muted-foreground">{earlierNewFilesText(overlap)}</p>
+          )}
           {overlap.examples && overlap.examples.length > 0 && (
             <ul className="text-muted-foreground bg-muted flex flex-col gap-0.5 rounded-md px-3 py-2 font-mono text-xs">
               {overlap.examples.slice(0, 3).map((example, j) => (

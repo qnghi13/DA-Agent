@@ -43,7 +43,8 @@ def run_build(request: dict) -> int:
 
     report = IngestReport.model_validate_json(Path("/input/report.json").read_text("utf-8"))
     spec = DatasetSpec.model_validate(request["spec"])
-    new_sources = frozenset(str(name) for name in request.get("new_sources", []))
+    # In upload order: each new file is checked against the new files before it.
+    new_sources = [str(name) for name in request.get("new_sources", [])]
     result = build(Path("/input/raw.duckdb"), spec, report, Path("/out"), new_sources)
     Path("/out/build_report.json").write_text(result.model_dump_json(), encoding="utf-8")
     return 0
