@@ -6,7 +6,7 @@ import re
 from da_agent.agent.loop_types import Document
 from da_agent.agent.periods import periods_note
 from da_agent.agent.rules import split_sections
-from da_agent.agent.vietnamese import expand_question
+from da_agent.agent.vietnamese import expand_question, question_language
 
 # A document tag inside document text, which could close the frame and pose as instructions.
 FRAME_TAG = re.compile(r"<(/?\s*document)", re.IGNORECASE)
@@ -99,7 +99,25 @@ def build_system_prompt(documents: list[Document], *, schema_given: bool = False
 def build_user_prompt(question: str, as_of: str) -> str:
     parts = [f"Today's date: {as_of}", periods_note(as_of), f"Question:\n{question}"]
     parts.append(expansion_note(question))
+    parts.append(answer_language_note(question_language(question)))
     return "\n\n".join(part for part in parts if part)
+
+
+def answer_language_note(language: str) -> str:
+    """Which language the user reads the explanation in; nothing for English, the default."""
+    if language != "vi":
+        return ""
+    return (
+        "Write the reason in submit_answer in Vietnamese, the language of the question. Keep "
+        "the answer value, names, column names, and data values exactly as they are in the data."
+    )
+
+
+def clarify_language_note(language: str) -> str:
+    """Which language a clarifying question is asked in; nothing for English, the default."""
+    if language != "vi":
+        return ""
+    return "If you ask clarify_question, write it in Vietnamese, the language of the question."
 
 
 def expansion_note(question: str) -> str:

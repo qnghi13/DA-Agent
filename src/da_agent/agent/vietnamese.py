@@ -144,3 +144,41 @@ def expand_question(question: str) -> str:
     for pattern, replacement in PHRASES:
         text = pattern.sub(replacement, text)
     return WORD.sub(_word, text)
+
+
+# Letters only Vietnamese uses among the languages users type here: the modified vowels, đ, and
+# the precomposed vowels with a tone (U+1EA0 to U+1EF9), plus ĩ and ũ.
+VIETNAMESE_LETTERS = re.compile(r"[ăâđêôơưĩũĂÂĐÊÔƠƯĨŨ\u1ea0-\u1ef9]")
+# Tone marks: grave, acute, tilde, hook above, dot below. Circumflex, breve, and horn are letters.
+TONE_MARKS = re.compile("[\u0300\u0301\u0303\u0309\u0323]")
+# Shorthand that is only Vietnamese; "vs", "sp", "bn", "z", and "j" also appear in English.
+VIETNAMESE_SHORTHAND = frozenset(_words("dthu bnhiu nhiu nhìu hnay hqua trc dc đc ko gium"))
+
+
+def _toned_syllable(word: str) -> bool:
+    """A word with a tone mark that is a Vietnamese syllable without it: "tháng", not "Café"."""
+    decomposed = unicodedata.normalize("NFD", word.lower())
+    if not TONE_MARKS.search(decomposed):
+        return False
+    bare = unicodedata.normalize("NFC", TONE_MARKS.sub("", decomposed))
+    return _split(bare) is not None
+
+
+def question_language(question: str) -> str:
+    """ "vi" when the question is Vietnamese, else "en": the language the answer is written in.
+
+    Code decides, so the model gets one plain instruction (docs/adr/0047). A question counts as
+    Vietnamese when it has a letter only Vietnamese uses, a word with a tone mark that is a
+    Vietnamese syllable, or Vietnamese-only shorthand. Unaccented Vietnamese, even typed as
+    Telex, reads as English: the Telex decoder also rewrites English ("is" to "í"), and a
+    syllable count cannot tell it from short English such as "can i get the data".
+    """
+    composed = unicodedata.normalize("NFC", question)
+    if VIETNAMESE_LETTERS.search(composed):
+        return "vi"
+    if any(pattern.search(composed) for pattern, _ in PHRASES):
+        return "vi"
+    words = WORD.findall(composed)
+    if any(word.lower() in VIETNAMESE_SHORTHAND or _toned_syllable(word) for word in words):
+        return "vi"
+    return "en"

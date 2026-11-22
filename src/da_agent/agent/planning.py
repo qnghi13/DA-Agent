@@ -10,7 +10,8 @@ from typing import Any
 
 from da_agent.agent.loop_types import Document
 from da_agent.agent.periods import periods_note
-from da_agent.agent.prompts import render_document
+from da_agent.agent.prompts import clarify_language_note, render_document
+from da_agent.agent.vietnamese import question_language
 from da_agent.llm.types import ToolSpec
 
 SUBMIT_PLAN = "submit_plan"
@@ -78,6 +79,7 @@ def plan_user_prompt(
     ]
     if clarifications:
         parts.append("The user clarified:\n" + "\n".join(f"- {c}" for c in clarifications))
+    parts.append(clarify_language_note(question_language(question)))
     return "\n\n".join(part for part in parts if part)
 
 

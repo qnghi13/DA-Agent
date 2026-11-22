@@ -51,3 +51,4 @@ decision, add a new ADR and mark the old one as superseded.
 | [0044](0044-slo-alerts.md) | SLOs and alerts with Prometheus metrics from the processes and Alertmanager | Accepted |
 | [0045](0045-dataset-versions.md) | Adding files to a dataset creates a new version inside the same dataset | Accepted |
 | [0046](0046-vietnamese-ui.md) | The UI offers Vietnamese next to English, from typed dictionaries in the web | Accepted |
+| [0047](0047-answer-language.md) | Code picks the answer language from the question; the model is told it | Accepted |
