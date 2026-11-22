@@ -70,7 +70,7 @@ function AddFilesForm({
   function add(list: FileList | null) {
     const incoming = Array.from(list ?? []);
     const refused = incoming.filter((file) => !accepted(file)).map((file) => file.name);
-    setError(refused.length ? `Not a supported file type: ${refused.join(", ")}` : null);
+    setError(refused.length ? m.upload.unsupported(refused.join(", ")) : null);
     setPicks((current) => {
       const byName = new Map(current.map((pick) => [pick.file.name, pick]));
       for (const file of incoming.filter(accepted)) {
@@ -109,11 +109,8 @@ function AddFilesForm({
   return (
     <form onSubmit={submit} className="flex flex-col gap-4">
       <DialogHeader>
-        <DialogTitle>Add files</DialogTitle>
-        <DialogDescription>
-          The new files become the next version of {dataset.name}. Earlier answers keep the data
-          they were made from.
-        </DialogDescription>
+        <DialogTitle>{m.addFiles.title}</DialogTitle>
+        <DialogDescription>{m.addFiles.intro(dataset.name)}</DialogDescription>
       </DialogHeader>
       <div
         onDragOver={(event) => {
@@ -129,13 +126,13 @@ function AddFilesForm({
       >
         <UploadCloud className="text-muted-foreground size-6" aria-hidden />
         <p className="text-sm">
-          Drag files here, or{" "}
+          {m.upload.dragHere}{" "}
           <button
             type="button"
             className="font-medium underline underline-offset-4"
             onClick={() => picker.current?.click()}
           >
-            choose files
+            {m.upload.choose}
           </button>
         </p>
         <input
@@ -144,7 +141,7 @@ function AddFilesForm({
           multiple
           accept={UPLOAD_ACCEPT}
           className="sr-only"
-          aria-label="Choose files to add"
+          aria-label={m.addFiles.choose}
           onChange={(event) => {
             add(event.target.files);
             event.target.value = "";
@@ -158,7 +155,7 @@ function AddFilesForm({
               <FileSpreadsheet className="text-muted-foreground size-4 shrink-0" aria-hidden />
               <span className="min-w-0 flex-1 truncate">{file.name}</span>
               <select
-                aria-label={`What to do with ${file.name}`}
+                aria-label={m.addFiles.whatToDo(file.name)}
                 value={replaces}
                 onChange={(event) =>
                   setPicks((current) =>
@@ -167,10 +164,10 @@ function AddFilesForm({
                 }
                 className="border-input bg-background h-8 max-w-48 rounded-md border px-2 text-sm"
               >
-                <option value="">Add</option>
+                <option value="">{m.addFiles.add}</option>
                 {dataset.files.map((existing) => (
                   <option key={existing.stored_as} value={existing.stored_as}>
-                    Replace {existing.name}
+                    {m.addFiles.replace(existing.name)}
                   </option>
                 ))}
               </select>
@@ -179,7 +176,7 @@ function AddFilesForm({
                 variant="ghost"
                 size="icon"
                 className="size-7"
-                aria-label={`Remove ${file.name}`}
+                aria-label={m.upload.remove(file.name)}
                 onClick={() => setPicks((current) => current.filter((p) => p.file !== file))}
               >
                 <X />
@@ -189,7 +186,7 @@ function AddFilesForm({
         </ul>
       )}
       {tooBig.length > 0 && (
-        <p className="text-danger text-sm">Too large: {tooBig.map((p) => p.file.name).join(", ")}.</p>
+        <p className="text-danger text-sm">{m.upload.tooLarge(tooBig.map((p) => p.file.name).join(", "))}</p>
       )}
       {error && (
         <p role="alert" className="text-danger text-sm">
@@ -198,11 +195,11 @@ function AddFilesForm({
       )}
       <DialogFooter>
         <Button type="button" variant="ghost" onClick={onClose}>
-          Cancel
+          {m.common.cancel}
         </Button>
         <Button type="submit" disabled={busy || picks.length === 0 || tooBig.length > 0}>
           {busy && <Loader2 className="animate-spin" />}
-          {busy ? "Uploading…" : "Add files"}
+          {busy ? m.upload.uploading : m.addFiles.title}
         </Button>
       </DialogFooter>
     </form>

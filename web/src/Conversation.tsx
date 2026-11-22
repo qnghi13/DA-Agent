@@ -251,9 +251,9 @@ export function Conversation({
     panel?.kind === "run"
       ? panel.evidence.run.question
       : panel?.kind === "memory"
-        ? "Memory"
+        ? m.conversation.memory
         : panel?.kind === "version"
-          ? "Review new files"
+          ? m.conversation.reviewFiles
           : panel
           ? dataset.name
           : "";
@@ -288,7 +288,7 @@ export function Conversation({
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 px-4 pt-8 pb-8 sm:px-6">
             {runs === null ? (
-              <div className="flex flex-col gap-3" aria-label="Loading questions">
+              <div className="flex flex-col gap-3" aria-label={m.conversation.loadingQuestions}>
                 <div className="bg-muted ml-auto h-10 w-2/3 animate-pulse rounded-2xl" />
                 <div className="bg-muted h-20 w-full animate-pulse rounded-xl" />
               </div>
@@ -305,7 +305,7 @@ export function Conversation({
                     onClick={loadOlder}
                   >
                     {loadingOlder && <Loader2 className="animate-spin" />}
-                    {loadingOlder ? "Loading…" : "Show earlier questions"}
+                    {loadingOlder ? m.conversation.loading : m.conversation.showEarlier}
                   </Button>
                 )}
                 {runs.map(({ id }) => (
@@ -319,7 +319,7 @@ export function Conversation({
                     {starts.has(id) && <ConversationBreak />}
                     {id in runVersions && isOlderVersion({ dataset_version: runVersions[id] }, currentVersion) && (
                       <span className="text-muted-foreground -mb-6 self-start rounded-full border px-2 py-0.5 text-[11px]">
-                        data v{runVersions[id]}
+                        {m.conversation.dataVersion(runVersions[id])}
                       </span>
                     )}
                     <RunMessage
@@ -388,8 +388,8 @@ export function Conversation({
               }
             >
               <Database className="size-3.5" />
-              <span className="hidden @2xl:inline">About this data</span>
-              <span className="@2xl:hidden">Data</span>
+              <span className="hidden @2xl:inline">{m.conversation.about}</span>
+              <span className="@2xl:hidden">{m.conversation.data}</span>
             </Button>
             <Button
               type="button"
@@ -397,11 +397,11 @@ export function Conversation({
               size="sm"
               className="text-muted-foreground h-8 gap-1.5 px-2 text-xs font-normal"
               disabled={openVersion !== null}
-              title={openVersion ? "Finish or discard the new files first" : undefined}
+              title={openVersion ? m.conversation.finishFirst : undefined}
               onClick={() => setAddOpen(true)}
             >
               <FilePlus2 className="size-3.5" />
-              Add files
+              {m.addFiles.title}
             </Button>
             <Button
               type="button"
@@ -416,7 +416,7 @@ export function Conversation({
               }
             >
               <BookMarked className="size-3.5" />
-              Memory
+              {m.conversation.memory}
             </Button>
             {conversation && last?.conversation_id === conversation && (
               <Button
@@ -425,11 +425,11 @@ export function Conversation({
                 size="sm"
                 className="text-muted-foreground h-8 gap-1.5 px-2 text-xs font-normal"
                 onClick={newConversation}
-                title="Start over: new questions will not refer to the ones above"
+                title={m.conversation.startOver}
               >
                 <MessageSquarePlus className="size-3.5" />
-                <span className="hidden @2xl:inline">New conversation</span>
-                <span className="sr-only @2xl:hidden">New conversation</span>
+                <span className="hidden @2xl:inline">{m.conversation.newConversation}</span>
+                <span className="sr-only @2xl:hidden">{m.conversation.newConversation}</span>
               </Button>
             )}
             </>
@@ -457,12 +457,12 @@ export function Conversation({
               <SheetTitle className="line-clamp-2 text-base">{panelTitle}</SheetTitle>
               <SheetDescription className="sr-only">
                 {panel?.kind === "run"
-                  ? "How the agent reached this answer"
+                  ? m.conversation.runPanel
                   : panel?.kind === "memory"
-                    ? "Notes the agent follows for this dataset"
+                    ? m.conversation.memoryPanel
                     : panel?.kind === "version"
-                      ? "Choices for the files you added"
-                      : "About this data"}
+                      ? m.conversation.versionPanel
+                      : m.conversation.about}
               </SheetDescription>
             </SheetHeader>
             {panelBody}
@@ -475,11 +475,12 @@ export function Conversation({
 
 /** Marks where the data version changed: answers below read the newer data. */
 function VersionDivider({ version, files }: { version: number; files: string[] }) {
+  const m = useT();
   return (
     <div role="separator" className="text-muted-foreground flex items-center gap-3 text-xs">
       <span className="bg-border h-px flex-1" />
       <span className="max-w-[80%] text-center">
-        {files.length > 0 && `Added ${files.join(", ")}. `}Answers below use data version {version}.
+        {m.conversation.divider(files.join(", "), version)}
       </span>
       <span className="bg-border h-px flex-1" />
     </div>
@@ -492,10 +493,11 @@ function runRef(run: { id: string; conversation_id: string | null }): RunRef {
 
 /** Marks where a new conversation starts: the agent does not remember questions above it. */
 function ConversationBreak({ fresh = false }: { fresh?: boolean }) {
+  const m = useT();
   return (
     <div role="separator" className="text-muted-foreground flex items-center gap-3 text-xs">
       <span className="bg-border h-px flex-1" />
-      {fresh ? "New conversation · earlier questions are not remembered" : "New conversation"}
+      {fresh ? m.conversation.freshBreak : m.conversation.newConversation}
       <span className="bg-border h-px flex-1" />
     </div>
   );
@@ -510,6 +512,7 @@ function DesktopPanel({
   onClose: () => void;
   children: ReactNode;
 }) {
+  const m = useT();
   const headingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
     headingRef.current?.focus();
@@ -524,7 +527,7 @@ function DesktopPanel({
 
   return (
     <aside
-      aria-label="Details"
+      aria-label={m.conversation.details}
       className="bg-background animate-in slide-in-from-right-4 fade-in flex w-[min(560px,45vw)] shrink-0 flex-col border-l duration-200"
     >
       <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
@@ -535,7 +538,7 @@ function DesktopPanel({
         >
           {title}
         </h2>
-        <Button variant="ghost" size="icon" className="size-8" aria-label="Close" onClick={onClose}>
+        <Button variant="ghost" size="icon" className="size-8" aria-label={m.common.close} onClick={onClose}>
           <X />
         </Button>
       </header>
@@ -550,10 +553,9 @@ function EmptyState({ dataset, onExample }: { dataset: Dataset; onExample: (text
   return (
     <div className="flex flex-col items-center gap-6 py-16 text-center">
       <div className="flex flex-col gap-2">
-        <h2 className="text-2xl font-semibold tracking-tight">Ask {dataset.name} anything</h2>
+        <h2 className="text-2xl font-semibold tracking-tight">{m.conversation.askAnything(dataset.name)}</h2>
         <p className="text-muted-foreground mx-auto max-w-md text-[15px] text-balance">
-          Ask in your own words. Every answer comes with the queries behind it, checked against
-          the data.
+          {m.conversation.askIntro}
         </p>
       </div>
       <div className="flex flex-wrap justify-center gap-2">
@@ -601,6 +603,7 @@ function Composer({
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onSubmit: (event: FormEvent) => void;
 }) {
+  const m = useT();
   return (
     <div className="bg-background/80 shrink-0 px-4 pb-4 backdrop-blur sm:px-6">
       <form onSubmit={onSubmit} className="@container mx-auto w-full max-w-3xl">
@@ -611,14 +614,14 @@ function Composer({
         )}
         <div className="bg-card focus-within:border-ring/60 focus-within:ring-ring/20 rounded-2xl border shadow-[0_2px_12px_rgba(0,0,0,0.05)] transition-shadow focus-within:ring-[3px]">
           <label className="sr-only" htmlFor="question">
-            Your question
+            {m.conversation.yourQuestion}
           </label>
           <textarea
             ref={inputRef}
             id="question"
             rows={1}
             maxLength={2000}
-            placeholder="Ask a question about this data…"
+            placeholder={m.conversation.placeholder}
             value={question}
             onChange={(event) => onQuestion(event.target.value)}
             onKeyDown={onKeyDown}
@@ -629,7 +632,7 @@ function Composer({
             <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1">
               <label className="text-muted-foreground hover:bg-accent flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs whitespace-nowrap">
                 <CalendarDays className="size-3.5" aria-hidden />
-                <span>As of</span>
+                <span>{m.conversation.asOf}</span>
                 <input
                   type="date"
                   value={asOf}
@@ -646,8 +649,8 @@ function Composer({
                 className="size-8 shrink-0 rounded-full"
                 disabled={stopping}
                 onClick={onStop}
-                aria-label={stopping ? "Stopping…" : "Stop"}
-                title={stopping ? "Stopping…" : "Stop this question"}
+                aria-label={stopping ? m.conversation.stopping : m.conversation.stop}
+                title={stopping ? m.conversation.stopping : m.conversation.stopHint}
               >
                 {stopping ? (
                   <Loader2 className="animate-spin" />
@@ -661,8 +664,8 @@ function Composer({
                 size="icon"
                 className="size-8 shrink-0 rounded-full"
                 disabled={sending || !question.trim()}
-                aria-label="Ask"
-                title="Send (Enter) · Shift+Enter for a new line"
+                aria-label={m.conversation.ask}
+                title={m.conversation.sendHint}
               >
                 {sending ? <Loader2 className="animate-spin" /> : <ArrowUp />}
               </Button>

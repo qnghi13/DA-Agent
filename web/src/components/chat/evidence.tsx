@@ -15,6 +15,7 @@ const PREVIEW_ROWS = 20;
 
 /** Everything behind one answer: steps, SQL, the rows the model saw, and the report. */
 export function EvidenceContent({ api, evidence }: { api: Api; evidence: Evidence }) {
+  const m = useT();
   const { run, trail } = evidence;
   const queries = run.result?.queries ?? [];
   const canReport = run.status === "succeeded" && Boolean(run.result);
@@ -25,13 +26,13 @@ export function EvidenceContent({ api, evidence }: { api: Api; evidence: Evidenc
       <Tabs defaultValue="steps" className="flex min-h-0 flex-1 flex-col gap-0">
         <div className="border-b px-4">
           <TabsList className="h-10 gap-4 rounded-none bg-transparent p-0">
-            {["steps", "sql", "data", ...(canReport ? ["report"] : [])].map((tab) => (
+            {(["steps", "sql", "data", ...(canReport ? ["report"] : [])] as const).map((tab) => (
               <TabsTrigger
                 key={tab}
                 value={tab}
-                className="data-[state=active]:border-foreground text-muted-foreground data-[state=active]:text-foreground h-10 flex-none rounded-none border-0 border-b-2 border-transparent px-0 capitalize shadow-none data-[state=active]:bg-transparent data-[state=active]:shadow-none dark:data-[state=active]:bg-transparent"
+                className="data-[state=active]:border-foreground text-muted-foreground data-[state=active]:text-foreground h-10 flex-none rounded-none border-0 border-b-2 border-transparent px-0 shadow-none data-[state=active]:bg-transparent data-[state=active]:shadow-none dark:data-[state=active]:bg-transparent"
               >
-                {tab === "sql" ? "SQL" : tab}
+                {m.evidence.tabs[tab as keyof typeof m.evidence.tabs]}
                 {tab === "sql" && queries.length > 0 && (
                   <span className="text-muted-foreground ml-1 text-xs">{queries.length}</span>
                 )}
@@ -48,11 +49,11 @@ export function EvidenceContent({ api, evidence }: { api: Api; evidence: Evidenc
                 ))}
               </ol>
             ) : (
-              <Empty>No steps were recorded for this run.</Empty>
+              <Empty>{m.evidence.noSteps}</Empty>
             )}
             {trail.steps.some((s) => s.kind === "verify" && s.problems.length) && (
               <div className="mt-4">
-                <h3 className="mb-2 text-sm font-medium">What the checks found</h3>
+                <h3 className="mb-2 text-sm font-medium">{m.evidence.checksFound}</h3>
                 <ul className="text-muted-foreground list-disc pl-5 text-sm">
                   {trail.steps.flatMap((s) =>
                     s.kind === "verify" ? s.problems.map((p, i) => <li key={`${s.id}-${i}`}>{p}</li>) : [],
@@ -74,7 +75,7 @@ export function EvidenceContent({ api, evidence }: { api: Api; evidence: Evidenc
                 />
               ))
             ) : (
-              <Empty>The agent ran no queries.</Empty>
+              <Empty>{m.evidence.noQueries}</Empty>
             )}
           </TabsContent>
           <TabsContent value="data" className="flex flex-col gap-5 p-4">
@@ -90,7 +91,7 @@ export function EvidenceContent({ api, evidence }: { api: Api; evidence: Evidenc
                 />
               ))
             ) : (
-              <Empty>No query results.</Empty>
+              <Empty>{m.evidence.noResults}</Empty>
             )}
           </TabsContent>
           {canReport && (
@@ -110,7 +111,7 @@ export function EvidenceContent({ api, evidence }: { api: Api; evidence: Evidenc
             rel="noopener noreferrer"
             className="hover:text-foreground inline-flex items-center gap-1 underline-offset-4 hover:underline"
           >
-            {(run.traces ?? []).length > 1 ? `Trace, attempt ${link.attempt}` : "Open trace"}
+            {(run.traces ?? []).length > 1 ? m.evidence.traceAttempt(link.attempt) : m.evidence.openTrace}
             <ExternalLink className="size-3" />
           </a>
         ))}
@@ -178,7 +179,7 @@ function SqlBlock({
       const job = await waitForJob((queryId) => api.getQuery(queryId), id, {
         signal: controller.signal,
       });
-      if (job.status === "failed") setError(job.error ?? "The query failed.");
+      if (job.status === "failed") setError(job.error ?? m.evidence.queryFailed);
       else setResult(job);
     } catch (caught) {
       if (!controller.signal.aborted) setError(errorMessage(caught, m));
@@ -199,26 +200,26 @@ function SqlBlock({
     <div className="overflow-hidden rounded-lg border">
       <div className="bg-muted flex items-center justify-between gap-1 border-b px-3 py-1.5">
         <span className="text-muted-foreground flex-1 text-xs">
-          Query {index + 1}
-          {editing && draft !== query.sql ? " · edited" : ""}
+          {m.evidence.query(index + 1)}
+          {editing && draft !== query.sql ? m.evidence.edited : ""}
         </span>
         {actions && !editing && (
           <Button
             variant="ghost"
             size="sm"
             className="h-7"
-            aria-label={`Edit query ${index + 1}`}
+            aria-label={m.evidence.editQuery(index + 1)}
             onClick={() => setEditing(true)}
           >
             <Pencil />
-            Edit
+            {m.evidence.edit}
           </Button>
         )}
         <Button
           variant="ghost"
           size="icon"
           className="size-7"
-          aria-label={`Copy query ${index + 1}`}
+          aria-label={m.evidence.copyQuery(index + 1)}
           onClick={() => copy(editing ? draft : query.sql)}
         >
           {copied ? <Check /> : <Copy />}
@@ -233,22 +234,20 @@ function SqlBlock({
               if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && !busy) run();
             }}
             spellCheck={false}
-            aria-label={`SQL for query ${index + 1}`}
+            aria-label={m.evidence.sqlFor(index + 1)}
             aria-invalid={error ? true : undefined}
             className="font-mono text-[12.5px] leading-relaxed md:text-[12.5px]"
           />
           <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" className="h-7" disabled={busy || !draft.trim()} onClick={run}>
               <Play />
-              {busy ? "Running…" : "Run"}
+              {busy ? m.evidence.running : m.evidence.run}
             </Button>
             <Button variant="ghost" size="sm" className="h-7" onClick={reset}>
               <RotateCcw />
-              Reset
+              {m.evidence.reset}
             </Button>
-            <span className="text-muted-foreground text-xs">
-              One SELECT on this dataset. Ctrl+Enter runs it.
-            </span>
+            <span className="text-muted-foreground text-xs">{m.evidence.editHint}</span>
           </div>
           {error && (
             <p role="alert" className="text-danger font-mono text-xs break-words whitespace-pre-wrap">
@@ -273,24 +272,21 @@ function EditedRows({ api, job }: { api: Api; job: QueryJob }) {
     <section className="flex flex-col gap-2 pt-1">
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-muted-foreground text-xs font-medium">
-          Edited query · {job.truncated ? "first " : ""}
-          {job.rows.length.toLocaleString()} row{job.rows.length === 1 ? "" : "s"}
+          {m.evidence.editedRows(job.truncated, new Intl.NumberFormat(m.locale).format(job.rows.length), job.rows.length)}
         </h3>
         <ExportButton
           start={() => api.startQueryExport(job.id)}
           getExport={(id) => api.getExport(id)}
-          label="the edited query"
+          label={m.evidence.theEditedQuery}
         />
       </div>
       {shown.length ? (
         <DataTable columns={job.columns} rows={shown.map((row) => row.map((value) => cell(value, m.locale)))} />
       ) : (
-        <Empty>No rows.</Empty>
+        <Empty>{m.evidence.noRows}</Empty>
       )}
       {(job.truncated || job.rows.length > PREVIEW_ROWS) && (
-        <p className="text-muted-foreground text-xs">
-          Showing the first {shown.length} rows{job.truncated ? " of a longer result" : ""}.
-        </p>
+        <p className="text-muted-foreground text-xs">{m.evidence.showingFirst(shown.length, job.truncated)}</p>
       )}
     </section>
   );
@@ -315,27 +311,28 @@ function QueryRows({
     <section className="flex flex-col gap-2">
       <div className="flex items-center justify-between gap-2">
         <h3 className="text-muted-foreground text-xs font-medium">
-          Query {index + 1} · {query.truncated ? "first " : ""}
-          {query.rows.length.toLocaleString()} row
-          {query.rows.length === 1 ? "" : "s"}
+          {m.evidence.queryRows(
+            index + 1,
+            Boolean(query.truncated),
+            new Intl.NumberFormat(m.locale).format(query.rows.length),
+            query.rows.length,
+          )}
         </h3>
         {actions && (
           <ExportButton
             start={() => api.startExport(runId, index)}
             getExport={(id) => api.getExport(id)}
-            label={`query ${index + 1}`}
+            label={m.evidence.queryLabel(index + 1)}
           />
         )}
       </div>
       {shown.length ? (
         <DataTable columns={query.columns} rows={shown.map((row) => row.map((value) => cell(value, m.locale)))} />
       ) : (
-        <Empty>No rows.</Empty>
+        <Empty>{m.evidence.noRows}</Empty>
       )}
       {(query.truncated || query.rows.length > PREVIEW_ROWS) && (
-        <p className="text-muted-foreground text-xs">
-          Showing the first {shown.length} rows{query.truncated ? " of a longer result" : ""}.
-        </p>
+        <p className="text-muted-foreground text-xs">{m.evidence.showingFirst(shown.length, Boolean(query.truncated))}</p>
       )}
     </section>
   );
@@ -372,7 +369,7 @@ function ExportButton({
         signal: controller.signal,
       });
       if (job.status === "failed") {
-        setError(job.error ?? "The export failed.");
+        setError(job.error ?? m.evidence.exportFailed);
         return;
       }
       const link = document.createElement("a");
@@ -394,10 +391,10 @@ function ExportButton({
         className="h-7"
         disabled={busy}
         onClick={download}
-        aria-label={`Download ${label} as CSV`}
+        aria-label={m.evidence.downloadAs(label)}
       >
         <Download />
-        {busy ? "Preparing file…" : "Download CSV"}
+        {busy ? m.evidence.preparing : m.evidence.downloadCsv}
       </Button>
       {error && <p className="text-danger max-w-72 text-right text-xs">{error}</p>}
     </div>
@@ -406,17 +403,18 @@ function ExportButton({
 
 /** The run id, for finding the run in the trace viewer by da_agent.job_id. */
 function RunId({ id }: { id: string }) {
+  const m = useT();
   const [copied, copy] = useCopy();
   return (
     <span className="inline-flex items-center gap-1">
-      Run <code className="text-foreground">{id.slice(0, 8)}</code>
+      {m.evidence.runLabel} <code className="text-foreground">{id.slice(0, 8)}</code>
       <button
         type="button"
         onClick={() => copy(id)}
-        aria-label={`Copy run id ${id}`}
+        aria-label={m.evidence.copyRunId(id)}
         className="hover:text-foreground underline-offset-4 hover:underline"
       >
-        {copied ? "Copied" : "Copy ID"}
+        {copied ? m.account.copied : m.evidence.copyId}
       </button>
     </span>
   );
@@ -459,12 +457,12 @@ function Report({ api, runId }: { api: Api; runId: string }) {
         <Button asChild variant="outline" size="sm" className="self-start">
           <a href={download} download={`da-agent-report-${runId}.html`}>
             <Download />
-            Download report
+            {m.evidence.downloadReport}
           </a>
         </Button>
       )}
       <iframe
-        title="Run report"
+        title={m.evidence.report}
         sandbox="allow-scripts"
         srcDoc={html}
         className="h-[70vh] w-full rounded-lg border bg-white"

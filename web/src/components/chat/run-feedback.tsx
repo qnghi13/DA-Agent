@@ -88,7 +88,7 @@ export function RunFeedbackControl({ api, run }: { api: Api; run: Run }) {
     <>
       <div className="ml-auto flex items-center gap-1">
         <span className="text-muted-foreground text-xs" aria-live="polite">
-          {thanks ? "Thanks" : ""}
+          {thanks ? m.feedback.thanks : ""}
         </span>
         {rating === "down" && !asking && (
           <Button
@@ -103,16 +103,16 @@ export function RunFeedbackControl({ api, run }: { api: Api; run: Run }) {
               setAsking(true);
             }}
           >
-            Say why
+            {m.feedback.sayWhy}
           </Button>
         )}
         <Button
           variant="ghost"
           size="icon"
           className="size-8"
-          aria-label="Good answer"
+          aria-label={m.feedback.good}
           aria-pressed={rating === "up"}
-          title={rating === "up" ? "Take back" : "Good answer: keep it as a check for later versions"}
+          title={rating === "up" ? m.feedback.takeBack : m.feedback.goodHint}
           disabled={busy}
           onClick={() => rate("up")}
         >
@@ -122,9 +122,9 @@ export function RunFeedbackControl({ api, run }: { api: Api; run: Run }) {
           variant="ghost"
           size="icon"
           className="size-8"
-          aria-label="Bad answer"
+          aria-label={m.feedback.bad}
           aria-pressed={rating === "down"}
-          title={rating === "down" ? "Take back" : "Bad answer"}
+          title={rating === "down" ? m.feedback.takeBack : m.feedback.bad}
           disabled={busy}
           onClick={() => rate("down")}
         >
@@ -133,8 +133,8 @@ export function RunFeedbackControl({ api, run }: { api: Api; run: Run }) {
       </div>
       {asking && (
         <div className="bg-card flex basis-full flex-col gap-3 rounded-xl border p-3">
-          <p className="text-sm font-medium">What was wrong? (optional)</p>
-          <div className="flex flex-wrap gap-2" role="group" aria-label="Reasons">
+          <p className="text-sm font-medium">{m.feedback.whatWrong}</p>
+          <div className="flex flex-wrap gap-2" role="group" aria-label={m.feedback.reasonsLabel}>
             {feedbackReasons(m).map((reason) => (
               <Button
                 key={reason.value}
@@ -150,8 +150,8 @@ export function RunFeedbackControl({ api, run }: { api: Api; run: Run }) {
             ))}
           </div>
           <Textarea
-            aria-label="Note"
-            placeholder="Anything else? For example, the right figure."
+            aria-label={m.feedback.note}
+            placeholder={m.feedback.notePlaceholder}
             maxLength={MAX_NOTE}
             rows={2}
             disabled={busy}
@@ -166,10 +166,10 @@ export function RunFeedbackControl({ api, run }: { api: Api; run: Run }) {
               disabled={busy}
               onClick={() => setAsking(false)}
             >
-              Skip
+              {m.feedback.skip}
             </Button>
             <Button type="button" size="sm" disabled={busy} onClick={send}>
-              Send
+              {m.feedback.send}
             </Button>
           </div>
         </div>

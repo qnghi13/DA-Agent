@@ -111,7 +111,7 @@ export function RunMessage({
         {error}
       </p>
     ) : (
-      <div className="bg-muted h-16 animate-pulse rounded-xl" aria-label="Loading" />
+      <div className="bg-muted h-16 animate-pulse rounded-xl" aria-label={m.common.loading} />
     );
   }
 
@@ -121,7 +121,7 @@ export function RunMessage({
       <div className="flex justify-end">
         <div className="bg-secondary max-w-[85%] rounded-2xl rounded-br-md border px-4 py-2.5 text-[15px] leading-relaxed whitespace-pre-wrap">
           {run.question}
-          <div className="text-muted-foreground mt-1 text-right text-[11px]">As of {run.as_of}</div>
+          <div className="text-muted-foreground mt-1 text-right text-[11px]">{m.chat.asOf(run.as_of ?? "")}</div>
         </div>
       </div>
       {finished ? (
@@ -166,10 +166,10 @@ function Progress({ trail, queued }: { trail: Trail; queued: boolean }) {
     <div className="flex flex-col gap-2" role="status" aria-live="polite">
       <div className="flex items-center gap-2 text-sm">
         <StatusBadge tone="info" busy>
-          {queued ? "Queued" : "Running"}
+          {queued ? m.chat.queued : m.chat.running}
         </StatusBadge>
         <span className="text-foreground font-medium">
-          {queued ? "Waiting for a worker" : activity(trail, m)}
+          {queued ? m.chat.waiting : activity(trail, m)}
         </span>
         <span className="text-muted-foreground tabular-nums">{elapsed} s</span>
       </div>
@@ -180,7 +180,7 @@ function Progress({ trail, queued }: { trail: Trail; queued: boolean }) {
           ))}
           <li className="text-muted-foreground flex items-center gap-2 text-sm">
             <Loader2 className="text-info size-3.5 animate-spin" aria-hidden />
-            Working…
+            {m.chat.working}
           </li>
         </ol>
       )}
@@ -198,11 +198,11 @@ export function StepLine({ step, compact = false }: { step: TrailStep; compact?:
   let text: string;
   if (step.kind === "plan") {
     const count = step.steps.length;
-    text = count ? `Planned ${count} step${count === 1 ? "" : "s"}` : "Planned the steps";
+    text = m.chat.planned(count);
     if (!compact && count) {
       return (
         <li className="flex items-start gap-2 text-sm">
-          <Check className="text-success mt-0.5 size-3.5 shrink-0" aria-label="Done" />
+          <Check className="text-success mt-0.5 size-3.5 shrink-0" aria-label={m.common.done} />
           <div className="min-w-0">
             <span className="text-muted-foreground">{text}</span>
             <ol className="mt-1.5 flex list-decimal flex-col gap-1 pl-5 text-[13px] leading-relaxed">
@@ -218,22 +218,20 @@ export function StepLine({ step, compact = false }: { step: TrailStep; compact?:
     }
   } else if (step.kind === "verify") {
     ok = step.passed;
-    text = step.passed
-      ? "Checked the answer against the data"
-      : "The checks found problems, so the agent kept working";
+    text = step.passed ? m.chat.checked : m.chat.checkFailed;
   } else {
     ok = step.ok;
     text = toolLabel(step.tool, m);
     if (step.rowCount !== null) {
-      text += ` · ${step.rowCount.toLocaleString()} row${step.rowCount === 1 ? "" : "s"}`;
+      text += m.chat.rows(new Intl.NumberFormat(m.locale).format(step.rowCount), step.rowCount);
     }
   }
   return (
     <li className="flex items-start gap-2 text-sm">
       {ok ? (
-        <Check className="text-success mt-0.5 size-3.5 shrink-0" aria-label="Done" />
+        <Check className="text-success mt-0.5 size-3.5 shrink-0" aria-label={m.common.done} />
       ) : (
-        <X className="text-warning mt-0.5 size-3.5 shrink-0" aria-label="Problem" />
+        <X className="text-warning mt-0.5 size-3.5 shrink-0" aria-label={m.chat.problem} />
       )}
       <span className={ok ? "text-muted-foreground" : "text-foreground"}>{text}</span>
     </li>
@@ -297,14 +295,12 @@ function Answer({
 
       {run.status === "failed" ? (
         <Callout icon={AlertCircle} tone="danger">
-          The run failed{run.error ? `: ${run.error}` : "."}
+          {m.chat.runFailed(run.error ?? null)}
         </Callout>
       ) : question ? (
         <Callout icon={CircleHelp} tone="warning">
-          <span className="font-medium">The agent needs more detail:</span> {question}
-          <span className="text-muted-foreground mt-1 block">
-            Ask again with that detail in your question.
-          </span>
+          <span className="font-medium">{m.chat.needsDetail}</span> {question}
+          <span className="text-muted-foreground mt-1 block">{m.chat.askAgain}</span>
         </Callout>
       ) : result?.answer ? (
         <>
@@ -317,7 +313,7 @@ function Answer({
         <p className="text-muted-foreground text-[15px]">
           {stopReasonText(result?.stop_reason ?? (run.status === "cancelled" ? "cancelled" : undefined), m) ??
             result?.error ??
-            "No answer."}
+            m.chat.noAnswer}
         </p>
       )}
 
@@ -339,23 +335,23 @@ function Answer({
           onClick={(event) => onShowWork(event.currentTarget)}
         >
           <PanelRight />
-          Show work
+          {m.chat.showWork}
         </Button>
         {text && (
           <Button variant="ghost" size="sm" onClick={copy}>
             {copied ? <Check /> : <Copy />}
-            {copied ? "Copied" : "Copy"}
+            {copied ? m.account.copied : m.chat.copy}
           </Button>
         )}
         {onCorrect && run.status === "succeeded" && (
           <Button
             variant="ghost"
             size="sm"
-            title="Teach the agent the rule it got wrong; new questions will follow it"
+            title={m.chat.correctHint}
             onClick={(event) => onCorrect(event.currentTarget)}
           >
             <BookMarked />
-            Correct
+            {m.chat.correct}
           </Button>
         )}
         {run.status === "succeeded" && <RunFeedbackControl api={api} run={run} />}
@@ -428,7 +424,7 @@ function HowCalculated({
           aria-hidden
         />
         <Sigma className="size-4" aria-hidden />
-        How it was calculated
+        {m.chat.howCalculated}
       </summary>
       <div className="mt-3 flex flex-col gap-4">
         {used.length > 0 && (
@@ -439,11 +435,11 @@ function HowCalculated({
                 variant="outline"
                 size="sm"
                 className="h-7 rounded-full text-xs"
-                title="Open memory to see this definition"
+                title={m.chat.openDefinition}
                 onClick={(event) => onOpenMemory?.(event.currentTarget)}
               >
                 <BookMarked className="text-info" />
-                Used your definition of {metric.name}
+                {m.chat.usedDefinition(metric.name)}
               </Button>
             ))}
           </div>
@@ -452,7 +448,7 @@ function HowCalculated({
           <div key={explanation.query_index} className="flex flex-col gap-1.5">
             {explanations.length > 1 && (
               <p className="text-muted-foreground text-xs font-medium">
-                Calculation {index + 1} of {explanations.length}
+                {m.chat.calculation(index + 1, explanations.length)}
               </p>
             )}
             <dl className="grid grid-cols-[minmax(0,8.5rem)_1fr] gap-x-3 gap-y-1.5">
@@ -478,10 +474,7 @@ function HowCalculated({
           </div>
         ))}
         {partial && (
-          <p className="text-muted-foreground text-xs">
-            Some steps can't be put into words yet. Open Show work, then SQL, to see the whole
-            query.
-          </p>
+          <p className="text-muted-foreground text-xs">{m.chat.partial}</p>
         )}
       </div>
       <SaveMetricDialog api={api} choice={choice} onClose={() => setChoice(null)} />
@@ -495,7 +488,7 @@ function uniqueById<T extends { id: string }>(items: T[]): T[] {
 
 type Candidate = NonNullable<Explanation["metric_candidates"]>[number];
 
-/** "Save as a definition" for each measure the API can read; named when there are several. */
+/** Save as a definition, for each measure the API can read; named when there are several. */
 function SaveMetricButtons({
   explanation,
   onChoose,
@@ -518,8 +511,8 @@ function SaveMetricButtons({
         >
           <BookmarkPlus />
           {candidates.length > 1
-            ? `Save “${describeExpr(candidate.facts.measure, m)}” as a definition`
-            : "Save as a definition"}
+            ? m.chat.saveNamed(describeExpr(candidate.facts.measure, m))
+            : m.chat.saveDefinition}
         </Button>
       ))}
     </div>

@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { type Api, type Dataset, type DatasetSpec, type DatasetVersion, type OverlapChoice, type RepairChange, type VersionChange } from "./api";
 import { errorMessage } from "@/i18n/errors";
 import { useT } from "@/i18n/context";
+import type { Messages } from "@/i18n/en";
 import { Button } from "./components/ui/button";
 import { Label } from "./components/ui/label";
 import { SpecEditor } from "./SpecEditor";
@@ -14,19 +15,16 @@ import {
   replaceOptions,
 } from "./versions";
 
-const CHOICE_LABELS: Record<OverlapChoice, string> = {
-  replace: "Replace old file",
-  drop_overlap: "Drop overlapping rows",
-  keep_both: "Keep both",
-};
-
-const KIND_TEXT: Record<"exact" | "key" | "date", (rows: number, key?: string[], column?: string | null) => string> = {
-  exact: (rows) => `${rows.toLocaleString("en-US")} new rows repeat older rows exactly.`,
-  key: (rows, key) =>
-    `${rows.toLocaleString("en-US")} new rows have the same ${key?.join(", ") || "key"} as older rows.`,
-  date: (rows, _key, column) =>
-    `${rows.toLocaleString("en-US")} new rows fall inside the dates the old data already covers${column ? ` (${column})` : ""}.`,
-};
+function overlapText(
+  overlap: { kind: "exact" | "key" | "date"; rows: number; key?: string[]; column?: string | null },
+  m: Messages,
+): string {
+  const rows = new Intl.NumberFormat(m.locale).format(overlap.rows);
+  const words = m.versionReview;
+  if (overlap.kind === "exact") return words.exact(rows);
+  if (overlap.kind === "key") return words.sameKey(rows, overlap.key?.join(", ") ?? "");
+  return words.insideDates(rows, overlap.column ?? null);
+}
 
 const show = (value: unknown) => (typeof value === "string" ? value : JSON.stringify(value));
 
@@ -131,12 +129,15 @@ export function VersionReview({
 
         {near.map((change) => (
           <p key={change.table} className="border-warning-line bg-warning-soft rounded-lg border px-3 py-2 text-sm">
-            Looks like {change.near_match}, but columns differ: +{change.extra_columns.length} −
-            {change.missing_columns.length}. It will be a separate table.
+            {m.versionReview.nearMatch(
+              change.near_match ?? "",
+              change.extra_columns.length,
+              change.missing_columns.length,
+            )}
             {(change.extra_columns.length > 0 || change.missing_columns.length > 0) && (
               <span className="text-muted-foreground block text-xs">
-                {change.extra_columns.length > 0 && <>New columns: {change.extra_columns.join(", ")}. </>}
-                {change.missing_columns.length > 0 && <>Missing columns: {change.missing_columns.join(", ")}.</>}
+                {change.extra_columns.length > 0 && <>{m.versionReview.newColumns(change.extra_columns.join(", "))} </>}
+                {change.missing_columns.length > 0 && <>{m.versionReview.missingColumns(change.missing_columns.join(", "))}</>}
               </span>
             )}
           </p>
@@ -145,11 +146,9 @@ export function VersionReview({
         {proposed && proposed.tables.length > 0 && (
           <section className="flex flex-col gap-2" aria-labelledby="new-tables">
             <h3 id="new-tables" className="text-sm font-semibold">
-              New tables
+              {m.versionReview.newTables}
             </h3>
-            <p className="text-muted-foreground text-xs">
-              How the new files become tables. Edit names, types, and descriptions before they are added.
-            </p>
+            <p className="text-muted-foreground text-xs">{m.versionReview.newTablesText}</p>
             <SpecEditor spec={proposed} busy={busy} onApprove={() => {}} embedded onChange={setEdited} />
           </section>
         )}
@@ -157,11 +156,9 @@ export function VersionReview({
         {repairs.length > 0 && (
           <section className="flex flex-col gap-2" aria-labelledby="repairs">
             <h3 id="repairs" className="text-sm font-semibold">
-              Proposed fixes to existing tables
+              {m.versionReview.repairs}
             </h3>
-            <p className="text-muted-foreground text-xs">
-              Some values in the new files did not parse. These changes to how the table is read may fix that.
-            </p>
+            <p className="text-muted-foreground text-xs">{m.versionReview.repairsText}</p>
             <ul className="divide-y rounded-lg border">
               {repairs.map((repair, index) => (
                 <RepairRow
@@ -178,7 +175,7 @@ export function VersionReview({
         {changes.some((c) => c.quality.length > 0) && (
           <section className="flex flex-col gap-1" aria-labelledby="quality">
             <h3 id="quality" className="text-sm font-semibold">
-              Parse problems
+              {m.versionReview.parseProblems}
             </h3>
             <ul className="list-disc pl-5 text-sm">
               {changes.flatMap((c) => c.quality.map((q) => <li key={`${c.table}:${q}`}>{q}</li>))}
@@ -187,22 +184,22 @@ export function VersionReview({
         )}
         {repairProblem && (
           <p role="alert" className="border-warning-line bg-warning-soft rounded-lg border px-3 py-2 text-sm">
-            The agent could not propose a fix: {repairProblem}
+            {m.versionReview.noFix(repairProblem)}
           </p>
         )}
 
         {removed.length > 0 && (
           <section className="flex flex-col gap-1" aria-labelledby="removed">
             <h3 id="removed" className="text-sm font-semibold">
-              Tables that go away
+              {m.versionReview.removed}
             </h3>
             <ul className="list-disc pl-5 text-sm">
               {removed.map((c) => (
                 <li key={c.table}>
-                  <code>{c.table}</code> is not in the new files.
+                  <code>{c.table}</code> {m.versionReview.notInNewFiles}
                   {c.stale_metrics.length > 0 && (
                     <span className="text-warning block">
-                      Saved definitions that stop working: {c.stale_metrics.join(", ")}.
+                      {m.versionReview.staleMetrics(c.stale_metrics.join(", "))}
                     </span>
                   )}
                 </li>
@@ -219,20 +216,20 @@ export function VersionReview({
           </p>
         )}
         {missing.length > 0 && (
-          <p className="text-muted-foreground text-xs">Choose what to do for: {missing.join(", ")}.</p>
+          <p className="text-muted-foreground text-xs">{m.versionReview.chooseFor(missing.join(", "))}</p>
         )}
         <div className="flex flex-wrap items-center justify-end gap-2">
           <Button type="button" variant="ghost" disabled={busy} onClick={discard}>
-            Discard
+            {m.versionStatus.discard}
           </Button>
           {repairProblem && (
             <Button type="button" variant="outline" disabled={busy || missing.length > 0} onClick={() => send(true)}>
-              Apply anyway
+              {m.versionReview.applyAnyway}
             </Button>
           )}
           <Button type="button" disabled={busy || missing.length > 0} onClick={() => send(false)}>
             {busy && <Loader2 className="animate-spin" />}
-            Apply
+            {m.versionReview.apply}
           </Button>
         </div>
       </div>
@@ -262,11 +259,11 @@ function OverlapSection({
   return (
     <fieldset className="bg-card flex flex-col gap-3 rounded-xl border p-4">
       <legend className="px-1 text-sm font-semibold">
-        <code>{change.table}</code>: new rows overlap the old data
+        <code>{change.table}</code>: {m.versionReview.overlapTitle}
       </legend>
       {overlaps.map((overlap, i) => (
         <div key={i} className="flex flex-col gap-1 text-sm">
-          <p>{KIND_TEXT[overlap.kind](overlap.rows, overlap.key, overlap.column)}</p>
+          <p>{overlapText(overlap, m)}</p>
           {earlierNewFilesText(overlap, m) && (
             <p className="text-muted-foreground">{earlierNewFilesText(overlap, m)}</p>
           )}
@@ -275,7 +272,7 @@ function OverlapSection({
               {overlap.examples.slice(0, 3).map((example, j) => (
                 <li key={j} className="break-words">
                   {Object.entries(example)
-                    .map(([k, v]) => `${k}=${v ?? "empty"}`)
+                    .map(([k, v]) => `${k}=${v ?? m.versionReview.empty}`)
                     .join(", ")}
                 </li>
               ))}
@@ -283,7 +280,7 @@ function OverlapSection({
           )}
         </div>
       ))}
-      <div role="radiogroup" aria-label={`What to do with the overlap in ${change.table}`} className="flex flex-col gap-1.5">
+      <div role="radiogroup" aria-label={m.versionReview.overlapChoice(change.table)} className="flex flex-col gap-1.5">
         {allowed.map((value) => (
           <label key={value} className="flex items-center gap-2 text-sm">
             <input
@@ -293,13 +290,13 @@ function OverlapSection({
               checked={choice === value}
               onChange={() => onChoice(value)}
             />
-            {CHOICE_LABELS[value]}
+            {m.versionReview.choices[value]}
           </label>
         ))}
       </div>
       {choice === "replace" && (
         <div className="grid gap-1.5">
-          <Label htmlFor={`${id}-file`}>Old file to replace</Label>
+          <Label htmlFor={`${id}-file`}>{m.versionReview.oldFile}</Label>
           <select
             id={`${id}-file`}
             value={file ?? ""}
@@ -307,7 +304,7 @@ function OverlapSection({
             className="border-input bg-background h-8 rounded-md border px-2 text-sm"
           >
             <option value="" disabled>
-              Choose a file
+              {m.versionReview.chooseFile}
             </option>
             {files.map((f) => (
               <option key={f.stored_as} value={f.stored_as}>
@@ -330,6 +327,7 @@ function RepairRow({
   checked: boolean;
   onChange: (on: boolean) => void;
 }) {
+  const m = useT();
   const id = `repair-${repair.table}-${repair.path}`;
   return (
     <li className="flex items-start gap-3 px-3 py-2 text-sm">
@@ -342,12 +340,14 @@ function RepairRow({
       />
       <label htmlFor={id} className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span>
-          Accept the change to <code>{repair.table}</code> · <code>{repair.path}</code>
+          {m.versionReview.acceptChange} <code>{repair.table}</code> · <code>{repair.path}</code>
         </span>
         <span className="text-muted-foreground font-mono text-xs break-words">
-          before: {show(repair.before)}
+          {m.versionReview.before} {show(repair.before)}
         </span>
-        <span className="font-mono text-xs break-words">after: {show(repair.after)}</span>
+        <span className="font-mono text-xs break-words">
+          {m.versionReview.after} {show(repair.after)}
+        </span>
       </label>
     </li>
   );

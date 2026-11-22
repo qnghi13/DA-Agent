@@ -120,20 +120,20 @@ export function VersionStatus({
       {waiting && (
         <>
           <Button size="sm" onClick={(event) => onReview(event.currentTarget)}>
-            Review
+            {m.versionStatus.review}
           </Button>
           <Button size="sm" variant="ghost" onClick={discard}>
-            Discard
+            {m.versionStatus.discard}
           </Button>
         </>
       )}
       {stuck && (
         <Button size="sm" variant="ghost" onClick={discard}>
-          Discard
+          {m.versionStatus.discard}
         </Button>
       )}
       {!open && (
-        <Button size="icon" variant="ghost" className="size-7" aria-label="Dismiss" onClick={onDismiss}>
+        <Button size="icon" variant="ghost" className="size-7" aria-label={m.versionStatus.dismiss} onClick={onDismiss}>
           <X />
         </Button>
       )}
@@ -146,19 +146,20 @@ export function VersionStatus({
   );
 }
 
-/** The dataset's versions with their files and status, for the "About this data" panel. */
+/** The dataset's versions with their files and status, for the About this data panel. */
 export function VersionList({ versions }: { versions: DatasetVersion[] }) {
+  const m = useT();
   if (versions.length < 2) return null;
   return (
     <section className="mb-4 flex flex-col gap-2" aria-labelledby="version-list">
       <h3 id="version-list" className="text-sm font-semibold">
-        Versions
+        {m.versionStatus.versions}
       </h3>
       <ul className="divide-y rounded-lg border text-sm">
         {[...versions].reverse().map((v) => (
           <li key={v.version} className="flex flex-wrap items-baseline gap-x-3 px-3 py-2">
-            <span className="font-medium">Version {v.version}</span>
-            <span className="text-muted-foreground text-xs">{v.status.replace("_", " ")}</span>
+            <span className="font-medium">{m.versionStatus.version(v.version)}</span>
+            <span className="text-muted-foreground text-xs">{m.versionStatus.statuses[v.status]}</span>
             <span className="text-muted-foreground w-full text-xs break-words">
               {v.files.map((f) => f.name).join(", ")}
             </span>

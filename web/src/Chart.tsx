@@ -13,6 +13,7 @@ import {
 } from "./components/ui/dropdown-menu";
 import { chartFilename } from "./export";
 import { useDark } from "./hooks/use-dark";
+import { useT } from "@/i18n/context";
 
 // Categorical slots in the dataviz skill's validated order, checked with its validate_palette.js
 // against the card surface of each mode (#ffffff, #111111): all gates pass. Light slots 3–5 sit
@@ -81,6 +82,7 @@ export function chartConfig(dark: boolean): Config {
 /** A Vega-Lite spec built by the backend from a query. No spec expressions are compiled: the
  * interpreter evaluates them, matching the report's CSP-safe setup. */
 export default function Chart({ spec }: { spec: VegaLiteSpec }) {
+  const m = useT();
   const holder = useRef<HTMLDivElement>(null);
   const dark = useDark();
   const [failed, setFailed] = useState(false);
@@ -116,7 +118,7 @@ export default function Chart({ spec }: { spec: VegaLiteSpec }) {
     };
   }, [spec, dark]);
 
-  if (failed) return <p className="text-muted-foreground text-sm">This chart could not be drawn.</p>;
+  if (failed) return <p className="text-muted-foreground text-sm">{m.chart.failed}</p>;
   return (
     <div className="group relative w-full">
       <div className="chart w-full" ref={holder} />
@@ -140,6 +142,7 @@ function ChartDownload({
   title: string | undefined;
   surface: string;
 }) {
+  const m = useT();
   async function save(format: "png" | "svg") {
     const current = view.current;
     if (!current) return;
@@ -164,15 +167,15 @@ function ChartDownload({
         <Button
           variant="ghost"
           size="icon"
-          aria-label="Download chart"
+          aria-label={m.chart.download}
           className="absolute top-0 right-0 size-7 opacity-60 group-hover:opacity-100 focus-visible:opacity-100"
         >
           <Download />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem onSelect={() => void save("png")}>Download PNG</DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => void save("svg")}>Download SVG</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => void save("png")}>{m.chart.downloadAs("PNG")}</DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => void save("svg")}>{m.chart.downloadAs("SVG")}</DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
   );

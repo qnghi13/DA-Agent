@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 import { MEMORY_KINDS, groupMemory } from "@/memory";
 import { MAX_NAME, metricSentence, readMetricName } from "@/metrics";
 
-/** What a "Correct" button on an answer fills in. */
+/** What the Correct button on an answer fills in. */
 export type MemoryDraft = Partial<NewMemory>;
 
 /**
@@ -71,16 +71,12 @@ export function MemoryPanel({
         </p>
       )}
       {entries === null ? (
-        <div className="bg-muted h-24 animate-pulse rounded-lg" aria-label="Loading notes" />
+        <div className="bg-muted h-24 animate-pulse rounded-lg" aria-label={m.memory.loading} />
       ) : (
         <>
-          <Group title={`Definitions (${groups.definitions.length})`}>
+          <Group title={m.memory.definitions(groups.definitions.length)}>
             {groups.definitions.length === 0 ? (
-              <p className="text-muted-foreground text-sm">
-                No definitions yet. Under an answer you trust, open How it was calculated and
-                choose Save as a definition. New questions that use its name are calculated the
-                same way.
-              </p>
+              <p className="text-muted-foreground text-sm">{m.memory.noDefinitions}</p>
             ) : (
               groups.definitions.map((entry) => (
                 <DefinitionCard
@@ -93,7 +89,7 @@ export function MemoryPanel({
             )}
           </Group>
           {groups.review.length > 0 && (
-            <Group title={`Waiting for review (${groups.review.length})`}>
+            <Group title={m.memory.waiting(groups.review.length)}>
               {groups.review.map((entry) => (
                 <NoteCard key={entry.id} entry={entry}>
                   <Button
@@ -102,7 +98,7 @@ export function MemoryPanel({
                     onClick={() => change(() => api.reviewMemory(entry.id, "approve"))}
                   >
                     <Check />
-                    Approve
+                    {m.spec.approve}
                   </Button>
                   <Button
                     size="sm"
@@ -110,18 +106,15 @@ export function MemoryPanel({
                     onClick={() => change(() => api.reviewMemory(entry.id, "reject"))}
                   >
                     <X />
-                    Reject
+                    {m.memory.reject}
                   </Button>
                 </NoteCard>
               ))}
             </Group>
           )}
-          <Group title={`In use (${groups.active.length})`}>
+          <Group title={m.memory.inUse(groups.active.length)}>
             {groups.active.length === 0 ? (
-              <p className="text-muted-foreground text-sm">
-                No notes yet. When an answer uses the wrong rule, correct it here and new questions
-                will follow the note.
-              </p>
+              <p className="text-muted-foreground text-sm">{m.memory.noNotes}</p>
             ) : (
               groups.active.map((entry) => (
                 <ActiveNote
@@ -137,7 +130,7 @@ export function MemoryPanel({
             <details className="group rounded-lg border">
               <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-medium">
                 <ChevronRight className="size-4 transition-transform group-open:rotate-90" />
-                History ({groups.history.length})
+                {m.memory.history(groups.history.length)}
               </summary>
               <div className="flex flex-col gap-2 border-t p-3">
                 {groups.history.map((entry) => (
@@ -159,6 +152,7 @@ function NoteForm({
   draft?: MemoryDraft;
   onSave: (note: NewMemory) => Promise<boolean>;
 }) {
+  const m = useT();
   const [kind, setKind] = useState<NewMemory["kind"]>(draft?.kind ?? "correction");
   const [text, setText] = useState(draft?.text ?? "");
   const [sql, setSql] = useState(draft?.sql ?? "");
@@ -183,50 +177,45 @@ function NoteForm({
     }
   }
 
-  const hint = MEMORY_KINDS.find((item) => item.value === kind)?.hint;
+  const hint = m.memory.kinds[kind].hint;
   return (
     <form onSubmit={submit} className="flex flex-col gap-3 rounded-xl border p-3">
       <div className="flex flex-col gap-1">
-        <h3 className="text-sm font-medium">Teach the agent</h3>
-        <p className="text-muted-foreground text-xs leading-relaxed">
-          Notes apply to new questions about this dataset, for everyone in the workspace. A note
-          wins over the dataset's documents where they disagree.
-        </p>
+        <h3 className="text-sm font-medium">{m.memory.teach}</h3>
+        <p className="text-muted-foreground text-xs leading-relaxed">{m.memory.teachText}</p>
       </div>
-      <div role="radiogroup" aria-label="Kind of note" className="flex flex-wrap gap-1.5">
-        {MEMORY_KINDS.map((item) => (
+      <div role="radiogroup" aria-label={m.memory.kindLabel} className="flex flex-wrap gap-1.5">
+        {MEMORY_KINDS.map((value) => (
           <button
-            key={item.value}
+            key={value}
             type="button"
             role="radio"
-            aria-checked={kind === item.value}
-            onClick={() => setKind(item.value)}
+            aria-checked={kind === value}
+            onClick={() => setKind(value)}
             className={cn(
               "focus-visible:ring-ring/50 rounded-full border px-3 py-1 text-xs transition-colors outline-none focus-visible:ring-[3px]",
-              kind === item.value ? "bg-foreground text-background" : "hover:bg-accent",
+              kind === value ? "bg-foreground text-background" : "hover:bg-accent",
             )}
           >
-            {item.label}
+            {m.memory.kinds[value].label}
           </button>
         ))}
       </div>
       {hint && <p className="text-muted-foreground text-xs">{hint}</p>}
       <label className="sr-only" htmlFor="memory-text">
-        {needsSql ? "Question" : "Note"}
+        {needsSql ? m.memory.question : m.feedback.note}
       </label>
       <Textarea
         id="memory-text"
         maxLength={2000}
-        placeholder={
-          needsSql ? "The question, such as: Revenue in October 2025" : "Revenue excludes cancelled orders."
-        }
+        placeholder={needsSql ? m.memory.questionPlaceholder : m.memory.notePlaceholder}
         value={text}
         onChange={(event) => setText(event.target.value)}
       />
       {needsSql && (
         <>
           <label className="sr-only" htmlFor="memory-sql">
-            SQL that answers it
+            {m.memory.sqlLabel}
           </label>
           <Textarea
             id="memory-sql"
@@ -239,11 +228,11 @@ function NoteForm({
         </>
       )}
       {draft?.source_run_id && (
-        <p className="text-muted-foreground text-xs">Linked to the answer you are correcting.</p>
+        <p className="text-muted-foreground text-xs">{m.memory.linked}</p>
       )}
       <Button type="submit" size="sm" className="self-end" disabled={!ready || saving}>
         {saving && <Loader2 className="animate-spin" />}
-        Save note
+        {m.memory.saveNote}
       </Button>
     </form>
   );
@@ -258,6 +247,7 @@ function ActiveNote({
   onEdit: (text: string, sql: string | null) => Promise<boolean>;
   onDelete: () => Promise<boolean>;
 }) {
+  const m = useT();
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(entry.text);
   const [sql, setSql] = useState(entry.sql ?? "");
@@ -266,7 +256,7 @@ function ActiveNote({
     return (
       <div className="flex flex-col gap-2 rounded-lg border p-3">
         <Textarea
-          aria-label="Note"
+          aria-label={m.feedback.note}
           maxLength={2000}
           value={text}
           onChange={(event) => setText(event.target.value)}
@@ -282,14 +272,14 @@ function ActiveNote({
         )}
         <div className="flex justify-end gap-2">
           <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
-            Cancel
+            {m.common.cancel}
           </Button>
           <Button
             size="sm"
             disabled={!text.trim()}
             onClick={() => void onEdit(text.trim(), entry.kind === "example" ? sql.trim() : null)}
           >
-            Save
+            {m.common.save}
           </Button>
         </div>
       </div>
@@ -299,20 +289,20 @@ function ActiveNote({
     <NoteCard entry={entry}>
       <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
         <Pencil />
-        Edit
+        {m.evidence.edit}
       </Button>
       <Button
         size="sm"
         variant="ghost"
         className="text-muted-foreground"
         onClick={() => {
-          if (window.confirm("Delete this note? New questions will no longer follow it.")) {
+          if (window.confirm(m.memory.confirmDeleteNote)) {
             void onDelete();
           }
         }}
       >
         <Trash2 />
-        Delete
+        {m.memory.delete}
       </Button>
     </NoteCard>
   );
@@ -346,10 +336,10 @@ function DefinitionCard({
   if (editing) {
     return (
       <div className="flex flex-col gap-2 rounded-lg border p-3">
-        <Input aria-label="Name" maxLength={MAX_NAME} value={name} onChange={(event) => setName(event.target.value)} />
+        <Input aria-label={m.spec.name} maxLength={MAX_NAME} value={name} onChange={(event) => setName(event.target.value)} />
         <Input
-          aria-label="Other names (comma-separated)"
-          placeholder="Other names, comma-separated"
+          aria-label={m.metricDialog.aliases}
+          placeholder={m.metricDialog.aliases}
           value={aliases}
           onChange={(event) => setAliases(event.target.value)}
         />
@@ -360,10 +350,10 @@ function DefinitionCard({
         )}
         <div className="flex justify-end gap-2">
           <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
-            Cancel
+            {m.common.cancel}
           </Button>
           <Button size="sm" onClick={() => void save()}>
-            Save
+            {m.common.save}
           </Button>
         </div>
       </div>
@@ -373,29 +363,24 @@ function DefinitionCard({
     <NoteCard entry={entry}>
       <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
         <Pencil />
-        Rename
+        {m.memory.rename}
       </Button>
       <Button
         size="sm"
         variant="ghost"
         className="text-muted-foreground"
         onClick={() => {
-          if (window.confirm("Delete this definition? New questions will no longer use it.")) {
+          if (window.confirm(m.memory.confirmDeleteDefinition)) {
             void onDelete();
           }
         }}
       >
         <Trash2 />
-        Delete
+        {m.memory.delete}
       </Button>
     </NoteCard>
   );
 }
-
-const KIND_LABEL: Record<string, string> = {
-  ...Object.fromEntries(MEMORY_KINDS.map((item) => [item.value, item.label])),
-  metric: "Definition",
-};
 
 function NoteCard({
   entry,
@@ -406,15 +391,20 @@ function NoteCard({
   muted?: boolean;
   children?: React.ReactNode;
 }) {
+  const m = useT();
+  const kinds: Record<string, string> = {
+    ...Object.fromEntries(MEMORY_KINDS.map((value) => [value, m.memory.kinds[value].label])),
+    metric: m.memory.definition,
+  };
   return (
     <div className={cn("flex flex-col gap-2 rounded-lg border px-3 py-2.5", muted && "opacity-70")}>
       <div className="flex items-center gap-2">
         <StatusBadge tone={entry.kind === "correction" ? "warning" : entry.kind === "metric" ? "success" : "info"}>
-          {KIND_LABEL[entry.kind]}
+          {kinds[entry.kind] ?? entry.kind}
         </StatusBadge>
         {muted && (
           <span className="text-muted-foreground text-xs">
-            {entry.superseded_by ? "Replaced" : "Rejected"}
+            {entry.superseded_by ? m.memory.replaced : m.memory.rejected}
           </span>
         )}
         <span className="text-muted-foreground ml-auto truncate font-mono text-[11px]">
@@ -443,15 +433,14 @@ function MetricBody({ entry }: { entry: MemoryEntry }) {
       <p className="text-sm font-medium">
         {entry.name}
         {entry.aliases && entry.aliases.length > 0 && (
-          <span className="text-muted-foreground font-normal"> · also {entry.aliases.join(", ")}</span>
+          <span className="text-muted-foreground font-normal">{m.memory.also(entry.aliases.join(", "))}</span>
         )}
       </p>
       <p className="text-sm leading-relaxed">{entry.facts ? metricSentence(entry.facts, m) : entry.text}</p>
       {entry.stale && entry.superseded_by === null && (
         <p className="text-warning flex items-start gap-1.5 text-xs">
           <AlertTriangle className="mt-px size-3.5 shrink-0" aria-hidden />
-          The data changed and this definition no longer fits it, so new questions skip it. Save it
-          again from a new answer.
+          {m.memory.stale}
         </p>
       )}
     </div>

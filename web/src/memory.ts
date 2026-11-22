@@ -75,16 +75,4 @@ export function saveConversation(
   }
 }
 
-export const MEMORY_KINDS: { value: NewMemory["kind"]; label: string; hint: string }[] = [
-  {
-    value: "correction",
-    label: "Correction",
-    hint: "A business rule the agent got wrong, such as what revenue excludes.",
-  },
-  { value: "alias", label: "Alias", hint: "A word people use for a column or value." },
-  {
-    value: "example",
-    label: "Example",
-    hint: "A question and the SQL that answers it correctly.",
-  },
-];
+export const MEMORY_KINDS: NewMemory["kind"][] = ["correction", "alias", "example"];

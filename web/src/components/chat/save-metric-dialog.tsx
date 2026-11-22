@@ -83,41 +83,39 @@ function SaveMetricForm({ api, choice, onClose }: { api: Api; choice: MetricChoi
   return (
     <form onSubmit={submit} className="flex flex-col gap-4">
       <DialogHeader>
-        <DialogTitle>Save a definition</DialogTitle>
-        <DialogDescription>
-          New questions that use this name are calculated this way, for everyone in the workspace.
-        </DialogDescription>
+        <DialogTitle>{m.metricDialog.title}</DialogTitle>
+        <DialogDescription>{m.metricDialog.intro}</DialogDescription>
       </DialogHeader>
       <p className="bg-muted rounded-lg px-3 py-2 text-sm leading-relaxed">{metricSentence(choice.facts, m)}</p>
       {saved ? (
         <p role="status" className="flex items-center gap-2 text-sm">
           <Check className="text-success size-4" aria-hidden />
-          Saved. Used from your next question.
+          {m.metricDialog.saved}
         </p>
       ) : (
         <>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="metric-name">Name</Label>
+            <Label htmlFor="metric-name">{m.spec.name}</Label>
             <Input
               id="metric-name"
               autoFocus
               maxLength={MAX_NAME}
-              placeholder="Revenue"
+              placeholder={m.metricDialog.namePlaceholder}
               value={name}
               onChange={(event) => setName(event.target.value)}
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="metric-aliases">Other names (comma-separated)</Label>
+            <Label htmlFor="metric-aliases">{m.metricDialog.aliases}</Label>
             <Input
               id="metric-aliases"
-              placeholder="Sales, turnover"
+              placeholder={m.metricDialog.aliasesPlaceholder}
               value={aliases}
               onChange={(event) => setAliases(event.target.value)}
             />
           </div>
           <p className="text-muted-foreground text-xs">
-            Saving a name you already use replaces its old definition.
+            {m.metricDialog.replaces}
           </p>
         </>
       )}
@@ -129,16 +127,16 @@ function SaveMetricForm({ api, choice, onClose }: { api: Api; choice: MetricChoi
       <DialogFooter>
         {saved ? (
           <Button type="button" onClick={onClose}>
-            Done
+            {m.common.done}
           </Button>
         ) : (
           <>
             <Button type="button" variant="ghost" onClick={onClose}>
-              Cancel
+              {m.common.cancel}
             </Button>
             <Button type="submit" disabled={saving}>
               {saving && <Loader2 className="animate-spin" />}
-              Save definition
+              {m.metricDialog.save}
             </Button>
           </>
         )}

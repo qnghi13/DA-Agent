@@ -10,25 +10,14 @@ const SOURCES = import.meta.glob("../**/*.tsx", {
   eager: true,
 }) as Record<string, string>;
 
-// Screens not translated yet. Tasks 4 and 5 of the plan empty this list.
-const PENDING: string[] = [
-  "Chart.tsx",
-  "Conversation.tsx",
-  "VersionReview.tsx",
-  "components/chat/add-files-dialog.tsx",
-  "components/chat/evidence.tsx",
-  "components/chat/run-feedback.tsx",
-  "components/chat/run-message.tsx",
-  "components/chat/save-metric-dialog.tsx",
-  "components/chat/version-status.tsx",
-  "components/memory-panel.tsx",
-];
+// Screens not translated yet; empty once every screen reads from the dictionaries.
+const PENDING: string[] = [];
 
 // Never translated: generated UI primitives, and the operator screen (stays English).
 const SKIPPED = [/^components\/ui\//, /^OpsDashboard\.tsx$/, /\.test\.tsx$/];
 
 // Capitalised strings that are not words for a user: keys, headers, and names.
-const ALLOWED = new Set(["Enter", "Escape", "Content-Type", "English", "Tiếng Việt", "DA-Agent"]);
+const ALLOWED = new Set(["Enter", "Escape", "Content-Type", "English", "Tiếng Việt", "DA-Agent", "SQL", "SELECT …"]);
 
 const PATTERNS: { name: string; regex: RegExp }[] = [
   // Text between JSX tags, such as <span>Sign out</span>; not `=>` or `->`.
