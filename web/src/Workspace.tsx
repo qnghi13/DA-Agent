@@ -78,7 +78,7 @@ export function Workspace({
               variant="ghost"
               size="icon"
               className="md:hidden"
-              aria-label="Open datasets"
+              aria-label={m.workspace.openDatasets}
               onClick={() => setDrawerOpen(true)}
             >
               <Menu />
@@ -89,14 +89,16 @@ export function Workspace({
                   variant="ghost"
                   size="icon"
                   className="hidden md:inline-flex"
-                  aria-label={sidebarOpen ? "Hide datasets" : "Show datasets"}
+                  aria-label={sidebarOpen ? m.workspace.hideDatasets : m.workspace.showDatasets}
                   aria-expanded={sidebarOpen}
                   onClick={() => setSidebarOpen((open) => !open)}
                 >
                   <PanelLeft />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{sidebarOpen ? "Hide datasets" : "Show datasets"}</TooltipContent>
+              <TooltipContent>
+                {sidebarOpen ? m.workspace.hideDatasets : m.workspace.showDatasets}
+              </TooltipContent>
             </Tooltip>
             <Logo className="hidden sm:inline-flex" />
             <span className="hidden sm:inline">
@@ -113,7 +115,7 @@ export function Workspace({
               </>
             )}
             <span className="truncate text-sm font-medium">
-              {current ? current.name : "New dataset"}
+              {current ? current.name : m.workspace.newDataset}
             </span>
             {status && (
               <StatusBadge tone={status.tone} busy={status.busy}>
@@ -126,7 +128,7 @@ export function Workspace({
       />
       <div className="flex min-h-0 flex-1">
         <aside
-          aria-label="Datasets"
+          aria-label={m.workspace.datasets}
           className={cn(
             "bg-sidebar hidden w-64 shrink-0 border-r transition-[margin] duration-200 md:block",
             !sidebarOpen && "-ml-64",
@@ -188,11 +190,11 @@ function DatasetList({
         onClick={() => onSelect({ kind: "upload" })}
       >
         <Plus />
-        New dataset
+        {m.workspace.newDataset}
       </Button>
-      <p className="text-muted-foreground px-2 pb-1 text-xs font-medium">Datasets</p>
+      <p className="text-muted-foreground px-2 pb-1 text-xs font-medium">{m.workspace.datasets}</p>
       {datasets.length === 0 && !error && (
-        <p className="text-muted-foreground px-2 text-sm">No datasets yet.</p>
+        <p className="text-muted-foreground px-2 text-sm">{m.workspace.noDatasets}</p>
       )}
       {datasets.map((dataset) => {
         const active = selection.kind === "dataset" && selection.id === dataset.id;

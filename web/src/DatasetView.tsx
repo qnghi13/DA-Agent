@@ -14,14 +14,6 @@ import { datasetStatus } from "./status";
 
 const POLL_MS = 2000;
 
-const STATUS_TEXT: Record<Dataset["status"], string> = {
-  uploaded: "Reading the files and proposing a spec. This can take a minute.",
-  proposed: "Review how the files will be read, then approve or edit the spec.",
-  building: "Rebuilding the dataset with your edited spec.",
-  ready: "",
-  failed: "The dataset could not be prepared. The details are below.",
-};
-
 export function DatasetView({
   api,
   datasetId,
@@ -86,7 +78,7 @@ export function DatasetView({
       </p>
     ) : (
       <div className="grid h-full place-items-center">
-        <Loader2 className="text-muted-foreground size-5 animate-spin" aria-label="Loading" />
+        <Loader2 className="text-muted-foreground size-5 animate-spin" aria-label={m.common.loading} />
       </div>
     );
   }
@@ -105,17 +97,16 @@ export function DatasetView({
   }
   if (dataset.status === "ready") {
     return (
-      <SetupPage step={3} title={`${dataset.name} is ready`}>
+      <SetupPage step={3} title={m.dataset.isReady(dataset.name)}>
         <div className="bg-card flex flex-col items-start gap-4 rounded-xl border p-6">
           <div className="border-success-line bg-success-soft text-success grid size-10 place-items-center rounded-full border">
             <Check className="size-5" aria-hidden />
           </div>
           <p className="text-muted-foreground max-w-xl text-[15px] leading-relaxed">
-            The data is built with the spec you approved. Ask questions in your own words; every
-            answer comes with the queries behind it.
+            {m.dataset.readyText}
           </p>
           <Button onClick={() => setChatOpen(true)} autoFocus>
-            Ask a question
+            {m.dataset.ask}
             <ArrowRight />
           </Button>
         </div>
@@ -135,7 +126,7 @@ export function DatasetView({
           </StatusBadge>
         </span>
       }
-      description={STATUS_TEXT[dataset.status]}
+      description={m.dataset.statusText[dataset.status]}
     >
       {error && (
         <p role="alert" className="text-danger text-sm">
@@ -145,7 +136,7 @@ export function DatasetView({
       {dataset.status === "failed" && (
         <div className="border-danger-line bg-danger-soft flex gap-3 rounded-lg border px-4 py-3 text-sm">
           <AlertCircle className="text-danger mt-0.5 size-4 shrink-0" aria-hidden />
-          <div className="whitespace-pre-wrap">{dataset.error ?? "No details were recorded."}</div>
+          <div className="whitespace-pre-wrap">{dataset.error ?? m.dataset.noDetails}</div>
         </div>
       )}
       {status.busy && (
@@ -165,7 +156,7 @@ export function DatasetView({
         <details className="group bg-card rounded-xl border" open={dataset.status === "failed"}>
           <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium">
             <ChevronRight className="text-muted-foreground size-4 transition-transform group-open:rotate-90" />
-            Files and build report
+            {m.dataset.filesAndReport}
           </summary>
           <div className="border-t p-4">
             <DatasetSummary dataset={dataset} showSpec={false} />

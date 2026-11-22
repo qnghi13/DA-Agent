@@ -12,28 +12,16 @@ const SOURCES = import.meta.glob("../**/*.tsx", {
 
 // Screens not translated yet. Tasks 4 and 5 of the plan empty this list.
 const PENDING: string[] = [
-  "App.tsx",
   "Chart.tsx",
   "Conversation.tsx",
-  "DatasetView.tsx",
-  "SpecEditor.tsx",
-  "UploadForm.tsx",
   "VersionReview.tsx",
-  "Workspace.tsx",
   "components/chat/add-files-dialog.tsx",
   "components/chat/evidence.tsx",
   "components/chat/run-feedback.tsx",
   "components/chat/run-message.tsx",
   "components/chat/save-metric-dialog.tsx",
   "components/chat/version-status.tsx",
-  "components/data-table.tsx",
-  "components/dataset-summary.tsx",
-  "components/logo.tsx",
   "components/memory-panel.tsx",
-  "components/setup/stepper.tsx",
-  "components/status-badge.tsx",
-  "components/theme-toggle.tsx",
-  "components/top-bar.tsx",
 ];
 
 // Never translated: generated UI primitives, and the operator screen (stays English).

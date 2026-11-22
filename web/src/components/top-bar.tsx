@@ -10,7 +10,7 @@ export function TopBar({ left, right }: { left: ReactNode; right: ReactNode }) {
   );
 }
 
-/** A slash between breadcrumb parts, as in "Workspace / Dataset". */
+/** A slash between breadcrumb parts, as in Workspace / Dataset. */
 export function Slash() {
   return (
     <svg viewBox="0 0 16 16" className="text-border size-4 shrink-0" aria-hidden>

@@ -267,6 +267,7 @@ function SqlBlock({
 }
 
 function EditedRows({ api, job }: { api: Api; job: QueryJob }) {
+  const m = useT();
   const shown = job.rows.slice(0, PREVIEW_ROWS);
   return (
     <section className="flex flex-col gap-2 pt-1">
@@ -282,7 +283,7 @@ function EditedRows({ api, job }: { api: Api; job: QueryJob }) {
         />
       </div>
       {shown.length ? (
-        <DataTable columns={job.columns} rows={shown.map((row) => row.map(cell))} />
+        <DataTable columns={job.columns} rows={shown.map((row) => row.map((value) => cell(value, m.locale)))} />
       ) : (
         <Empty>No rows.</Empty>
       )}
@@ -308,6 +309,7 @@ function QueryRows({
   query: QueryRecord;
   actions: boolean;
 }) {
+  const m = useT();
   const shown = query.rows.slice(0, PREVIEW_ROWS);
   return (
     <section className="flex flex-col gap-2">
@@ -326,7 +328,7 @@ function QueryRows({
         )}
       </div>
       {shown.length ? (
-        <DataTable columns={query.columns} rows={shown.map((row) => row.map(cell))} />
+        <DataTable columns={query.columns} rows={shown.map((row) => row.map((value) => cell(value, m.locale)))} />
       ) : (
         <Empty>No rows.</Empty>
       )}

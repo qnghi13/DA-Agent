@@ -3,21 +3,25 @@ import type { ColumnProfile, Dataset } from "@/api";
 import { columnDetail, share } from "@/profile";
 import { cn } from "@/lib/utils";
 import { useT } from "@/i18n/context";
+import type { Messages } from "@/i18n/en";
 
 /** Files, tables, and the build's notes for one dataset; the approved spec when it has one. */
 export function DatasetSummary({ dataset, showSpec = true }: { dataset: Dataset; showSpec?: boolean }) {
+  const m = useT();
+  const words = m.summary;
+  const number = new Intl.NumberFormat(m.locale);
   const summary = dataset.summary;
   return (
     <div className="flex flex-col gap-6">
       {summary?.tables && summary.tables.length > 0 && (
-        <Section title="Tables">
+        <Section title={words.tables}>
           <div className="grid gap-2">
             {summary.tables.map((table) => (
               <div key={table.name} className="rounded-lg border px-3 py-2.5">
                 <div className="flex items-baseline justify-between gap-3">
                   <code className="text-sm font-medium">{table.name}</code>
                   <span className="text-muted-foreground font-mono text-xs tabular-nums">
-                    {table.rows.toLocaleString()} rows · {table.columns} cols
+                    {words.size(number.format(table.rows), table.columns)}
                   </span>
                 </div>
                 {table.row && (
@@ -32,12 +36,12 @@ export function DatasetSummary({ dataset, showSpec = true }: { dataset: Dataset;
         </Section>
       )}
 
-      <Notes title="Problems to check" tone="warning" items={summary?.problems} />
-      <Notes title="Proposal problems" tone="warning" items={summary?.proposal_problems} />
-      <Notes title="Exclusion rules dropped" tone="info" items={summary?.dropped_rules} />
-      <Notes title="Exact repeats removed" tone="info" items={summary?.deduplicated} />
+      <Notes title={words.problems} tone="warning" items={summary?.problems} />
+      <Notes title={words.proposalProblems} tone="warning" items={summary?.proposal_problems} />
+      <Notes title={words.droppedRules} tone="info" items={summary?.dropped_rules} />
+      <Notes title={words.deduplicated} tone="info" items={summary?.deduplicated} />
 
-      <Section title={`Files (${dataset.files.length})`}>
+      <Section title={words.files(dataset.files.length)}>
         <ul className="divide-y rounded-lg border">
           {dataset.files.map((file) => (
             <li key={file.stored_as} className="flex items-center gap-2 px-3 py-2 text-sm">
@@ -45,7 +49,7 @@ export function DatasetSummary({ dataset, showSpec = true }: { dataset: Dataset;
               <span className="min-w-0 truncate">{file.name}</span>
               {file.stored_as !== file.name && (
                 <span className="text-muted-foreground truncate text-xs">
-                  stored as {file.stored_as}
+                  {words.storedAs(file.stored_as)}
                 </span>
               )}
             </li>
@@ -53,14 +57,13 @@ export function DatasetSummary({ dataset, showSpec = true }: { dataset: Dataset;
         </ul>
         {dataset.documents > 0 && (
           <p className="text-muted-foreground mt-2 text-xs">
-            {dataset.documents === 1 ? "1 document explains" : `${dataset.documents} documents explain`}{" "}
-            the data.
+            {words.documents(dataset.documents)}
           </p>
         )}
       </Section>
 
       {dataset.description && (
-        <Section title="Description">
+        <Section title={m.spec.description}>
           <p className="text-muted-foreground text-sm leading-relaxed whitespace-pre-wrap">
             {dataset.description}
           </p>
@@ -71,7 +74,7 @@ export function DatasetSummary({ dataset, showSpec = true }: { dataset: Dataset;
         <details className="group rounded-lg border">
           <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-medium">
             <ChevronRight className="size-4 transition-transform group-open:rotate-90" />
-            Approved spec
+            {words.approvedSpec}
           </summary>
           <pre className="max-h-96 overflow-auto border-t p-3 font-mono text-xs leading-relaxed">
             {JSON.stringify(dataset.spec, null, 2)}
@@ -89,7 +92,7 @@ function Columns({ columns, rows }: { columns: ColumnProfile[]; rows: number }) 
     <details className="group mt-2">
       <summary className="text-muted-foreground hover:text-foreground flex cursor-pointer list-none items-center gap-1 text-xs">
         <ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />
-        Columns
+        {m.spec.columns}
       </summary>
       <ul className="mt-2 divide-y border-t">
         {columns.map((column) => {
@@ -100,11 +103,12 @@ function Columns({ columns, rows }: { columns: ColumnProfile[]; rows: number }) 
               <div className="flex items-baseline justify-between gap-3">
                 <span className="min-w-0 truncate">
                   <code className="text-sm">{column.name}</code>{" "}
-                  <span className="text-muted-foreground text-xs">{column.type}</span>
+                  <span className="text-muted-foreground text-xs">{typeName(column.type, m)}</span>
                 </span>
                 <span className="text-muted-foreground shrink-0 font-mono text-xs tabular-nums">
-                  {share(column.filled, rows, m)} filled
-                  {column.distinct !== null && ` · ${column.distinct.toLocaleString()} distinct`}
+                  {m.summary.filled(share(column.filled, rows, m))}
+                  {column.distinct !== null &&
+                    m.summary.distinct(new Intl.NumberFormat(m.locale).format(column.distinct))}
                 </span>
               </div>
               {detail && (
@@ -114,10 +118,12 @@ function Columns({ columns, rows }: { columns: ColumnProfile[]; rows: number }) 
               )}
               {failed > 0 && (
                 <p className="text-warning text-xs">
-                  {failed.toLocaleString()} {failed === 1 ? "cell" : "cells"} not read as{" "}
-                  {column.type}
-                  {column.failed_samples.length > 0 &&
-                    `, such as ${column.failed_samples.map((v) => `"${v}"`).join(", ")}`}
+                  {m.summary.notRead(
+                    new Intl.NumberFormat(m.locale).format(failed),
+                    failed,
+                    typeName(column.type, m),
+                    column.failed_samples.map((v) => `“${v}”`).join(", "),
+                  )}
                 </p>
               )}
             </li>
@@ -126,6 +132,10 @@ function Columns({ columns, rows }: { columns: ColumnProfile[]; rows: number }) 
       </ul>
     </details>
   );
+}
+
+function typeName(type: string, m: Messages): string {
+  return (m.spec.types as Record<string, string>)[type] ?? type;
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {

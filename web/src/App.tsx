@@ -24,16 +24,19 @@ const startSession = sessionStarter({
   me: fetchMe,
 });
 
+// Kept as a kind, not as words, so the notice follows a language switch.
+type Notice = { kind: "link-used" } | { kind: "session-ended" } | { kind: "error"; text: string };
+
 type State =
   | { kind: "loading" }
-  | { kind: "signed-out"; notice: string | null }
+  | { kind: "signed-out"; notice: Notice | null }
   | { kind: "signed-in"; me: Me };
 
 export function App() {
   const m = useT();
   const [state, setState] = useState<State>({ kind: "loading" });
 
-  const signedOut = useCallback((notice: string | null) => {
+  const signedOut = useCallback((notice: Notice | null) => {
     setState({ kind: "signed-out", notice });
   }, []);
 
@@ -44,11 +47,11 @@ export function App() {
       .catch((caught: StartError) => {
         if (!live) return;
         if (caught.fromLink) {
-          signedOut("This sign-in link was already used or has expired. Ask for a new one.");
+          signedOut({ kind: "link-used" });
         } else if (caught.cause instanceof ApiError && caught.cause.status === 401) {
           signedOut(null);
         } else {
-          signedOut(errorMessage(caught.cause, m));
+          signedOut({ kind: "error", text: errorMessage(caught.cause, m) });
         }
       });
     return () => {
@@ -57,7 +60,7 @@ export function App() {
   }, [signedOut]);
 
   const api = useMemo(
-    () => new Api(() => signedOut("Your session has ended. Sign in again.")),
+    () => new Api(() => signedOut({ kind: "session-ended" })),
     [signedOut],
   );
 
@@ -86,7 +89,7 @@ export function App() {
   if (state.kind === "loading") {
     return (
       <div className="grid h-dvh place-items-center">
-        <Loader2 className="text-muted-foreground size-5 animate-spin" aria-label="Loading" />
+        <Loader2 className="text-muted-foreground size-5 animate-spin" aria-label={m.common.loading} />
       </div>
     );
   }
@@ -107,7 +110,7 @@ export function App() {
             <>
               <Logo />
               <Slash />
-              <span className="truncate text-sm font-medium">Operations</span>
+              <span className="truncate text-sm font-medium">{m.signIn.operations}</span>
             </>
           }
           right={actions}
@@ -126,7 +129,7 @@ function SignIn({
   actions,
   onSignedIn,
 }: {
-  notice: string | null;
+  notice: Notice | null;
   actions: ReactNode;
   onSignedIn: (me: Me) => void;
 }) {
@@ -145,7 +148,7 @@ function SignIn({
     } catch (caught) {
       setError(
         caught instanceof ApiError && caught.status === 401
-          ? "That API key was not accepted."
+          ? m.signIn.keyRefused
           : errorMessage(caught, m),
       );
     } finally {
@@ -165,25 +168,26 @@ function SignIn({
           aria-labelledby="sign-in-title"
         >
           <h1 id="sign-in-title" className="text-xl font-semibold tracking-tight">
-            Sign in
+            {m.signIn.title}
           </h1>
-          <p className="text-muted-foreground mt-2 text-sm leading-relaxed">
-            Open the sign-in link your operator or a teammate sent you. Links work once, for 15
-            minutes.
-          </p>
+          <p className="text-muted-foreground mt-2 text-sm leading-relaxed">{m.signIn.intro}</p>
           {notice && (
             <p
               role="status"
               className="border-warning-line bg-warning-soft text-warning mt-4 rounded-md border px-3 py-2 text-sm"
             >
-              {notice}
+              {notice.kind === "link-used"
+                ? m.signIn.linkUsed
+                : notice.kind === "session-ended"
+                  ? m.signIn.sessionEnded
+                  : notice.text}
             </p>
           )}
           <Separator className="my-5" />
           {withKey ? (
             <form className="grid gap-3" onSubmit={submit}>
               <div className="grid gap-1.5">
-                <Label htmlFor="api-key">Workspace API key</Label>
+                <Label htmlFor="api-key">{m.signIn.keyLabel}</Label>
                 <Input
                   id="api-key"
                   type="password"
@@ -202,21 +206,19 @@ function SignIn({
               )}
               <Button type="submit" disabled={!key.trim() || checking}>
                 {checking && <Loader2 className="animate-spin" />}
-                {checking ? "Checking…" : "Sign in"}
+                {checking ? m.signIn.checking : m.signIn.title}
               </Button>
-              <p className="text-muted-foreground text-xs">
-                This browser keeps a session, not the key.
-              </p>
+              <p className="text-muted-foreground text-xs">{m.signIn.keyNote}</p>
             </form>
           ) : (
             <Button variant="outline" className="w-full" onClick={() => setWithKey(true)}>
               <KeyRound />
-              Sign in with an API key
+              {m.signIn.withKey}
             </Button>
           )}
         </section>
         <p className="text-muted-foreground mt-6 text-center text-xs text-balance">
-          Ask questions about your spreadsheets, with answers you can trace to the query.
+          {m.signIn.tagline}
         </p>
       </main>
     </div>

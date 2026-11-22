@@ -8,6 +8,7 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useT } from "@/i18n/context";
 import { readStoredTheme, resolveTheme, storeTheme, type ThemeChoice } from "@/theme";
 
 const darkQuery = () => window.matchMedia("(prefers-color-scheme: dark)");
@@ -19,6 +20,7 @@ export function applyTheme(choice: ThemeChoice = readStoredTheme(window.localSto
 }
 
 export function ThemeToggle() {
+  const m = useT();
   const [choice, setChoice] = useState<ThemeChoice>(() => readStoredTheme(window.localStorage));
 
   useEffect(() => {
@@ -40,15 +42,15 @@ export function ThemeToggle() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" aria-label="Theme">
+        <Button variant="ghost" size="icon" aria-label={m.theme.label}>
           <Icon className="size-4" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuRadioGroup value={choice} onValueChange={choose}>
-          <DropdownMenuRadioItem value="system">System</DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="light">Light</DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="dark">Dark</DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="system">{m.theme.system}</DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="light">{m.theme.light}</DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="dark">{m.theme.dark}</DropdownMenuRadioItem>
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>

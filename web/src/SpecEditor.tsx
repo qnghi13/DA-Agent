@@ -5,6 +5,7 @@ import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { Label } from "./components/ui/label";
 import { Textarea } from "./components/ui/textarea";
+import { useT } from "./i18n/context";
 import { cn } from "./lib/utils";
 
 type Mode = "form" | "json";
@@ -27,6 +28,7 @@ export function SpecEditor({
   embedded?: boolean;
   onChange?: (spec: DatasetSpec) => void;
 }) {
+  const m = useT();
   const [spec, setSpec] = useState<DatasetSpec>(proposed);
   const [mode, setMode] = useState<Mode>("form");
   const [json, setJson] = useState("");
@@ -51,7 +53,7 @@ export function SpecEditor({
   function applyJson(): DatasetSpec | null {
     try {
       const parsed = JSON.parse(json) as DatasetSpec;
-      if (!parsed || !Array.isArray(parsed.tables)) throw new Error("the spec needs a tables list");
+      if (!parsed || !Array.isArray(parsed.tables)) throw new Error(m.spec.needsTables);
       setSpec(parsed);
       setJsonError(null);
       return parsed;
@@ -77,14 +79,11 @@ export function SpecEditor({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 id="spec-title" className="text-lg font-semibold tracking-tight">
-            Proposed spec
+            {m.spec.title}
           </h2>
-          <p className="text-muted-foreground text-sm">
-            How each file becomes a table. Edit names, types, descriptions, and sensitive columns
-            here; everything else in JSON.
-          </p>
+          <p className="text-muted-foreground text-sm">{m.spec.intro}</p>
         </div>
-        <div className="bg-muted inline-flex rounded-lg border p-0.5" role="tablist" aria-label="Edit as">
+        <div className="bg-muted inline-flex rounded-lg border p-0.5" role="tablist" aria-label={m.spec.editAs}>
           {(["form", "json"] as const).map((value) => (
             <button
               key={value}
@@ -99,7 +98,7 @@ export function SpecEditor({
                   : "text-muted-foreground hover:text-foreground",
               )}
             >
-              {value === "form" ? "Columns" : "JSON"}
+              {value === "form" ? m.spec.columns : "JSON"}
             </button>
           ))}
         </div>
@@ -117,7 +116,7 @@ export function SpecEditor({
           ))}
           {spec.notes && spec.notes.length > 0 && (
             <section className="border-info-line bg-info-soft rounded-lg border px-4 py-3">
-              <h3 className="text-info mb-1 text-sm font-medium">Notes from the proposal</h3>
+              <h3 className="text-info mb-1 text-sm font-medium">{m.spec.notes}</h3>
               <ul className="list-disc pl-5 text-sm">
                 {spec.notes.map((note) => (
                   <li key={note}>{note}</li>
@@ -129,7 +128,7 @@ export function SpecEditor({
       ) : (
         <>
           <Textarea
-            aria-label="Spec as JSON"
+            aria-label={m.spec.asJson}
             className="min-h-[28rem] font-mono text-xs leading-relaxed"
             spellCheck={false}
             value={json}
@@ -137,7 +136,7 @@ export function SpecEditor({
           />
           {jsonError && (
             <p role="alert" className="text-danger text-sm">
-              Invalid JSON: {jsonError}
+              {m.spec.invalidJson(jsonError)}
             </p>
           )}
         </>
@@ -156,12 +155,12 @@ export function SpecEditor({
               setJsonError(null);
             }}
           >
-            Discard edits
+            {m.spec.discardEdits}
           </Button>
         )}
         <Button type="button" disabled={busy} onClick={approve}>
           {busy && <Loader2 className="animate-spin" />}
-          {busy ? "Sending…" : edited || mode === "json" ? "Save and rebuild" : "Approve"}
+          {busy ? m.spec.sending : edited || mode === "json" ? m.spec.saveAndRebuild : m.spec.approve}
         </Button>
       </div>
       )}
@@ -170,6 +169,7 @@ export function SpecEditor({
 }
 
 function TableEditor({ table, onChange }: { table: TableSpec; onChange: (t: TableSpec) => void }) {
+  const m = useT();
   function updateColumn(index: number, patch: Partial<ColumnSpec>) {
     onChange({
       ...table,
@@ -186,15 +186,15 @@ function TableEditor({ table, onChange }: { table: TableSpec; onChange: (t: Tabl
         <ChevronRight className="text-muted-foreground size-4 transition-transform group-open:rotate-90" />
         <code className="text-sm font-semibold">{table.name}</code>
         {table.source !== table.name && (
-          <span className="text-muted-foreground truncate text-xs">from {table.source}</span>
+          <span className="text-muted-foreground truncate text-xs">{m.spec.from(table.source)}</span>
         )}
         <span className="text-muted-foreground ml-auto text-xs">
-          {table.columns.length} column{table.columns.length === 1 ? "" : "s"}
+          {m.spec.columnCount(table.columns.length)}
         </span>
       </summary>
       <div className="flex flex-col gap-4 border-t px-4 py-4">
         <div className="grid gap-1.5">
-          <Label htmlFor={`table-${table.source}`}>Description</Label>
+          <Label htmlFor={`table-${table.source}`}>{m.spec.description}</Label>
           <Input
             id={`table-${table.source}`}
             maxLength={500}
@@ -206,15 +206,12 @@ function TableEditor({ table, onChange }: { table: TableSpec; onChange: (t: Tabl
           <table className="w-full min-w-[640px] border-collapse text-sm">
             <thead className="bg-muted">
               <tr className="text-muted-foreground text-left text-xs">
-                <th className="px-3 py-2 font-medium">Source column</th>
-                <th className="px-2 py-2 font-medium">Name</th>
-                <th className="px-2 py-2 font-medium">Type</th>
-                <th className="px-2 py-2 font-medium">Description</th>
-                <th
-                  className="px-3 py-2 text-center font-medium"
-                  title="Personal data: the column is left out of the built dataset"
-                >
-                  Sensitive
+                <th className="px-3 py-2 font-medium">{m.spec.sourceColumn}</th>
+                <th className="px-2 py-2 font-medium">{m.spec.name}</th>
+                <th className="px-2 py-2 font-medium">{m.spec.type}</th>
+                <th className="px-2 py-2 font-medium">{m.spec.description}</th>
+                <th className="px-3 py-2 text-center font-medium" title={m.spec.sensitiveHint}>
+                  {m.spec.sensitive}
                 </th>
               </tr>
             </thead>
@@ -232,7 +229,7 @@ function TableEditor({ table, onChange }: { table: TableSpec; onChange: (t: Tabl
                   <td className="px-2 py-1.5">
                     <input
                       className={cn(field, "font-mono text-[13px]")}
-                      aria-label={`Name of ${column.source}`}
+                      aria-label={m.spec.nameOf(column.source)}
                       value={column.name}
                       onChange={(event) => updateColumn(index, { name: event.target.value })}
                     />
@@ -240,21 +237,23 @@ function TableEditor({ table, onChange }: { table: TableSpec; onChange: (t: Tabl
                   <td className="px-2 py-1.5">
                     <select
                       className={cn(field, "pr-6")}
-                      aria-label={`Type of ${column.source}`}
+                      aria-label={m.spec.typeOf(column.source)}
                       value={column.type}
                       onChange={(event) =>
                         updateColumn(index, { type: event.target.value as ColumnSpec["type"] })
                       }
                     >
                       {COLUMN_TYPES.map((type) => (
-                        <option key={type}>{type}</option>
+                        <option key={type} value={type}>
+                          {m.spec.types[type]}
+                        </option>
                       ))}
                     </select>
                   </td>
                   <td className="px-2 py-1.5">
                     <input
                       className={field}
-                      aria-label={`Description of ${column.source}`}
+                      aria-label={m.spec.descriptionOf(column.source)}
                       maxLength={300}
                       value={column.description ?? ""}
                       onChange={(event) => updateColumn(index, { description: event.target.value })}
@@ -264,7 +263,7 @@ function TableEditor({ table, onChange }: { table: TableSpec; onChange: (t: Tabl
                     <input
                       type="checkbox"
                       className="accent-foreground size-4 align-middle"
-                      aria-label={`${column.source} is sensitive`}
+                      aria-label={m.spec.isSensitive(column.source)}
                       checked={column.sensitive ?? false}
                       onChange={(event) => updateColumn(index, { sensitive: event.target.checked })}
                     />
@@ -276,14 +275,18 @@ function TableEditor({ table, onChange }: { table: TableSpec; onChange: (t: Tabl
         </div>
         {(rules.length > 0 || table.fill_down?.length || table.dedupe === "exact") && (
           <ul className="text-muted-foreground flex flex-col gap-1 text-sm">
-            {table.fill_down?.length ? <li>Fill down: {table.fill_down.join(", ")}</li> : null}
-            {table.dedupe === "exact" && <li>Exact repeated rows are removed.</li>}
+            {table.fill_down?.length ? <li>{m.spec.fillDown(table.fill_down.join(", "))}</li> : null}
+            {table.dedupe === "exact" && <li>{m.spec.dedupe}</li>}
             {rules.map((rule, i) => (
               <li key={i}>
-                Exclude rows where{" "}
-                {rule.when
-                  .map((c) => `${c.column} ${c.op.replace("_", " ")}${c.value ? ` "${c.value}"` : ""}`)
-                  .join(" and ")}
+                {m.spec.excludeWhere(
+                  rule.when
+                    .map((c) => {
+                      const op = m.spec.ruleOps[c.op] ?? c.op.replace("_", " ");
+                      return `${c.column} ${op}${c.value ? ` “${c.value}”` : ""}`;
+                    })
+                    .join(m.explain.and),
+                )}
                 {rule.reason && ` (${rule.reason})`}
               </li>
             ))}

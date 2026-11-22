@@ -2,10 +2,10 @@ import { cn } from "@/lib/utils";
 
 const NUMERIC = /^-?[\d.,]+%?$/;
 
-/** Format one query cell for display. */
-export function cell(value: unknown): string {
+/** Format one query cell for display, numbers in the UI language's style. */
+export function cell(value: unknown, locale: string): string {
   if (value === null || value === undefined) return "";
-  if (typeof value === "number") return value.toLocaleString(undefined, { maximumFractionDigits: 4 });
+  if (typeof value === "number") return value.toLocaleString(locale, { maximumFractionDigits: 4 });
   return String(value);
 }
 

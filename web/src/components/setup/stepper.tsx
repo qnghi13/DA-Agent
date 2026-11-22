@@ -1,13 +1,13 @@
 import { Check } from "lucide-react";
+import { useT } from "@/i18n/context";
 import { cn } from "@/lib/utils";
-
-const STEPS = ["Upload", "Review spec", "Ready"] as const;
 
 /** Upload → Review spec → Ready, with the current step marked. */
 export function Stepper({ current }: { current: 1 | 2 | 3 }) {
+  const m = useT();
   return (
-    <ol className="flex items-center gap-2 text-sm" aria-label="Dataset setup">
-      {STEPS.map((label, index) => {
+    <ol className="flex items-center gap-2 text-sm" aria-label={m.setup.stepsLabel}>
+      {m.setup.steps.map((label, index) => {
         const step = index + 1;
         const done = step < current;
         const here = step === current;

@@ -3,6 +3,7 @@ import { type DragEvent, type FormEvent, useRef, useState } from "react";
 import { type Api, UPLOAD_ACCEPT, UPLOAD_LIMITS } from "./api";
 import { errorMessage } from "@/i18n/errors";
 import { useT } from "@/i18n/context";
+import type { Messages } from "@/i18n/en";
 import { SetupPage } from "./components/setup/stepper";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
@@ -10,11 +11,11 @@ import { Label } from "./components/ui/label";
 import { Textarea } from "./components/ui/textarea";
 import { cn } from "./lib/utils";
 
-function size(bytes: number): string {
+function size(bytes: number, m: Messages): string {
+  const number = new Intl.NumberFormat(m.locale, { maximumFractionDigits: 1 });
   if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  const mb = bytes / 1024 / 1024;
-  return `${Number.isInteger(mb) ? mb : mb.toFixed(1)} MB`;
+  if (bytes < 1024 * 1024) return `${number.format(bytes / 1024)} KB`;
+  return `${number.format(bytes / 1024 / 1024)} MB`;
 }
 
 const ACCEPTED = UPLOAD_ACCEPT.split(",");
@@ -44,7 +45,7 @@ export function UploadForm({
   function add(list: FileList | null) {
     const incoming = Array.from(list ?? []);
     const refused = incoming.filter((file) => !accepted(file)).map((file) => file.name);
-    setError(refused.length ? `Not a supported file type: ${refused.join(", ")}` : null);
+    setError(refused.length ? m.upload.unsupported(refused.join(", ")) : null);
     setFiles((current) => {
       const byName = new Map(current.map((file) => [file.name, file]));
       for (const file of incoming.filter(accepted)) byName.set(file.name, file);
@@ -77,36 +78,37 @@ export function UploadForm({
   return (
     <SetupPage
       step={1}
-      title="New dataset"
-      description="Upload CSV, Excel, or SQLite files, plus optional Markdown or text documents that explain them. The agent proposes how to read them; you review that before asking questions."
+      title={m.workspace.newDataset}
+      description={m.upload.intro}
     >
       <form onSubmit={submit} className="bg-card flex flex-col gap-5 rounded-xl border p-5 sm:p-6">
         <div className="grid gap-1.5">
-          <Label htmlFor="dataset-name">Name</Label>
+          <Label htmlFor="dataset-name">{m.upload.name}</Label>
           <Input
             id="dataset-name"
             required
             maxLength={200}
-            placeholder="Sales 2026"
+            placeholder={m.upload.namePlaceholder}
             value={name}
             onChange={(event) => setName(event.target.value)}
           />
         </div>
         <div className="grid gap-1.5">
           <Label htmlFor="dataset-description">
-            Description <span className="text-muted-foreground font-normal">(optional)</span>
+            {m.upload.description}{" "}
+            <span className="text-muted-foreground font-normal">{m.upload.optional}</span>
           </Label>
           <Textarea
             id="dataset-description"
             rows={4}
             maxLength={20000}
-            placeholder="What the data is, business rules, caveats. For example: revenue counts only completed orders."
+            placeholder={m.upload.descriptionPlaceholder}
             value={description}
             onChange={(event) => setDescription(event.target.value)}
           />
         </div>
         <div className="grid gap-1.5">
-          <Label htmlFor="dataset-files">Files</Label>
+          <Label htmlFor="dataset-files">{m.upload.files}</Label>
           <div
             onDragOver={(event) => {
               event.preventDefault();
@@ -121,18 +123,17 @@ export function UploadForm({
           >
             <UploadCloud className="text-muted-foreground size-6" aria-hidden />
             <p className="text-sm">
-              Drag files here, or{" "}
+              {m.upload.dragHere}{" "}
               <button
                 type="button"
                 className="font-medium underline underline-offset-4"
                 onClick={() => picker.current?.click()}
               >
-                choose files
+                {m.upload.choose}
               </button>
             </p>
             <p className="text-muted-foreground text-xs">
-              CSV, TSV, Excel, SQLite, Markdown, or text · up to {UPLOAD_LIMITS.files} files,{" "}
-              {size(UPLOAD_LIMITS.bytesPerFile)} each
+              {m.upload.limits(UPLOAD_LIMITS.files, size(UPLOAD_LIMITS.bytesPerFile, m))}
             </p>
             <input
               ref={picker}
@@ -159,14 +160,14 @@ export function UploadForm({
                       file.size > UPLOAD_LIMITS.bytesPerFile ? "text-danger" : "text-muted-foreground",
                     )}
                   >
-                    {size(file.size)}
+                    {size(file.size, m)}
                   </span>
                   <Button
                     type="button"
                     variant="ghost"
                     size="icon"
                     className="size-7"
-                    aria-label={`Remove ${file.name}`}
+                    aria-label={m.upload.remove(file.name)}
                     onClick={() => setFiles((current) => current.filter((f) => f !== file))}
                   >
                     <X />
@@ -178,8 +179,8 @@ export function UploadForm({
           {(tooMany || tooBig.length > 0) && (
             <p className="text-danger text-sm">
               {tooMany
-                ? `At most ${UPLOAD_LIMITS.files} files.`
-                : `Too large: ${tooBig.map((f) => f.name).join(", ")}.`}
+                ? m.upload.tooMany(UPLOAD_LIMITS.files)
+                : m.upload.tooLarge(tooBig.map((f) => f.name).join(", "))}
             </p>
           )}
         </div>
@@ -194,7 +195,7 @@ export function UploadForm({
             disabled={busy || !name.trim() || !files.length || tooMany || tooBig.length > 0}
           >
             {busy && <Loader2 className="animate-spin" />}
-            {busy ? "Uploading…" : "Upload and continue"}
+            {busy ? m.upload.uploading : m.upload.submit}
           </Button>
         </div>
       </form>
