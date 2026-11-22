@@ -49,7 +49,11 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
 - No rows, questions, rulebook, or answers in any commit or image (organiser rules). When the
   challenge ends: delete `train/`, `eval/reports/`, and Docker volumes with eval data.
 
-## Spend so far: about $3.08 (agent runs $2.48, spec proposals $0.57, demos and e2e $0.015).
+## Spend so far: about $3.11 (agent runs $2.48, spec proposals $0.57, demos and e2e $0.04).
+- Demo video (2026-11-22, ~$0.025, Playwright screencast on `examples/demo-shop`, Kokoro
+  narration, not in the repo): seen live, a top-product answer dropped a tie (LIMIT 1); a month
+  line chart ticks by week (DATE_TRUNC timestamp); "bar chart of revenue by channel" drew no
+  chart; one run "invalid tool calls"; one run called `make_chart` twice and showed both charts.
 
 ## Watch out
 

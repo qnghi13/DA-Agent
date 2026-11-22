@@ -8,6 +8,11 @@ that produced them.
 > HTTP API, web UI, operator dashboard, and Docker Compose packaging work and are tested. It has not
 > run in production.
 
+https://github.com/user-attachments/assets/dc2bf6b4-7ae1-4237-b2e6-f531cc7c8d34
+
+*A 2½-minute narrated walkthrough: upload a café's sales export, review the proposed spec, ask
+questions in English and Vietnamese, and see the SQL behind each answer.*
+
 ![Asking a question: the answer, its chart, and the SQL behind it](docs/images/chat.png)
 
 <table>
