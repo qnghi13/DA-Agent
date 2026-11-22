@@ -32,3 +32,5 @@ Mỗi cột mốc có một ghi chú tiếng Việt, theo khung sau:
 | [21. Hủy, thời hạn và time travel](21-cancel-deadline-time-travel.md) | Harness: dừng hợp tác, ba nguồn dừng, nút Stop, fork từ checkpoint |
 | [22. Phản hồi, golden case, đánh giá trực tuyến](22-feedback-goldens.md) | Harness: 👍/👎 kèm lý do, golden case chạy lại khi đổi code, tỷ lệ 👍 theo phiên bản |
 | [23. SLO và cảnh báo](23-slo-alerts.md) | Harness: SLI, SLO, error budget, burn rate hai cửa sổ, Prometheus và Alertmanager |
+| [24. Thêm file vào dataset](24-dataset-versions.md) | Phiên bản dữ liệu, code quyết định và model chỉ đề xuất, hỏi khi trùng dòng |
+| [25. Giao diện tiếng Việt](25-vietnamese-ui.md) | i18n bằng từ điển có kiểu, trật tự từ, định dạng số, mã lỗi API, test chữ cứng |

@@ -1,6 +1,6 @@
 # Progress
 
-Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-22 (add files to a dataset)
+Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-22 (Vietnamese UI)
 **Phase:** optimisation. Challenge rules: ≤15B params in total, offline Docker, 2×5090, 6 h,
 re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for the submission.
 
@@ -18,10 +18,12 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
   (Groq +55). Then status variants and line-vs-header revenue (~12, checked by hand SQL), debt
   4, budget abstains 8 (SQLite functions, made-up columns). Semantic layer: private folder.
 ## Next step
-- **Add files to a dataset (2026-11-22):** built on `feat/add-files` (ADR 0045, note 24; not
-  merged or pushed). Versions in one dataset, ask on overlap, labelled old answers, model repairs
-  the user approves. Final review found 2 critical seams (fixed); real e2e on Groq (11 calls,
-  $0.0047) found a drop-overlap quality bug (fixed, re-run ok). Open minors: ADR 0045 list.
+- **Vietnamese UI (2026-11-22):** built on `feat/vietnamese-ui` (ADR 0046, note 25; not merged
+  or pushed). English default, Tiếng Việt option next to the theme toggle; typed dictionaries in
+  `web/src/i18n`; API errors carry `code`/`params`. Checked in the real UI (1 spec proposal, 1
+  question on Groq). Found, not fixed: the agent's answer prose and the model-written column
+  descriptions stay English for a Vietnamese question.
+- Add files to a dataset: merged to `main` (ADR 0045, note 24). Open minors: ADR 0045 list.
 0. Metric definitions on `main` (ADR 0036, note 16): saved from an answer's SQL, matched by
    code; eval +1 -> +7 (20 dev questions, $0.095). Phase 2, other readings with the answer, was
    built on a branch and removed (ADR 0037): `gpt-oss-20b` never flagged the ambiguity (4 real
@@ -34,7 +36,7 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
    SQL text (2 runs in all reports).
 ## Baselines (Groq `gpt-oss-20b`, before 559f88a): `regression` +53 (93/40/17), holdout +44.
 ## Done
-- ADRs 0001–0045, notes 01–24. Scorer 3000/3000; splits in `eval/splits/splits.json`.
+- ADRs 0001–0046, notes 01–25. Scorer 3000/3000; splits in `eval/splits/splits.json`.
 - Agent: `LLMClient`, SQL guard, LangGraph with checkpoints and verify, Groq `gpt-oss-20b`.
   Sandbox: all escape tests pass; ingestion and agent SQL run in it (ADRs 0009–0012).
   `datasets-dev/`: 24/24 ok, parse 99.98%+, exclusion precision and recall 100%.

@@ -1,6 +1,6 @@
 # Vietnamese UI option
 
-**Status:** design, approved approach A (2026-11-22). Size: a medium change, mostly mechanical.
+**Status:** built on `feat/vietnamese-ui` (2026-11-22), ADR 0046. Size: a medium change, mostly mechanical.
 
 ## Intent
 
