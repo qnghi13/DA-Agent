@@ -1,15 +1,8 @@
 import { Loader2 } from "lucide-react";
 import { useMemo, useState } from "react";
-import {
-  type Api,
-  type Dataset,
-  type DatasetSpec,
-  type DatasetVersion,
-  type OverlapChoice,
-  type RepairChange,
-  type VersionChange,
-  errorMessage,
-} from "./api";
+import { type Api, type Dataset, type DatasetSpec, type DatasetVersion, type OverlapChoice, type RepairChange, type VersionChange } from "./api";
+import { errorMessage } from "@/i18n/errors";
+import { useT } from "@/i18n/context";
 import { Button } from "./components/ui/button";
 import { Label } from "./components/ui/label";
 import { SpecEditor } from "./SpecEditor";
@@ -53,6 +46,7 @@ export function VersionReview({
   /** Called after the decisions are sent or the version is discarded. */
   onDone: () => void;
 }) {
+  const m = useT();
   const changes = version.changes ?? [];
   const repairs = version.repairs ?? [];
   const newNames = useMemo(
@@ -101,7 +95,7 @@ export function VersionReview({
       });
       onDone();
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, m));
     } finally {
       setBusy(false);
     }
@@ -114,7 +108,7 @@ export function VersionReview({
       await api.discardVersion(dataset.id, version.version);
       onDone();
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, m));
     } finally {
       setBusy(false);
     }

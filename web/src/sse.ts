@@ -2,7 +2,7 @@
 // The API ends each connection after a few minutes or on errors; we reconnect with
 // Last-Event-ID until the `end` event (docs/adr/0021-progress-events.md).
 
-import { ApiError, errorDetail } from "./api";
+import { ApiError, apiError } from "./api";
 
 export interface SseEvent {
   id: string | undefined;
@@ -77,7 +77,7 @@ export async function streamEvents(url: string, options: StreamOptions): Promise
     let received = false;
     try {
       const response = await fetcher(url, { headers, signal: options.signal });
-      if (!response.ok) throw new ApiError(response.status, await errorDetail(response));
+      if (!response.ok) throw await apiError(response);
       if (!response.body) throw new Error("the event stream has no body");
       const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
       const parser = new SseParser();

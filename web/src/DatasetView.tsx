@@ -1,6 +1,8 @@
 import { AlertCircle, ArrowRight, Check, ChevronRight, Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { type Api, BUSY_STATUSES, type Dataset, type DatasetSpec, errorMessage } from "./api";
+import { type Api, BUSY_STATUSES, type Dataset, type DatasetSpec } from "./api";
+import { errorMessage } from "@/i18n/errors";
+import { useT } from "@/i18n/context";
 import { Conversation } from "./Conversation";
 import { DatasetSummary } from "./components/dataset-summary";
 import { SetupPage } from "./components/setup/stepper";
@@ -29,6 +31,7 @@ export function DatasetView({
   datasetId: string;
   onChange: (dataset: Dataset) => void;
 }) {
+  const m = useT();
   const [dataset, setDataset] = useState<Dataset | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [approving, setApproving] = useState(false);
@@ -51,7 +54,7 @@ export function DatasetView({
         setError(null);
         if (BUSY_STATUSES.includes(next.status)) timer = window.setTimeout(load, POLL_MS);
       } catch (caught) {
-        if (!cancelled) setError(errorMessage(caught));
+        if (!cancelled) setError(errorMessage(caught, m));
       }
     }
     void load();
@@ -68,7 +71,7 @@ export function DatasetView({
       await api.approveDataset(datasetId, spec);
       setVersion((v) => v + 1);
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, m));
     } finally {
       setApproving(false);
     }

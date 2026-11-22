@@ -1,6 +1,8 @@
 import { Check, Copy, Download, ExternalLink, Pencil, Play, RotateCcw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { type Api, type ExportJob, type QueryJob, type QueryRecord, errorMessage, exportFileUrl } from "@/api";
+import { type Api, type ExportJob, type QueryJob, type QueryRecord, exportFileUrl } from "@/api";
+import { errorMessage } from "@/i18n/errors";
+import { useT } from "@/i18n/context";
 import { cell, DataTable } from "@/components/data-table";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -154,6 +156,7 @@ function SqlBlock({
   query: QueryRecord;
   actions: boolean;
 }) {
+  const m = useT();
   const [copied, copy] = useCopy();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(query.sql);
@@ -178,7 +181,7 @@ function SqlBlock({
       if (job.status === "failed") setError(job.error ?? "The query failed.");
       else setResult(job);
     } catch (caught) {
-      if (!controller.signal.aborted) setError(errorMessage(caught));
+      if (!controller.signal.aborted) setError(errorMessage(caught, m));
     } finally {
       if (polling.current === controller) setBusy(false);
     }
@@ -349,6 +352,7 @@ function ExportButton({
   getExport: (id: string) => Promise<ExportJob>;
   label: string;
 }) {
+  const m = useT();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Polling has no deadline, so it stops when this view goes away.
@@ -374,7 +378,7 @@ function ExportButton({
       link.download = job.filename ?? "";
       link.click();
     } catch (caught) {
-      if (!controller.signal.aborted) setError(errorMessage(caught));
+      if (!controller.signal.aborted) setError(errorMessage(caught, m));
     } finally {
       if (!controller.signal.aborted) setBusy(false);
     }
@@ -422,6 +426,7 @@ function RunId({ id }: { id: string }) {
  * still limits its scripts to the chart libraries.
  */
 function Report({ api, runId }: { api: Api; runId: string }) {
+  const m = useT();
   const [html, setHtml] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [download, setDownload] = useState<string | null>(null);
@@ -437,7 +442,7 @@ function Report({ api, runId }: { api: Api; runId: string }) {
         url = URL.createObjectURL(new Blob([page], { type: "text/html" }));
         setDownload(url);
       })
-      .catch((caught) => !cancelled && setError(errorMessage(caught)));
+      .catch((caught) => !cancelled && setError(errorMessage(caught, m)));
     return () => {
       cancelled = true;
       if (url) URL.revokeObjectURL(url);

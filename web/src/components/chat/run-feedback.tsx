@@ -1,6 +1,8 @@
 import { ThumbsDown, ThumbsUp } from "lucide-react";
 import { useState } from "react";
-import { type Api, type Run, errorMessage } from "@/api";
+import { type Api, type Run } from "@/api";
+import { errorMessage } from "@/i18n/errors";
+import { useT } from "@/i18n/context";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -18,6 +20,7 @@ const MAX_NOTE = 1000;
  * opens optional reasons and a note. Clicking the chosen thumb again takes the rating back.
  */
 export function RunFeedbackControl({ api, run }: { api: Api; run: Run }) {
+  const m = useT();
   const [feedback, setFeedback] = useState<RunFeedback | null>(run.feedback ?? null);
   const [asking, setAsking] = useState(false);
   const [reasons, setReasons] = useState<FeedbackReason[]>([]);
@@ -33,7 +36,7 @@ export function RunFeedbackControl({ api, run }: { api: Api; run: Run }) {
       setFeedback(await change());
       return true;
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, m));
       return false;
     } finally {
       setBusy(false);

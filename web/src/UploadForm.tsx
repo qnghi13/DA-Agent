@@ -1,6 +1,8 @@
 import { FileSpreadsheet, Loader2, UploadCloud, X } from "lucide-react";
 import { type DragEvent, type FormEvent, useRef, useState } from "react";
-import { type Api, UPLOAD_ACCEPT, UPLOAD_LIMITS, errorMessage } from "./api";
+import { type Api, UPLOAD_ACCEPT, UPLOAD_LIMITS } from "./api";
+import { errorMessage } from "@/i18n/errors";
+import { useT } from "@/i18n/context";
 import { SetupPage } from "./components/setup/stepper";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
@@ -30,6 +32,7 @@ export function UploadForm({
   api: Api;
   onUploaded: (id: string) => void | Promise<void>;
 }) {
+  const m = useT();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [files, setFiles] = useState<File[]>([]);
@@ -63,7 +66,7 @@ export function UploadForm({
       const { id } = await api.uploadDataset(name.trim(), description, files);
       await onUploaded(id);
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, m));
     } finally {
       setBusy(false);
     }

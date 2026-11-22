@@ -1,6 +1,8 @@
 import { AlertCircle, RefreshCw, TriangleAlert } from "lucide-react";
 import { lazy, type ReactNode, Suspense, useCallback, useEffect, useState } from "react";
-import { type Api, errorMessage, type VegaLiteSpec } from "./api";
+import { type Api, type VegaLiteSpec } from "./api";
+import { errorMessage } from "@/i18n/errors";
+import { en } from "@/i18n/en";
 import { Button } from "./components/ui/button";
 import { Skeleton } from "./components/ui/skeleton";
 import { useDark } from "./hooks/use-dark";
@@ -173,7 +175,7 @@ export function OpsDashboard({ api }: { api: Api }) {
       setMoreFailures(recent.failures.length === 25);
       setError(null);
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, en));
     } finally {
       setLoading(false);
     }
@@ -195,7 +197,7 @@ export function OpsDashboard({ api }: { api: Api }) {
       setFailures((current) => [...current, ...older.failures]);
       setMoreFailures(older.failures.length === 25);
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, en));
     }
   }
 

@@ -12,7 +12,9 @@ import {
   X,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useReducer, useRef, useState } from "react";
-import { type Api, type Explanation, type Run, type RunStatus, errorMessage } from "@/api";
+import { type Api, type Explanation, type Run, type RunStatus } from "@/api";
+import { errorMessage } from "@/i18n/errors";
+import { useT } from "@/i18n/context";
 import { RunFeedbackControl } from "@/components/chat/run-feedback";
 import { type MetricChoice, SaveMetricDialog } from "@/components/chat/save-metric-dialog";
 import { DataTable } from "@/components/data-table";
@@ -65,6 +67,7 @@ export function RunMessage({
   /** Opens memory, where saved definitions are listed. */
   onOpenMemory?: (trigger: HTMLElement) => void;
 }) {
+  const m = useT();
   const [run, setRun] = useState<Run | null>(null);
   const [trail, dispatch] = useReducer(
     (state: Trail, event: SseEvent | "reset") =>
@@ -83,7 +86,7 @@ export function RunMessage({
         await api.streamRunEvents(runId, dispatch, controller.signal);
         if (!controller.signal.aborted) setRun(await api.getRun(runId));
       } catch (caught) {
-        if (!controller.signal.aborted) setError(errorMessage(caught));
+        if (!controller.signal.aborted) setError(errorMessage(caught, m));
       }
     })();
     return () => controller.abort();

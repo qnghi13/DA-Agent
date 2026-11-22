@@ -6,13 +6,22 @@ import type { FailureRow, OpsAlert, OpsSummary, Window } from "./ops";
 import type { Answer } from "./run";
 import { type SseEvent, streamEvents } from "./sse";
 
+/** A failed call. `message` is the server's English `detail`; `code` and `params`, when the
+ * server sends them, let the UI word it in its own language (src/da_agent/api/errors.py). */
 export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    readonly code?: string,
+    readonly params?: Record<string, unknown>,
   ) {
     super(message);
   }
+}
+
+export async function apiError(response: Response): Promise<ApiError> {
+  const { message, code, params } = await errorDetail(response);
+  return new ApiError(response.status, message, code, params);
 }
 
 // Mirrors src/da_agent/ingestion/spec.py. Unknown fields are kept so edits round-trip.
@@ -186,7 +195,7 @@ async function send<T>(path: string, init: RequestInit = {}): Promise<T> {
   // The session cookie goes with every same-origin request; the browser adds Origin to POSTs,
   // which the API checks (docs/adr/0025).
   const response = await fetch(path, { ...init, credentials: "same-origin" });
-  if (!response.ok) throw new ApiError(response.status, await errorDetail(response));
+  if (!response.ok) throw await apiError(response);
   return (response.status === 204 ? undefined : await response.json()) as T;
 }
 
@@ -467,7 +476,7 @@ export class Api {
     const response = await fetch(`/v1/runs/${encodeURIComponent(id)}/report`, {
       credentials: "same-origin",
     });
-    if (!response.ok) throw new ApiError(response.status, await errorDetail(response));
+    if (!response.ok) throw await apiError(response);
     return response.text();
   }
 }
@@ -626,26 +635,34 @@ export interface RunSummary {
   conversation_id: string | null;
 }
 
-export function errorMessage(caught: unknown): string {
-  if (caught instanceof ApiError && caught.status === 401) return "You are signed out.";
-  if (caught instanceof ApiError && caught.status === 429) return `Slow down: ${caught.message}`;
-  return caught instanceof Error ? caught.message : String(caught);
+export interface ErrorDetail {
+  message: string;
+  code?: string;
+  params?: Record<string, unknown>;
 }
 
-export async function errorDetail(response: Response): Promise<string> {
+export async function errorDetail(response: Response): Promise<ErrorDetail> {
   try {
-    const body = (await response.json()) as { detail?: unknown };
-    if (typeof body.detail === "string") return body.detail;
+    const body = (await response.json()) as { detail?: unknown; code?: unknown; params?: unknown };
+    if (typeof body.detail === "string") {
+      if (typeof body.code !== "string") return { message: body.detail };
+      const params =
+        typeof body.params === "object" && body.params !== null && !Array.isArray(body.params)
+          ? (body.params as Record<string, unknown>)
+          : {};
+      return { message: body.detail, code: body.code, params };
+    }
     // FastAPI validation errors: a list of {loc, msg}.
     if (Array.isArray(body.detail)) {
-      return body.detail
+      const message = body.detail
         .map((item: { loc?: unknown[]; msg?: string }) =>
           [item.loc?.join("."), item.msg].filter(Boolean).join(": "),
         )
         .join("; ");
+      return { message };
     }
   } catch {
     // Not JSON: fall back to the status text.
   }
-  return response.statusText || `HTTP ${response.status}`;
+  return { message: response.statusText || `HTTP ${response.status}` };
 }

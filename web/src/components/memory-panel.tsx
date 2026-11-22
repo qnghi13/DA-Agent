@@ -1,6 +1,8 @@
 import { AlertTriangle, Check, ChevronRight, Loader2, Pencil, Trash2, X } from "lucide-react";
 import { type FormEvent, useCallback, useEffect, useState } from "react";
-import { type Api, type MemoryEntry, type NewMemory, errorMessage } from "@/api";
+import { type Api, type MemoryEntry, type NewMemory } from "@/api";
+import { errorMessage } from "@/i18n/errors";
+import { useT } from "@/i18n/context";
 import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,6 +27,7 @@ export function MemoryPanel({
   datasetId: string;
   draft?: MemoryDraft;
 }) {
+  const m = useT();
   const [entries, setEntries] = useState<MemoryEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -32,7 +35,7 @@ export function MemoryPanel({
     try {
       setEntries((await api.listMemory(datasetId)).memory);
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, m));
       setEntries((current) => current ?? []);
     }
   }, [api, datasetId]);
@@ -47,7 +50,7 @@ export function MemoryPanel({
     try {
       await action();
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, m));
       ok = false;
     }
     await reload();

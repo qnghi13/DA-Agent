@@ -50,3 +50,4 @@ decision, add a new ADR and mark the old one as superseded.
 | [0043](0043-feedback-goldens.md) | User feedback, golden cases from thumbs-ups, and feedback rates per agent version | Accepted |
 | [0044](0044-slo-alerts.md) | SLOs and alerts with Prometheus metrics from the processes and Alertmanager | Accepted |
 | [0045](0045-dataset-versions.md) | Adding files to a dataset creates a new version inside the same dataset | Accepted |
+| [0046](0046-vietnamese-ui.md) | The UI offers Vietnamese next to English, from typed dictionaries in the web | Accepted |

@@ -1,6 +1,8 @@
 import { Check, Loader2 } from "lucide-react";
 import { type FormEvent, useState } from "react";
-import { type Api, type MetricFacts, errorMessage } from "@/api";
+import { type Api, type MetricFacts } from "@/api";
+import { errorMessage } from "@/i18n/errors";
+import { useT } from "@/i18n/context";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -46,6 +48,7 @@ export function SaveMetricDialog({
 }
 
 function SaveMetricForm({ api, choice, onClose }: { api: Api; choice: MetricChoice; onClose: () => void }) {
+  const m = useT();
   const [name, setName] = useState("");
   const [aliases, setAliases] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -71,7 +74,7 @@ function SaveMetricForm({ api, choice, onClose }: { api: Api; choice: MetricChoi
       });
       setSaved(true);
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, m));
     } finally {
       setSaving(false);
     }

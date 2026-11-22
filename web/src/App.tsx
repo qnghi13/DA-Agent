@@ -1,16 +1,11 @@
 import { KeyRound, Loader2 } from "lucide-react";
 import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
-import {
-  Api,
-  ApiError,
-  errorMessage,
-  fetchMe,
-  redeemLink,
-  signInWithKey,
-  signOut,
-} from "./api";
+import { Api, ApiError, fetchMe, redeemLink, signInWithKey, signOut } from "./api";
+import { errorMessage } from "@/i18n/errors";
+import { useT } from "@/i18n/context";
 import { type Me, type StartError, sessionStarter, viewFor } from "./auth";
 import { AccountMenu } from "./components/account-menu";
+import { LanguageToggle } from "./components/language-toggle";
 import { Logo } from "./components/logo";
 import { ThemeToggle } from "./components/theme-toggle";
 import { Slash, TopBar } from "./components/top-bar";
@@ -35,6 +30,7 @@ type State =
   | { kind: "signed-in"; me: Me };
 
 export function App() {
+  const m = useT();
   const [state, setState] = useState<State>({ kind: "loading" });
 
   const signedOut = useCallback((notice: string | null) => {
@@ -52,7 +48,7 @@ export function App() {
         } else if (caught.cause instanceof ApiError && caught.cause.status === 401) {
           signedOut(null);
         } else {
-          signedOut(errorMessage(caught.cause));
+          signedOut(errorMessage(caught.cause, m));
         }
       });
     return () => {
@@ -76,11 +72,15 @@ export function App() {
   const actions =
     state.kind === "signed-in" ? (
       <>
+        <LanguageToggle />
         <ThemeToggle />
         <AccountMenu me={state.me} onSignOut={leave} />
       </>
     ) : (
-      <ThemeToggle />
+      <>
+        <LanguageToggle />
+        <ThemeToggle />
+      </>
     );
 
   if (state.kind === "loading") {
@@ -130,6 +130,7 @@ function SignIn({
   actions: ReactNode;
   onSignedIn: (me: Me) => void;
 }) {
+  const m = useT();
   const [key, setKey] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
@@ -145,7 +146,7 @@ function SignIn({
       setError(
         caught instanceof ApiError && caught.status === 401
           ? "That API key was not accepted."
-          : errorMessage(caught),
+          : errorMessage(caught, m),
       );
     } finally {
       setChecking(false);

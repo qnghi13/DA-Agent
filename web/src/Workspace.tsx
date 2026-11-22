@@ -1,6 +1,8 @@
 import { Menu, PanelLeft, Plus } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
-import { type Api, type Dataset, errorMessage } from "./api";
+import { type Api, type Dataset } from "./api";
+import { errorMessage } from "@/i18n/errors";
+import { useT } from "@/i18n/context";
 import { DatasetView } from "./DatasetView";
 import { Logo } from "./components/logo";
 import { StatusBadge } from "./components/status-badge";
@@ -23,6 +25,7 @@ export function Workspace({
   actions: ReactNode;
   workspaceName: string | null;
 }) {
+  const m = useT();
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [selection, setSelection] = useState<Selection>({ kind: "upload" });
   const [error, setError] = useState<string | null>(null);
@@ -35,7 +38,7 @@ export function Workspace({
       setDatasets(datasets);
       setError(null);
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, m));
     }
   }, [api]);
 

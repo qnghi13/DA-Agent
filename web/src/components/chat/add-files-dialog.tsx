@@ -1,6 +1,8 @@
 import { FileSpreadsheet, Loader2, UploadCloud, X } from "lucide-react";
 import { type DragEvent, type FormEvent, useRef, useState } from "react";
-import { type Api, type Dataset, UPLOAD_ACCEPT, UPLOAD_LIMITS, errorMessage } from "@/api";
+import { type Api, type Dataset, UPLOAD_ACCEPT, UPLOAD_LIMITS } from "@/api";
+import { errorMessage } from "@/i18n/errors";
+import { useT } from "@/i18n/context";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -58,6 +60,7 @@ function AddFilesForm({
   onClose: () => void;
   onUploaded: () => void;
 }) {
+  const m = useT();
   const [picks, setPicks] = useState<Pick[]>([]);
   const [dragging, setDragging] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -96,7 +99,7 @@ function AddFilesForm({
       onUploaded();
       onClose();
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, m));
     } finally {
       setBusy(false);
     }

@@ -19,7 +19,9 @@ import {
   useRef,
   useState,
 } from "react";
-import { type Api, ApiError, type Dataset, type RunStatus, errorMessage } from "./api";
+import { type Api, ApiError, type Dataset, type RunStatus } from "./api";
+import { errorMessage } from "@/i18n/errors";
+import { useT } from "@/i18n/context";
 import { AddFilesDialog } from "./components/chat/add-files-dialog";
 import { EvidenceContent } from "./components/chat/evidence";
 import { type Evidence, RunMessage } from "./components/chat/run-message";
@@ -62,6 +64,7 @@ export function Conversation({
   /** Called with the dataset whenever it is read again, such as while a new version is open. */
   onRefresh: (dataset: Dataset) => void;
 }) {
+  const m = useT();
   const datasetId = dataset.id;
   const [addOpen, setAddOpen] = useState(false);
   const [runVersions, setRunVersions] = useState<Record<string, number>>({});
@@ -102,7 +105,7 @@ export function Conversation({
       .catch((caught) => {
         if (cancelled) return;
         setRuns([]);
-        setError(errorMessage(caught));
+        setError(errorMessage(caught, m));
       });
     return () => {
       cancelled = true;
@@ -142,7 +145,7 @@ export function Conversation({
       setRuns((current) => [...page.runs.map(runRef).reverse(), ...(current ?? [])]);
       setOlderBefore(page.next_before);
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, m));
     } finally {
       setLoadingOlder(false);
     }
@@ -160,7 +163,7 @@ export function Conversation({
       setRuns((current) => [...(current ?? []), { id, conversation_id }]);
       setQuestion("");
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, m));
     } finally {
       setSending(false);
     }
@@ -188,7 +191,7 @@ export function Conversation({
         }
         return;
       }
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, m));
     }
   }
 
@@ -268,7 +271,7 @@ export function Conversation({
           version={openVersion}
           onDone={() => {
             closePanel();
-            void watch.refresh().catch((caught) => setError(errorMessage(caught)));
+            void watch.refresh().catch((caught) => setError(errorMessage(caught, m)));
           }}
         />
       ) : null
@@ -439,7 +442,7 @@ export function Conversation({
         dataset={dataset}
         open={addOpen}
         onClose={() => setAddOpen(false)}
-        onUploaded={() => void watch.refresh().catch((caught) => setError(errorMessage(caught)))}
+        onUploaded={() => void watch.refresh().catch((caught) => setError(errorMessage(caught, m)))}
       />
       {wide ? (
         panel && (

@@ -1,6 +1,8 @@
 import { AlertCircle, Check, Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { type Api, type Dataset, type DatasetVersion, errorMessage } from "@/api";
+import { type Api, type Dataset, type DatasetVersion } from "@/api";
+import { errorMessage } from "@/i18n/errors";
+import { useT } from "@/i18n/context";
 import { Button } from "@/components/ui/button";
 import { canDiscard, isOpenVersion, isWaitingForUser, statusLine } from "@/versions";
 
@@ -81,6 +83,7 @@ export function VersionStatus({
   /** Called after a discard, so the dataset is read again. */
   onChange: () => void;
 }) {
+  const m = useT();
   const [error, setError] = useState<string | null>(null);
   const open = isOpenVersion(version);
   const waiting = isWaitingForUser(version);
@@ -93,7 +96,7 @@ export function VersionStatus({
       await api.discardVersion(datasetId, version.version);
       onChange();
     } catch (caught) {
-      setError(errorMessage(caught));
+      setError(errorMessage(caught, m));
     }
   }
 
