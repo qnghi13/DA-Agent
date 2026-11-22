@@ -7,6 +7,8 @@ import {
   isOlderVersion,
   isOpenVersion,
   missingDecisions,
+  replaceDefaults,
+  replaceOptions,
   statusLine,
   versionDividers,
 } from "./versions";
@@ -174,5 +176,25 @@ describe("a version left by a job that ended", () => {
     expect(canDiscard(version({ status: "checking" }))).toBe(false);
     expect(canDiscard(version({ status: "needs_choice" }))).toBe(true);
     expect(canDiscard(version({ status: "applied" }))).toBe(false);
+  });
+});
+
+describe("replaceOptions", () => {
+  const files = [
+    { name: "Orders.csv", stored_as: "orders.csv", bytes: 1 },
+    { name: "Items.csv", stored_as: "items.csv", bytes: 1 },
+  ];
+  const overlap = { kind: "key", rows: 3, examples: [] };
+  const orders = { table: "orders", kind: "grown", new_rows: 5, overlaps: [overlap], files: ["orders.csv", "orders_2.csv"] } as never;
+  const items = { table: "items", kind: "grown", new_rows: 5, overlaps: [overlap], files: ["items.csv", "items_2.csv", "items_3.csv"] } as never;
+
+  it("lists only the dataset's files the table is read from", () => {
+    expect(replaceOptions(orders, files)).toEqual([files[0]]);
+    expect(replaceOptions({ ...(orders as object), files: undefined } as never, files)).toEqual([]);
+  });
+
+  it("picks the file when a table has only one to replace", () => {
+    const more = [...files, { name: "Items 2.csv", stored_as: "items_2.csv", bytes: 1 }];
+    expect(replaceDefaults([orders, items], more)).toEqual({ orders: "orders.csv" });
   });
 });

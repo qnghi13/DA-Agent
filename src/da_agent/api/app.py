@@ -10,6 +10,7 @@ import json
 import logging
 import math
 import os
+import secrets
 import shutil
 import time
 import uuid
@@ -740,13 +741,27 @@ def add_files(
             names.append(name)
     except UploadRejectedError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-    version = max(v.version for v in store.list(caller.workspace_id, key)) + 1
-    upload_dir = f"{key}-v{version}"
+    versions = store.list(caller.workspace_id, key)
+    # Refused before any byte is saved; `open_version` checks both again under its lock.
+    if any(v.status in OPEN_STATUSES for v in versions):
+        raise HTTPException(status_code=409, detail="a version is already open")
+    if (
+        sum(v.status not in ("failed", "discarded") for v in versions)
+        >= settings.max_dataset_versions
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=f"the dataset already has {settings.max_dataset_versions} versions; "
+            "the limit is reached",
+        )
+    version = max(v.version for v in versions) + 1
+    # A random suffix: a folder left by a crashed upload (no version row) never blocks the next
+    # one. The row stores the name, so nothing parses it.
+    upload_dir = f"{key}-v{version}-{secrets.token_hex(4)}"
     folder = settings.uploads_root / upload_dir
     try:
         folder.mkdir(parents=True)
     except FileExistsError as error:
-        # Another upload took this version number; its folder is not ours to remove.
         raise HTTPException(status_code=409, detail="a version is already open") from error
     try:
         source = settings.uploads_root / current.upload_dir
@@ -769,7 +784,7 @@ def add_files(
         with conn.transaction():
             opened = store.open_version(
                 caller.workspace_id, key, [*kept, *added], upload_dir,
-                settings.max_dataset_versions, version=version,
+                settings.max_dataset_versions, version=version, base_version=current.version,
             )  # fmt: skip
             log(
                 conn, caller, "dataset.files_add", dataset_id,

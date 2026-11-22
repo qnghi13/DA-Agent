@@ -137,6 +137,8 @@ export interface VersionChange {
   stale_metrics: string[];
   /** Only when the table has overlaps. */
   allowed_choices?: OverlapChoice[];
+  /** The table's own stored files: the only ones a replace choice on it may name. */
+  files?: string[];
   note?: string;
 }
 

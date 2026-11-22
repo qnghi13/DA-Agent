@@ -116,17 +116,21 @@ class DatasetVersionStore:
         max_versions: int,
         *,
         version: int | None = None,
+        base_version: int | None = None,
     ) -> int:
         """Insert the next version as `uploaded` and enqueue its check, in one transaction.
         Raises DatasetStateError if the dataset is not ready, a version is open, or the limit
-        is reached.
+        is reached. The limit counts the versions that keep a build: applied and open ones.
 
-        `version` is the number the caller wrote into `files` (`added_in`): when another upload
-        took that number meanwhile, nothing is inserted and DatasetStateError is raised."""
+        Under the dataset's row lock, so a concurrent apply cannot slip in between:
+        - `version` is the number the caller wrote into `files` (`added_in`);
+        - `base_version` is the current version whose files the caller linked into the upload.
+        When either no longer holds, nothing is inserted and DatasetStateError is raised."""
         try:
             with self._conn.transaction():
                 row = self._conn.execute(
-                    "SELECT status FROM datasets WHERE id = %s AND workspace_id = %s FOR UPDATE",
+                    "SELECT status, current_version FROM datasets "
+                    "WHERE id = %s AND workspace_id = %s FOR UPDATE",
                     (dataset_id, workspace_id),
                 ).fetchone()
                 if row is None:
@@ -135,15 +139,19 @@ class DatasetVersionStore:
                     raise DatasetStateError(
                         f"the dataset is {row[0]}; only a ready one takes files"
                     )
-                last = self._conn.execute(
-                    "SELECT coalesce(max(version), 0) FROM dataset_versions WHERE dataset_id = %s",
+                if base_version is not None and row[1] != base_version:
+                    raise DatasetStateError(CHANGED_WHILE_UPLOADING)
+                last, kept = self._conn.execute(
+                    "SELECT coalesce(max(version), 0), "
+                    "count(*) FILTER (WHERE status NOT IN ('failed', 'discarded')) "
+                    "FROM dataset_versions WHERE dataset_id = %s",
                     (dataset_id,),
-                ).fetchone()
-                number = (last[0] if last else 0) + 1
+                ).fetchone() or (0, 0)
+                number = last + 1
                 if version is not None and number != version:
                     raise DatasetStateError(CHANGED_WHILE_UPLOADING)
                 version = number
-                if version > max_versions:
+                if kept + 1 > max_versions:
                     raise DatasetStateError(
                         f"the dataset already has {max_versions} versions; the limit is reached"
                     )

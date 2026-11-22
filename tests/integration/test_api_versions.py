@@ -5,6 +5,7 @@ Jobs are not run here; the version job has its own tests. Needs Postgres
 """
 
 import dataclasses
+import re
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -13,12 +14,14 @@ import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
+from da_agent.api import app as app_module
 from da_agent.api.app import ApiSettings, create_app
 from da_agent.storage.dataset_versions import DatasetVersionStore
 from da_agent.storage.jobs import JobQueue
 from da_agent.storage.keys import create_key
 from da_agent.storage.ledger import PostgresCostLedger
 from da_agent.storage.workspaces import create_workspace
+from da_agent.worker.datasets import DIRECTORY_NAME
 from tests.integration.conftest import POSTGRES_URL
 from tests.integration.test_api import audit_actions, auth, ready_dataset
 from tests.integration.test_limits import call
@@ -30,7 +33,7 @@ CHANGES = [
     {
         "table": "orders", "kind": "grown", "new_rows": 2,
         "allowed_choices": ["replace", "keep_both"], "overlaps": [{"kind": "range"}],
-        "stale_metrics": [],
+        "stale_metrics": [], "files": ["Don_hang.csv", "b.csv"],
     },
     {"table": "items", "kind": "new", "new_rows": 3, "overlaps": [], "stale_metrics": []},
 ]  # fmt: skip
@@ -107,7 +110,7 @@ def test_new_files_open_a_version_with_kept_files_linked(
 
     assert response.status_code == 202
     assert response.json() == {"dataset_id": dataset_id, "version": 2, "status": "uploaded"}
-    folder = settings.uploads_root / f"{dataset_id}-v2"
+    folder = settings.uploads_root / _upload_dir(conn, dataset_id)
     assert sorted(p.name for p in folder.iterdir()) == ["Don_hang.csv", "Don_moi.csv", "README.md"]
     assert "version" in kinds(conn)
     listed = client.get(f"/v1/datasets/{dataset_id}/versions", headers=auth(key)).json()
@@ -155,8 +158,78 @@ def test_a_second_open_version_is_refused_and_leaves_no_folder(
 
     assert add(client, key, dataset_id, [("c.csv", b"a\n1\n")]).status_code == 409
 
-    assert not (settings.uploads_root / f"{dataset_id}-v3").exists()
-    assert (settings.uploads_root / f"{dataset_id}-v2").exists()
+    assert version_folders(settings, dataset_id) == [_upload_dir(conn, dataset_id)]
+
+
+def test_the_upload_folder_has_a_random_suffix_the_runner_accepts(
+    client: TestClient, conn: psycopg.Connection, key: str
+) -> None:
+    dataset_id = ready_dataset(client, conn, key)
+
+    add(client, key, dataset_id, [("b.csv", b"a\n1\n")])
+
+    folder = _upload_dir(conn, dataset_id)
+    assert re.fullmatch(rf"{dataset_id}-v2-[0-9a-f]{{8}}", folder)
+    assert DIRECTORY_NAME.fullmatch(folder)
+
+
+def test_a_folder_left_by_a_crashed_upload_does_not_block_the_next(
+    client: TestClient, conn: psycopg.Connection, key: str, settings: ApiSettings
+) -> None:
+    dataset_id = ready_dataset(client, conn, key)
+    (settings.uploads_root / f"{dataset_id}-v2").mkdir()  # no version row: an API crash
+
+    response = add(client, key, dataset_id, [("b.csv", b"a\n1\n")])
+
+    assert response.status_code == 202 and response.json()["version"] == 2
+
+
+def test_an_open_version_is_refused_before_any_file_is_saved(
+    client: TestClient,
+    conn: psycopg.Connection,
+    key: str,
+    settings: ApiSettings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dataset_id = ready_dataset(client, conn, key)
+    add(client, key, dataset_id, [("b.csv", b"a\n1\n")])
+    saved: list[str] = []
+    monkeypatch.setattr(app_module, "_save", lambda upload, path, limit: saved.append(path.name))
+
+    response = add(client, key, dataset_id, [("c.csv", b"a\n1\n")])
+
+    assert response.status_code == 409 and saved == []
+
+
+def test_an_upload_during_which_the_data_changed_is_refused(
+    client: TestClient,
+    conn: psycopg.Connection,
+    key: str,
+    settings: ApiSettings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Version 2 is applied while version 3 streams: v3 linked v1's files and would lose v2's.
+    dataset_id = ready_dataset(client, conn, key)
+    store = DatasetVersionStore(conn)
+    workspace = _workspace(conn, dataset_id)
+    store.open_version(workspace, UUID(dataset_id), [], f"{dataset_id}-v2-00000000", 20)
+    store.mark(UUID(dataset_id), 2, "failed")  # number 2 is taken; the next upload is v3
+    store.open_version(workspace, UUID(dataset_id), [], f"{dataset_id}-v3-00000000", 20)
+    store.mark(UUID(dataset_id), 3, "discarded")
+    save = app_module._save
+
+    def save_while_another_version_applies(upload: Any, path: Path, limit: int) -> int:
+        number = store.open_version(workspace, UUID(dataset_id), [], "elsewhere", 20)
+        store.apply(UUID(dataset_id), number, "elsewhere", expected=("uploaded",))
+        return save(upload, path, limit)
+
+    monkeypatch.setattr(app_module, "_save", save_while_another_version_applies)
+
+    response = add(client, key, dataset_id, [("c.csv", b"a\n1\n")])
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "the data changed while you uploaded; try again"
+    assert version_folders(settings, dataset_id) == []
 
 
 def test_the_version_limit_returns_409(
@@ -174,6 +247,11 @@ def test_the_version_limit_returns_409(
 
     assert response.status_code == 409
     assert "3 versions" in response.json()["detail"]
+
+
+def version_folders(settings: ApiSettings, dataset_id: str) -> list[str]:
+    """Upload folders of the dataset's later versions."""
+    return sorted(p.name for p in settings.uploads_root.glob(f"{dataset_id}-v*"))
 
 
 def _workspace(conn: psycopg.Connection, dataset_id: str) -> UUID:
@@ -195,7 +273,7 @@ def test_the_file_limit_counts_kept_and_new_files(
 
     assert over.status_code == 413
     assert replacing.status_code == 202
-    assert not any(settings.uploads_root.glob(f"{dataset_id}-v3"))
+    assert version_folders(settings, dataset_id) == [_upload_dir(conn, dataset_id)]
 
 
 def test_a_file_over_the_size_limit_is_refused_and_leaves_no_folder(
@@ -206,7 +284,7 @@ def test_a_file_over_the_size_limit_is_refused_and_leaves_no_folder(
     response = add(client, key, dataset_id, [("b.csv", b"x" * 2000)])
 
     assert response.status_code == 413
-    assert not (settings.uploads_root / f"{dataset_id}-v2").exists()
+    assert version_folders(settings, dataset_id) == []
     assert (
         DatasetVersionStore(conn).list(_workspace(conn, dataset_id), UUID(dataset_id))[-1].version
         == 1
@@ -221,7 +299,7 @@ def test_replacing_a_file_the_dataset_does_not_have_is_a_bad_request(
     response = add(client, key, dataset_id, [("b.csv", b"a\n1\n")], replaces=["ghost.csv"])
 
     assert response.status_code == 400
-    assert not (settings.uploads_root / f"{dataset_id}-v2").exists()
+    assert version_folders(settings, dataset_id) == []
 
 
 def test_replaces_must_match_the_files_one_to_one(
@@ -243,7 +321,7 @@ def test_a_traversal_name_is_stored_safely_and_never_collides(
     response = add(client, key, dataset_id, [("../../evil/Don hang.csv", b"a\n1\n")])
 
     assert response.status_code == 202
-    folder = settings.uploads_root / f"{dataset_id}-v2"
+    folder = settings.uploads_root / _upload_dir(conn, dataset_id)
     assert sorted(p.name for p in folder.iterdir()) == [
         "Don_hang.csv",
         "Don_hang_2.csv",
@@ -361,17 +439,35 @@ def test_a_replace_choice_names_a_stored_file_of_the_current_version(
     assert response.status_code == 200
 
 
+def test_a_replace_choice_naming_another_tables_file_is_422(
+    client: TestClient, conn: psycopg.Connection, key: str
+) -> None:
+    dataset_id = ready_dataset(client, conn, key)
+    add(client, key, dataset_id, [("b.csv", b"a\n1\n")])
+    waiting(conn, dataset_id)
+
+    # README.md is a file of the dataset, but not one `orders` is read from.
+    response = approve(
+        client, key, dataset_id,
+        choices={"orders": "replace"}, replace_files={"orders": "README.md"},
+    )  # fmt: skip
+
+    assert response.status_code == 422
+    assert "not a file of 'orders'" in response.json()["detail"]
+
+
 def test_discard_frees_the_slot_and_removes_only_the_versions_folder(
     client: TestClient, conn: psycopg.Connection, key: str, settings: ApiSettings
 ) -> None:
     dataset_id = ready_dataset(client, conn, key)
     add(client, key, dataset_id, [("b.csv", b"a\n1\n")])
     waiting(conn, dataset_id)
+    folder = _upload_dir(conn, dataset_id)
 
     response = client.post(f"/v1/datasets/{dataset_id}/versions/2/discard", headers=auth(key))
 
     assert response.status_code == 204
-    assert not (settings.uploads_root / f"{dataset_id}-v2").exists()
+    assert not (settings.uploads_root / folder).exists()
     assert (settings.uploads_root / dataset_id / "Don_hang.csv").exists()
     assert "dataset.version_discard" in audit_actions(conn)
     assert add(client, key, dataset_id, [("c.csv", b"a\n1\n")]).json()["version"] == 3
@@ -389,7 +485,7 @@ def test_a_version_that_is_checking_cannot_be_discarded(
     response = client.post(f"/v1/datasets/{dataset_id}/versions/2/discard", headers=auth(key))
 
     assert response.status_code == 409
-    assert (settings.uploads_root / f"{dataset_id}-v2").exists()
+    assert (settings.uploads_root / _upload_dir(conn, dataset_id)).exists()
 
 
 def test_a_version_left_checking_by_a_job_that_ended_can_be_discarded(

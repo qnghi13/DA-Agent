@@ -414,6 +414,25 @@ def test_build_step_applies_choices(setup: Setup, choice: str, rows: int, files:
     assert adapter.requests == []
 
 
+def test_a_replace_naming_a_file_outside_the_table_fails_the_build(setup: Setup) -> None:
+    setup.add_files({"orders_2.csv": "id,total,day\n2,250,15/02/2026\n3,300,20/02/2026\n"})
+    llm, _ = fake_llm()
+    setup.run(llm)
+    assert setup.entry("orders")["files"] == ["orders.csv", "orders_2.csv"]
+    # As if the check had found orders.csv to belong to another table.
+    changes = [e | {"files": ["orders_2.csv"]} for e in setup.version().changes]
+    setup.store.mark(setup.dataset_id, 2, "needs_choice", changes=changes)
+    choices = {"tables": {"orders": "replace"}, "replace_files": {"orders": "orders.csv"},
+               "apply_anyway": False}  # fmt: skip
+    setup.store.approve(setup.workspace, setup.dataset_id, 2, choices, None, [])
+
+    setup.run(llm)
+
+    version = setup.version()
+    assert (version.status, version.error) == ("failed", FAILURES["choices_invalid"])
+    assert setup.current_version() == 1
+
+
 @pytest.mark.parametrize(("apply_anyway", "status", "current"), [(False, "failed", 1),
                                                                  (True, "applied", 2)])  # fmt: skip
 def test_a_build_that_still_fails_quality_is_applied_only_when_asked(

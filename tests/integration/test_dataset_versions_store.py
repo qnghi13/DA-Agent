@@ -139,9 +139,43 @@ def test_the_limit_is_enforced(conn: psycopg.Connection, workspace: UUID) -> Non
     store = DatasetVersionStore(conn)
     for _ in range(19):  # versions 2..20
         version = store.open_version(workspace, dataset_id, NEW, "v", 20)
-        store.mark(dataset_id, version, "discarded")
+        assert store.apply(dataset_id, version, f"v{version}", expected=("uploaded",))
     with pytest.raises(DatasetStateError, match="limit"):
         store.open_version(workspace, dataset_id, NEW, "v21", 20)
+
+
+def test_the_limit_counts_only_applied_and_open_versions(
+    conn: psycopg.Connection, workspace: UUID
+) -> None:
+    # Failed and discarded versions keep no build, so they never use up the dataset's versions.
+    dataset_id = ready_dataset(conn, workspace)
+    store = DatasetVersionStore(conn)
+    for status in ["failed", "discarded"] * 3:
+        version = store.open_version(workspace, dataset_id, NEW, "v", 3)
+        store.mark(dataset_id, version, status)
+    assert store.open_version(workspace, dataset_id, NEW, "v8", 3) == 8  # 1, 8: two of three
+    store.mark(dataset_id, 8, "applied")
+    assert store.open_version(workspace, dataset_id, NEW, "v9", 3) == 9  # 1, 8, 9 (open)
+    store.mark(dataset_id, 9, "failed")
+    store.mark(dataset_id, store.open_version(workspace, dataset_id, NEW, "v10", 3), "applied")
+    with pytest.raises(DatasetStateError, match="limit"):
+        store.open_version(workspace, dataset_id, NEW, "v11", 3)
+
+
+def test_open_version_refuses_when_the_data_changed_since_the_upload_began(
+    conn: psycopg.Connection, workspace: UUID
+) -> None:
+    # The upload linked version 1's files; version 2 was applied while it streamed.
+    dataset_id = ready_dataset(conn, workspace)
+    store = DatasetVersionStore(conn)
+    applied = store.open_version(workspace, dataset_id, NEW, "v2", 20)
+    store.apply(dataset_id, applied, "v2", expected=("uploaded",))
+
+    with pytest.raises(DatasetStateError, match="changed while you uploaded"):
+        store.open_version(workspace, dataset_id, NEW, "v3", 20, version=3, base_version=1)
+
+    assert [v.version for v in store.list(workspace, dataset_id)] == [1, 2]
+    assert store.open_version(workspace, dataset_id, NEW, "v3", 20, base_version=2) == 3
 
 
 def test_a_dataset_that_is_not_ready_raises(conn: psycopg.Connection, workspace: UUID) -> None:

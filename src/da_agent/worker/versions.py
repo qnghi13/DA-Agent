@@ -39,6 +39,7 @@ from da_agent.ingestion.version_review import (
     overlap_keys,
     pin_kept_tables,
     replaced_files,
+    source_files,
     stale_metrics,
     table_names,
     version_changes,
@@ -291,7 +292,10 @@ class _VersionRun:
             repairs, repair_problem = self.propose_repairs(m, ingest_id, report, quality)
         removed = m.names("removed")
         stale = stale_metrics(self.metrics(), removed, shown) if removed else {}
-        changes = version_changes(m.changes, spec, m.names_before, report, quality, stale)
+        changes = version_changes(
+            m.changes, spec, m.names_before, report, quality, stale,
+            sources=source_files(m.report),
+        )  # fmt: skip
         for entry in changes:
             if entry["table"] in unproposed:
                 entry["note"] = UNPROPOSED_NOTE
@@ -316,7 +320,7 @@ class _VersionRun:
         entries: list[dict[str, Any]] = self.record.changes or []
         if invalid_choices(entries, chosen):
             raise _VersionFailed(FAILURES["choices_invalid"])
-        files = self.replace_files(chosen, choices.get("replace_files") or {})
+        files = self.replace_files(chosen, choices.get("replace_files") or {}, entries)
         m = self.match(files)
         ingest_id = m.ingested.output_dir.name  # type: ignore[union-attr]
         try:
@@ -339,13 +343,15 @@ class _VersionRun:
             raise _VersionFailed(FAILURES["quality_failed"])
         return self.install_and_apply(self.fields(m, spec, report, None) | {"files": files})
 
-    def replace_files(self, chosen: dict[str, str], names: dict[str, Any]) -> list[dict[str, Any]]:
+    def replace_files(
+        self, chosen: dict[str, str], names: dict[str, Any], entries: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """Drop each file the user chose to replace from the version: from its file list, and its
-        link from the version's own folder. Only a file of the current version can be replaced,
-        so a retry, after the link is gone, finds the same files."""
+        link from the version's own folder. Only a file of the current version, of the table the
+        choice is on, can be replaced, so a retry, after the link is gone, finds the same files."""
         upload_dir = self.record.upload_dir
         try:
-            replaced = replaced_files(chosen, names, self.current.files)
+            replaced = replaced_files(chosen, names, self.current.files, entries)
         except ValueError as error:
             raise _VersionFailed(FAILURES["choices_invalid"]) from error
         if replaced and (upload_dir == self.current.upload_dir

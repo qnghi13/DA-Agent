@@ -200,8 +200,9 @@ builds with the existing spec and decides in code ([ADR 0045](adr/0045-dataset-v
   before/after repairs for failing columns; the user approves. Existing table specs are never
   changed by the model.
 
-Only `apply` changes `current_version`, in one transaction. Version folders are siblings named
-`<dataset id>-v<n>`. Turns answered on an older version are labelled in the prompt and the UI.
+Only `apply` changes `current_version`, in one transaction. Version folders are siblings: the
+build is `<dataset id>-v<n>`, the upload `<dataset id>-v<n>-<8 hex>`. Turns answered on an older
+version are labelled in the prompt and the UI.
 
 ## Agent graph
 

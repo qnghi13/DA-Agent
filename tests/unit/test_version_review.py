@@ -17,6 +17,7 @@ from da_agent.ingestion.version_review import (
     invalid_choices,
     pin_kept_tables,
     replaced_files,
+    source_files,
     stale_metrics,
     version_changes,
     with_overlap_drops,
@@ -125,18 +126,18 @@ def test_version_changes_have_one_entry_per_table() -> None:
             "table": "orders", "kind": "grown", "new_rows": 3,
             "overlaps": [key.model_dump(mode="json")], "near_match": None,
             "missing_columns": [], "extra_columns": [],
-            "quality": ["orders.total: parsed 50%"], "stale_metrics": [],
+            "quality": ["orders.total: parsed 50%"], "stale_metrics": [], "files": [],
             "allowed_choices": ["replace", "drop_overlap", "keep_both"],
         },
         {
             "table": "orders_v2", "kind": "new", "new_rows": 4, "overlaps": [],
             "near_match": "clients", "missing_columns": ["total"], "extra_columns": ["amount"],
-            "quality": [], "stale_metrics": [],
+            "quality": [], "stale_metrics": [], "files": [],
         },
         {
             "table": "clients", "kind": "removed", "new_rows": 0, "overlaps": [],
             "near_match": None, "missing_columns": [], "extra_columns": [], "quality": [],
-            "stale_metrics": ["Revenue"],
+            "stale_metrics": ["Revenue"], "files": [],
         },
     ]  # fmt: skip
     assert blocking_tables(entries) == {"orders"}
@@ -215,14 +216,51 @@ def test_tables_without_a_drop_choice_are_untouched() -> None:
     assert with_overlap_drops(spec, set(), report, ["orders_2.csv"], {}) == spec
 
 
+ENTRIES = [
+    {"table": "orders", "files": ["orders.csv", "orders_2.csv"]},
+    {"table": "items", "files": ["items.csv"]},
+]
+
+
 def test_only_a_file_of_the_current_version_can_be_replaced() -> None:
     current = [{"name": "orders.csv", "stored_as": "orders.csv"}]
     chosen = {"orders": "replace", "items": "keep_both"}
 
-    assert replaced_files(chosen, {"orders": "orders.csv"}, current) == {"orders.csv"}
+    assert replaced_files(chosen, {"orders": "orders.csv"}, current, ENTRIES) == {"orders.csv"}
     for names in ({}, {"orders": "orders_2.csv"}, {"orders": "../x.csv"}, {"orders": 3}):
         with pytest.raises(ValueError):
-            replaced_files(chosen, names, current)
+            replaced_files(chosen, names, current, ENTRIES)
+
+
+def test_a_replace_choice_names_a_file_of_its_own_table() -> None:
+    # Picking another table's file would remove that table without asking.
+    current = [{"stored_as": "orders.csv"}, {"stored_as": "items.csv"}]
+
+    with pytest.raises(ValueError, match="not a file of 'orders'"):
+        replaced_files({"orders": "replace"}, {"orders": "items.csv"}, current, ENTRIES)
+    with pytest.raises(ValueError):  # an entry stored without its files names none
+        replaced_files(
+            {"orders": "replace"}, {"orders": "orders.csv"}, current, [{"table": "orders"}]
+        )
+
+
+def test_each_entry_lists_its_tables_own_files() -> None:
+    build = BuildReport(tables=[TableBuild(name="orders", source="orders")])
+    changes = [
+        TableChange(raw_name="orders", kind="grown", previous_raw_name="orders"),
+        TableChange(raw_name="items", kind="removed", previous_raw_name="items"),
+    ]
+    report = IngestReport(
+        tables=[raw_table("orders", "orders.csv", "book.xlsx#May", "book.xlsx#Jun")]
+    )
+    spec = DatasetSpec(tables=[orders()])
+
+    entries = version_changes(changes, spec, {}, build, {}, {}, sources=source_files(report))
+
+    assert [(e["table"], e["files"]) for e in entries] == [
+        ("orders", ["orders.csv", "book.xlsx"]),
+        ("items", []),
+    ]
 
 
 def overlap_entries(*overlaps: Overlap, dedupe: str = "none") -> list[dict[str, object]]:

@@ -13,7 +13,13 @@ import {
 import { Button } from "./components/ui/button";
 import { Label } from "./components/ui/label";
 import { SpecEditor } from "./SpecEditor";
-import { decisionTables, earlierNewFilesText, missingDecisions } from "./versions";
+import {
+  decisionTables,
+  earlierNewFilesText,
+  missingDecisions,
+  replaceDefaults,
+  replaceOptions,
+} from "./versions";
 
 const CHOICE_LABELS: Record<OverlapChoice, string> = {
   replace: "Replace old file",
@@ -61,9 +67,9 @@ export function VersionReview({
   );
   const [edited, setEdited] = useState<DatasetSpec | null>(null);
   const [chosen, setChosen] = useState<Record<string, OverlapChoice | undefined>>({});
+  // A table with one old file has nothing to pick.
   const [replaceFiles, setReplaceFiles] = useState<Record<string, string | undefined>>(() =>
-    // With one old file there is nothing to pick.
-    dataset.files.length === 1 ? Object.fromEntries(decisionTables(changes).map((c) => [c.table, dataset.files[0].stored_as])) : {},
+    replaceDefaults(changes, dataset.files),
   );
   const [accepted, setAccepted] = useState<boolean[]>(() => repairs.map(() => true));
   const [busy, setBusy] = useState(false);
@@ -123,7 +129,7 @@ export function VersionReview({
             change={change}
             choice={chosen[change.table]}
             file={replaceFiles[change.table]}
-            files={dataset.files}
+            files={replaceOptions(change, dataset.files)}
             onChoice={(choice) => setChosen((c) => ({ ...c, [change.table]: choice }))}
             onFile={(file) => setReplaceFiles((f) => ({ ...f, [change.table]: file }))}
           />

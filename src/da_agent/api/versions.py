@@ -9,7 +9,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from da_agent.ingestion.spec import DatasetSpec
-from da_agent.ingestion.version_review import invalid_choices
+from da_agent.ingestion.version_review import invalid_choices, replaced_files
 from da_agent.ingestion.versioning import RepairChange, apply_repairs
 
 
@@ -31,7 +31,8 @@ def checked_choices(
     apply_anyway: bool,
 ) -> dict[str, Any]:
     """The choices as stored. Every table with overlaps needs an allowed choice, and a table
-    chosen `replace` names a stored file of the current version, which no other choice may."""
+    chosen `replace` names one of its own stored files of the current version, which no other
+    choice may. The build step checks the same rules (`replaced_files`)."""
     wrong = invalid_choices(entries, chosen)
     if wrong:
         raise ApprovalInvalidError(f"missing or not allowed choice for: {', '.join(wrong)}")
@@ -44,6 +45,10 @@ def checked_choices(
     unknown = sorted(name for name in replace_files.values() if name not in stored)
     if unknown:
         raise ApprovalInvalidError(f"not files of the current version: {', '.join(unknown)}")
+    try:
+        replaced_files(chosen, replace_files, current_files, entries)
+    except ValueError as error:
+        raise ApprovalInvalidError(f"cannot replace: {error}") from error
     return {"tables": chosen, "replace_files": replace_files, "apply_anyway": apply_anyway}
 
 

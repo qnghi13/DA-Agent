@@ -1,6 +1,6 @@
 // Pure logic for adding files to a dataset (docs/design/2026-11-21-add-files.md).
 
-import type { DatasetVersion, OverlapChoice, VersionChange, VersionOverlap } from "./api";
+import type { Dataset, DatasetVersion, OverlapChoice, VersionChange, VersionOverlap } from "./api";
 
 const OPEN: readonly DatasetVersion["status"][] = [
   "uploaded",
@@ -115,4 +115,20 @@ export function earlierNewFilesText(overlap: Pick<VersionOverlap, "earlier_new_f
   const files = overlap.earlier_new_files ?? [];
   if (files.length === 0) return null;
   return `Some of these rows are also in ${files.join(", ")}, sent in this same upload.`;
+}
+
+/** The dataset's files a replace choice on this table may name: the table's own. */
+export function replaceOptions(change: VersionChange, files: Dataset["files"]): Dataset["files"] {
+  const own = new Set(change.files ?? []);
+  return files.filter((f) => own.has(f.stored_as));
+}
+
+/** The file to replace for each table that has only one: nothing to pick there. */
+export function replaceDefaults(changes: VersionChange[], files: Dataset["files"]): Record<string, string> {
+  const picked: Record<string, string> = {};
+  for (const change of decisionTables(changes)) {
+    const options = replaceOptions(change, files);
+    if (options.length === 1) picked[change.table] = options[0].stored_as;
+  }
+  return picked;
 }

@@ -76,6 +76,13 @@ def _overlaps(build: TableBuild | None, spec: TableSpec | None) -> list[dict[str
     return entries
 
 
+def source_files(report: IngestReport) -> dict[str, list[str]]:
+    """The stored files each raw table of a version is read from, in report order."""
+    return {
+        t.name: list(dict.fromkeys(file_of(s.source) for s in t.sources)) for t in report.tables
+    }
+
+
 def version_changes(
     changes: list[TableChange],
     spec: DatasetSpec,
@@ -83,8 +90,12 @@ def version_changes(
     report: BuildReport,
     quality: dict[str, list[QualityProblem]],
     stale: dict[str, list[str]],
+    *,
+    sources: dict[str, list[str]] | None = None,
 ) -> list[dict[str, Any]]:
-    """One entry per table: what the check found, for the review and the build step."""
+    """One entry per table: what the check found, for the review and the build step. `files`
+    lists the table's own stored files (`sources`, per raw table): the only ones a `replace`
+    choice on it may name. A removed table has none in this version."""
     by_source = {t.source: t for t in spec.tables}
     builds = {t.source: t for t in report.tables}
     entries = []
@@ -109,6 +120,7 @@ def version_changes(
             "extra_columns": list(change.extra_columns),
             "quality": [p.message for p in quality.get(name, [])],
             "stale_metrics": stale.get(name, []),
+            "files": [] if removed else list((sources or {}).get(change.raw_name, [])),
         }
         if overlaps:
             entry["allowed_choices"] = _allowed_choices(overlaps)
@@ -166,11 +178,17 @@ def stale_metrics(
 
 
 def replaced_files(
-    chosen: dict[str, str], names: dict[str, Any], current_files: list[dict[str, Any]]
+    chosen: dict[str, str],
+    names: dict[str, Any],
+    current_files: list[dict[str, Any]],
+    entries: list[dict[str, Any]],
 ) -> set[str]:
     """The stored names of the files the user chose to replace, per table with a `replace`
-    choice. Only a file of the current version can be replaced; anything else is a ValueError."""
+    choice. Only a file of the current version that is one of that table's own files (its
+    entry's `files`) can be replaced: another table's file would remove that table unasked.
+    Anything else is a ValueError. The API and the build step share this rule."""
     older = {f.get("stored_as") for f in current_files}
+    own = {e["table"]: set(e.get("files") or []) for e in entries}
     replaced = set()
     for table, choice in chosen.items():
         if choice != "replace":
@@ -178,6 +196,8 @@ def replaced_files(
         name = names.get(table)
         if not isinstance(name, str) or name not in older:
             raise ValueError(f"no file of the current version to replace for {table!r}")
+        if name not in own.get(table, set()):
+            raise ValueError(f"{name} is not a file of {table!r}")
         replaced.add(name)
     return replaced
 
