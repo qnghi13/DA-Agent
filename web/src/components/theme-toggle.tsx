@@ -9,19 +9,20 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useT } from "@/i18n/context";
+import { browserStorage } from "@/storage";
 import { readStoredTheme, resolveTheme, storeTheme, type ThemeChoice } from "@/theme";
 
 const darkQuery = () => window.matchMedia("(prefers-color-scheme: dark)");
 
 /** Put the resolved theme on <html>. Called once before the first render, then on changes. */
-export function applyTheme(choice: ThemeChoice = readStoredTheme(window.localStorage)): void {
+export function applyTheme(choice: ThemeChoice = readStoredTheme(browserStorage())): void {
   const theme = resolveTheme(choice, darkQuery().matches);
   document.documentElement.classList.toggle("dark", theme === "dark");
 }
 
 export function ThemeToggle() {
   const m = useT();
-  const [choice, setChoice] = useState<ThemeChoice>(() => readStoredTheme(window.localStorage));
+  const [choice, setChoice] = useState<ThemeChoice>(() => readStoredTheme(browserStorage()));
 
   useEffect(() => {
     applyTheme(choice);
@@ -34,7 +35,7 @@ export function ThemeToggle() {
 
   function choose(value: string) {
     const next = value as ThemeChoice;
-    storeTheme(window.localStorage, next);
+    storeTheme(browserStorage(), next);
     setChoice(next);
   }
 

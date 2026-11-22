@@ -1,5 +1,6 @@
 import { createContext, type ReactNode, useContext, useEffect, useMemo, useState } from "react";
 import { en, type Messages } from "./en";
+import { browserStorage } from "../storage";
 import { applyLanguage, type Language, messagesFor, readStoredLanguage, storeLanguage } from "./language";
 
 interface LanguageState {
@@ -17,7 +18,7 @@ const LanguageContext = createContext<LanguageState>({
 /** The UI language for everything below it. Text is worked out at render time from codes, so a
  * switch changes what is on screen without a reload. */
 export function LanguageProvider({ children }: { children: ReactNode }) {
-  const [language, setChoice] = useState<Language>(() => readStoredLanguage(window.localStorage));
+  const [language, setChoice] = useState<Language>(() => readStoredLanguage(browserStorage()));
 
   useEffect(() => applyLanguage(language, document), [language]);
 
@@ -26,7 +27,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
       language,
       m: messagesFor(language),
       setLanguage: (next) => {
-        storeLanguage(window.localStorage, next);
+        storeLanguage(browserStorage(), next);
         setChoice(next);
       },
     }),

@@ -20,8 +20,7 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
 ## Next step
 - **Vietnamese UI (2026-11-22):** built on `feat/vietnamese-ui` (ADR 0046, note 25; not merged
   or pushed). English default, Tiếng Việt option next to the theme toggle; typed dictionaries in
-  `web/src/i18n`; API errors carry `code`/`params`. Checked in the real UI (1 spec proposal, 1
-  question on Groq). Found, not fixed: the agent's answer prose and the model-written column
+  `web/src/i18n`; API errors carry `code`/`params`. Checked in the real UI on Groq (4 calls, $0.0027). Found, not fixed: the agent's answer prose and the model-written column
   descriptions stay English for a Vietnamese question.
 - Add files to a dataset: merged to `main` (ADR 0045, note 24). Open minors: ADR 0045 list.
 0. Metric definitions on `main` (ADR 0036, note 16): saved from an answer's SQL, matched by
@@ -50,7 +49,7 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
 - No rows, questions, rulebook, or answers in any commit or image (organiser rules). When the
   challenge ends: delete `train/`, `eval/reports/`, and Docker volumes with eval data.
 
-## Spend so far: about $3.08 (agent runs $2.48, spec proposals $0.57, demos and e2e $0.011).
+## Spend so far: about $3.08 (agent runs $2.48, spec proposals $0.57, demos and e2e $0.014).
 
 ## Watch out
 
