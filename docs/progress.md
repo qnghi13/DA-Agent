@@ -18,8 +18,8 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
   (Groq +55). Then status variants and line-vs-header revenue (~12, checked by hand SQL), debt
   4, budget abstains 8 (SQLite functions, made-up columns). Semantic layer: private folder.
 ## Next step
-- **Vietnamese UI (2026-11-22):** built on `feat/vietnamese-ui` (ADR 0046, note 25; not merged
-  or pushed). English default, Tiếng Việt option next to the theme toggle; typed dictionaries in
+- **Vietnamese UI (2026-11-22):** merged to `main` (ADR 0046, note 25; not
+  pushed). English default, Tiếng Việt option next to the theme toggle; typed dictionaries in
   `web/src/i18n`; API errors carry `code`/`params`. Checked in the real UI on Groq (4 calls, $0.0027). Found, not fixed: the agent's answer prose and the model-written column
   descriptions stay English for a Vietnamese question.
 - Add files to a dataset: merged to `main` (ADR 0045, note 24). Open minors: ADR 0045 list.

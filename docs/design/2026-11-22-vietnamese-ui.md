@@ -1,6 +1,6 @@
 # Vietnamese UI option
 
-**Status:** built on `feat/vietnamese-ui` (2026-11-22), ADR 0046. Size: a medium change, mostly mechanical.
+**Status:** done, merged to `main` (2026-11-22), ADR 0046. Size: a medium change, mostly mechanical.
 
 ## Intent
 
