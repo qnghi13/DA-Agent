@@ -18,6 +18,11 @@ MAX_STEM_CHARS = 100
 class UploadRejectedError(ValueError):
     """The upload cannot be accepted. The message is safe to show to the uploader."""
 
+    def __init__(self, message: str, *, filename: str, allowed: str) -> None:
+        super().__init__(message)
+        self.filename = filename
+        self.allowed = allowed
+
 
 def storage_name(original: str, taken: set[str]) -> str:
     """A safe name for an uploaded file that does not collide with names in taken."""
@@ -26,7 +31,10 @@ def storage_name(original: str, taken: set[str]) -> str:
     suffix = f".{suffix.lower()}" if dot else ""
     if suffix not in ALLOWED_SUFFIXES:
         allowed = ", ".join(sorted(ALLOWED_SUFFIXES))
-        raise UploadRejectedError(f"file type of {last!r} is not supported; use one of {allowed}")
+        raise UploadRejectedError(
+            f"file type of {last!r} is not supported; use one of {allowed}",
+            filename=last, allowed=allowed,
+        )  # fmt: skip
     plain = re.sub(r"[^A-Za-z0-9_-]+", "_", normalize_case_kept(stem)).strip("_-")
     base = (plain or "file")[:MAX_STEM_CHARS]
     name, number = f"{base}{suffix}", 2

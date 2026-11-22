@@ -147,7 +147,11 @@ def test_a_dataset_that_is_not_ready_takes_no_files(client: TestClient, key: str
         files=[("files", ("a.csv", b"a\n1\n"))],
     ).json()["id"]
 
-    assert add(client, key, dataset_id, [("b.csv", b"a\n1\n")]).status_code == 409
+    response = add(client, key, dataset_id, [("b.csv", b"a\n1\n")])
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "dataset.not_ready"
+    assert response.json()["params"]["status"] == "uploaded"
 
 
 def test_a_second_open_version_is_refused_and_leaves_no_folder(
@@ -156,8 +160,10 @@ def test_a_second_open_version_is_refused_and_leaves_no_folder(
     dataset_id = ready_dataset(client, conn, key)
     add(client, key, dataset_id, [("b.csv", b"a\n1\n")])
 
-    assert add(client, key, dataset_id, [("c.csv", b"a\n1\n")]).status_code == 409
+    response = add(client, key, dataset_id, [("c.csv", b"a\n1\n")])
 
+    assert response.status_code == 409
+    assert response.json()["code"] == "version.already_open"
     assert version_folders(settings, dataset_id) == [_upload_dir(conn, dataset_id)]
 
 
@@ -199,6 +205,7 @@ def test_an_open_version_is_refused_before_any_file_is_saved(
     response = add(client, key, dataset_id, [("c.csv", b"a\n1\n")])
 
     assert response.status_code == 409 and saved == []
+    assert response.json()["code"] == "version.already_open"
 
 
 def test_an_upload_during_which_the_data_changed_is_refused(
@@ -247,6 +254,8 @@ def test_the_version_limit_returns_409(
 
     assert response.status_code == 409
     assert "3 versions" in response.json()["detail"]
+    assert response.json()["code"] == "version.limit"
+    assert response.json()["params"] == {"max": 3}
 
 
 def version_folders(settings: ApiSettings, dataset_id: str) -> list[str]:
@@ -339,7 +348,8 @@ def test_another_workspace_gets_404_on_every_route(
     waiting(conn, dataset_id)
     other = create_key(conn, create_workspace(conn, "other"))
 
-    assert add(client, other, dataset_id, [("c.csv", b"a\n1\n")]).status_code == 404
+    refused = add(client, other, dataset_id, [("c.csv", b"a\n1\n")])
+    assert refused.status_code == 404 and refused.json()["code"] == "not_found"
     assert client.get(f"/v1/datasets/{dataset_id}/versions", headers=auth(other)).status_code == 404
     assert approve(client, other, dataset_id).status_code == 404
     discard = client.post(f"/v1/datasets/{dataset_id}/versions/2/discard", headers=auth(other))

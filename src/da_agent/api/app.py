@@ -44,6 +44,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 from da_agent.agent.answer import AgentResult, result_from_json
 from da_agent.agent.verify import evidence_indices
+from da_agent.api.errors import coded, install_error_handler
 from da_agent.api.versions import (
     ApprovalInvalidError,
     checked_choices,
@@ -248,7 +249,7 @@ class ConversationRequest(BaseModel):
 
 
 def _not_found() -> HTTPException:
-    return HTTPException(status_code=404, detail="not found")
+    return coded(404, "not_found", "not found")
 
 
 def _uuid(value: str) -> UUID:
@@ -305,9 +306,22 @@ def _save(upload: UploadFile, path: Path, limit: int) -> int:
         while chunk := upload.file.read(CHUNK_BYTES):
             written += len(chunk)
             if written > limit:
-                raise HTTPException(status_code=413, detail=f"{upload.filename!r} is too large")
+                raise coded(
+                    413, "upload.too_large", f"{upload.filename!r} is too large",
+                    {"file": upload.filename or ""},
+                )  # fmt: skip
             out.write(chunk)
     return written
+
+
+def _rejected(error: UploadRejectedError) -> HTTPException:
+    params = {"file": error.filename, "allowed": error.allowed}
+    return coded(400, "upload.unsupported_type", str(error), params)
+
+
+def _not_ready(status: str) -> HTTPException:
+    detail = f"the dataset is {status}, not ready"
+    return coded(409, "dataset.not_ready", detail, {"status": status})
 
 
 def _settings(request: Request) -> ApiSettings:
@@ -323,10 +337,10 @@ def database(request: Request) -> Iterator[psycopg.Connection]:
 Db = Annotated[psycopg.Connection, Depends(database)]
 
 
-def _too_many(wait: float, detail: str) -> HTTPException:
-    return HTTPException(
-        status_code=429, detail=detail, headers={"Retry-After": str(math.ceil(wait))}
-    )
+def _too_many(
+    wait: float, code: str, detail: str, params: dict[str, str | int | float] | None = None
+) -> HTTPException:
+    return coded(429, code, detail, params, headers={"Retry-After": str(math.ceil(wait))})
 
 
 @dataclass(frozen=True)
@@ -392,7 +406,7 @@ def _not_blocked(request: Request, conn: psycopg.Connection, settings: ApiSettin
         f"authfail:{address}", limit=settings.failed_auth_per_minute, window_seconds=60
     )
     if wait is not None:
-        raise _too_many(wait, "too many failed sign-ins or keys from this address")
+        raise _too_many(wait, "limit.sign_in", "too many failed sign-ins or keys from this address")
 
 
 def principal(request: Request, conn: Db) -> Principal:
@@ -423,7 +437,7 @@ def principal(request: Request, conn: Db) -> Principal:
         bucket = f"session:{session.session_id}"
     wait = RateLimiter(conn).hit(bucket, limit=settings.requests_per_minute, window_seconds=60)
     if wait is not None:
-        raise _too_many(wait, "too many requests for this key or session")
+        raise _too_many(wait, "limit.requests", "too many requests for this key or session")
     return caller
 
 
@@ -453,7 +467,7 @@ def _may_start_job(
         f"jobs:{caller.workspace_id}", limit=settings.jobs_per_minute, window_seconds=60
     )
     if wait is not None:
-        raise _too_many(wait, "too many new jobs for this workspace")
+        raise _too_many(wait, "limit.jobs", "too many new jobs for this workspace")
     if not calls_model:
         return
     limit = daily_budget(conn, caller.workspace_id, settings.daily_budget_usd)
@@ -462,7 +476,10 @@ def _may_start_job(
             dt.datetime.now(dt.UTC).date() + dt.timedelta(days=1), dt.time(), dt.UTC
         )
         wait = (midnight - dt.datetime.now(dt.UTC)).total_seconds()
-        raise _too_many(wait, f"the workspace has spent its daily model budget (${limit:.2f})")
+        raise _too_many(
+            wait, "limit.budget", f"the workspace has spent its daily model budget (${limit:.2f})",
+            {"limit": round(limit, 2)},
+        )  # fmt: skip
 
 
 Caller = Annotated[Member, Depends(identity)]
@@ -588,6 +605,7 @@ def create_app(settings: ApiSettings, metrics: ApiMetrics | None = None) -> Fast
     app = FastAPI(title="DA-Agent", version="0.1.0")
     app.state.settings = settings
     app.include_router(router)
+    install_error_handler(app)
     if metrics is not None:
         # Request counts for the API availability SLO (ADR 0044).
         metrics.install(app)
@@ -606,13 +624,16 @@ def upload_dataset(
     """Upload data files and their documents. Ingestion runs as a job; poll the dataset."""
     _may_start_job(conn, caller, settings)
     if len(files) > settings.max_files:
-        raise HTTPException(status_code=413, detail=f"at most {settings.max_files} files")
+        raise coded(
+            413, "upload.too_many_files", f"at most {settings.max_files} files",
+            {"max": settings.max_files},
+        )  # fmt: skip
     names: list[str] = []
     try:
         for upload in files:
             names.append(storage_name(upload.filename or "", set(names)))
     except UploadRejectedError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        raise _rejected(error) from error
     dataset_id = uuid.uuid4()
     folder = settings.uploads_root / str(dataset_id)
     folder.mkdir(parents=True)
@@ -715,7 +736,7 @@ def add_files(
     if record is None:
         raise _not_found()
     if record.status != "ready":
-        raise HTTPException(status_code=409, detail=f"the dataset is {record.status}, not ready")
+        raise _not_ready(record.status)
     _may_start_job(conn, caller, settings)
     store = DatasetVersionStore(conn)
     try:
@@ -731,7 +752,10 @@ def add_files(
         raise HTTPException(status_code=400, detail=f"not files of the dataset: {names}")
     kept = [f for f in current.files if f.get("stored_as") not in replaced]
     if len(kept) + len(files) > settings.max_files:
-        raise HTTPException(status_code=413, detail=f"at most {settings.max_files} files")
+        raise coded(
+            413, "upload.too_many_files", f"at most {settings.max_files} files",
+            {"max": settings.max_files},
+        )  # fmt: skip
     taken = {str(f.get("stored_as")) for f in kept}
     names: list[str] = []
     try:
@@ -740,20 +764,21 @@ def add_files(
             taken.add(name)
             names.append(name)
     except UploadRejectedError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        raise _rejected(error) from error
     versions = store.list(caller.workspace_id, key)
     # Refused before any byte is saved; `open_version` checks both again under its lock.
     if any(v.status in OPEN_STATUSES for v in versions):
-        raise HTTPException(status_code=409, detail="a version is already open")
+        raise coded(409, "version.already_open", "a version is already open")
     if (
         sum(v.status not in ("failed", "discarded") for v in versions)
         >= settings.max_dataset_versions
     ):
-        raise HTTPException(
-            status_code=409,
-            detail=f"the dataset already has {settings.max_dataset_versions} versions; "
+        raise coded(
+            409, "version.limit",
+            f"the dataset already has {settings.max_dataset_versions} versions; "
             "the limit is reached",
-        )
+            {"max": settings.max_dataset_versions},
+        )  # fmt: skip
     version = max(v.version for v in versions) + 1
     # A random suffix: a folder left by a crashed upload (no version row) never blocks the next
     # one. The row stores the name, so nothing parses it.
@@ -762,7 +787,7 @@ def add_files(
     try:
         folder.mkdir(parents=True)
     except FileExistsError as error:
-        raise HTTPException(status_code=409, detail="a version is already open") from error
+        raise coded(409, "version.already_open", "a version is already open") from error
     try:
         source = settings.uploads_root / current.upload_dir
         for item in kept:
@@ -896,7 +921,7 @@ def create_run(body: RunRequest, conn: Db, caller: Caller, settings: Settings) -
     if record is None:
         raise _not_found()
     if record.status != "ready":
-        raise HTTPException(status_code=409, detail=f"the dataset is {record.status}, not ready")
+        raise _not_ready(record.status)
     conversation = None
     if body.conversation_id is not None:
         found = ConversationStore(conn).get(caller.workspace_id, _uuid(body.conversation_id))
@@ -1285,7 +1310,7 @@ def create_export(
         raise _not_found()
     dataset_id = _uuid(str(job.payload.get("dataset_id", "")))
     if dataset_changed_since_run(conn, caller.workspace_id, job.id, dataset_id):
-        raise HTTPException(status_code=409, detail=CHANGED_DATASET)
+        raise coded(409, "dataset.changed", CHANGED_DATASET)
     # An export runs a stored query in the sandbox and calls no model.
     _may_start_job(conn, caller, settings, calls_model=False)
     payload = {"run_id": str(job.id), "query_index": index, "dataset_id": str(dataset_id)}
@@ -1325,13 +1350,13 @@ def download_export(
         raise HTTPException(status_code=409, detail=f"the export is {job.status}")
     path = export_file(settings.exports_dir, job.id)
     if is_expired(path, now=time.time()):
-        raise HTTPException(status_code=404, detail=EXPIRED_EXPORT)
+        raise coded(404, "export.expired", EXPIRED_EXPORT)
     # Open before answering: the worker may purge the file at any moment, and an open file
     # still reads in full after it is deleted.
     try:
         file = path.open("rb")
     except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=EXPIRED_EXPORT) from None
+        raise coded(404, "export.expired", EXPIRED_EXPORT) from None
     log(conn, caller, "export.download", str(job.id))
     filename = str(job.result.get("filename") or f"{job.id}.csv")
     return StreamingResponse(
@@ -1373,7 +1398,7 @@ def create_query(
     if record is None:
         raise _not_found()
     if record.status != "ready":
-        raise HTTPException(status_code=409, detail="the dataset is not ready")
+        raise _not_ready(record.status)
     # A query runs in the sandbox and calls no model.
     _may_start_job(conn, caller, settings, calls_model=False)
     payload = {"run_id": str(job.id), "dataset_id": str(dataset_id), "sql": sql}
@@ -1417,7 +1442,7 @@ def create_query_export(
         raise HTTPException(status_code=409, detail=f"the query is {job.status}")
     dataset_id = _uuid(str(job.payload.get("dataset_id", "")))
     if dataset_changed_since_run(conn, caller.workspace_id, job.id, dataset_id):
-        raise HTTPException(status_code=409, detail=CHANGED_DATASET)
+        raise coded(409, "dataset.changed", CHANGED_DATASET)
     _may_start_job(conn, caller, settings, calls_model=False)
     payload = {"query_id": str(job.id), "dataset_id": str(dataset_id)}
     with conn.transaction():

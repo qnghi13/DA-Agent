@@ -180,6 +180,7 @@ def test_a_key_over_its_request_rate_is_told_to_wait(
     assert codes == [200] * 5 + [429]
     refused = client.get("/v1/datasets", headers=auth(key))
     assert int(refused.headers["retry-after"]) > 0
+    assert refused.json()["code"] == "limit.requests"
     assert client.get("/v1/datasets", headers=auth(other)).status_code == 200
 
 
@@ -195,6 +196,11 @@ def test_new_jobs_have_their_own_lower_rate_per_workspace(
         ).status_code
 
     assert [send() for _ in range(3)] == [202, 202, 429]
+    refused = client.post(
+        "/v1/datasets", headers=auth(key), data={"name": "x"},
+        files=[("files", ("a.csv", b"a\n1\n"))],
+    )  # fmt: skip
+    assert refused.json()["code"] == "limit.jobs"
 
 
 @pytest.mark.security
@@ -208,7 +214,9 @@ def test_repeated_wrong_keys_from_one_address_are_slowed(
 
     assert codes == [401, 401, 401, 429]
     # Guessing stays blocked for the window, even with a valid key from the same address.
-    assert client.get("/v1/datasets", headers=auth(key)).status_code == 429
+    blocked = client.get("/v1/datasets", headers=auth(key))
+    assert blocked.status_code == 429
+    assert blocked.json()["code"] == "limit.sign_in"
 
 
 def test_a_workspace_over_its_daily_budget_cannot_start_jobs(
@@ -223,6 +231,8 @@ def test_a_workspace_over_its_daily_budget_cannot_start_jobs(
 
     assert response.status_code == 429
     assert "budget" in response.json()["detail"]
+    assert response.json()["code"] == "limit.budget"
+    assert isinstance(response.json()["params"]["limit"], float | int)
     assert client.get("/v1/datasets", headers=auth(key)).status_code == 200
 
 

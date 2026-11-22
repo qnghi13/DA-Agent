@@ -157,12 +157,12 @@ def test_upload_names_cannot_leave_the_upload_directory(
 
 
 @pytest.mark.parametrize(
-    ("files", "status"),
+    ("files", "status", "code"),
     [
-        ([("run.sh", b"rm -rf /")], 400),
-        ([("big.csv", b"x" * 1001)], 413),
-        ([(f"f{i}.csv", b"a\n") for i in range(4)], 413),
-        ([], 422),
+        ([("run.sh", b"rm -rf /")], 400, "upload.unsupported_type"),
+        ([("big.csv", b"x" * 1001)], 413, "upload.too_large"),
+        ([(f"f{i}.csv", b"a\n") for i in range(4)], 413, "upload.too_many_files"),
+        ([], 422, None),
     ],
 )
 def test_bad_uploads_are_refused_and_leave_nothing_behind(
@@ -172,6 +172,7 @@ def test_bad_uploads_are_refused_and_leave_nothing_behind(
     settings: ApiSettings,
     files: list[tuple[str, bytes]],
     status: int,
+    code: str | None,
 ) -> None:
     sent = files or None
     response = (
@@ -181,6 +182,7 @@ def test_bad_uploads_are_refused_and_leave_nothing_behind(
     )
 
     assert response.status_code == status
+    assert response.json().get("code") == code
     assert not settings.uploads_root.exists() or not any(settings.uploads_root.iterdir())
     assert conn.execute("SELECT count(*) FROM datasets").fetchone() == (0,)
 
