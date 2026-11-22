@@ -57,7 +57,7 @@ function SaveMetricForm({ api, choice, onClose }: { api: Api; choice: MetricChoi
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    const read = readMetricName(name, aliases);
+    const read = readMetricName(name, aliases, m);
     if ("error" in read) {
       setError(read.error);
       return;
@@ -88,7 +88,7 @@ function SaveMetricForm({ api, choice, onClose }: { api: Api; choice: MetricChoi
           New questions that use this name are calculated this way, for everyone in the workspace.
         </DialogDescription>
       </DialogHeader>
-      <p className="bg-muted rounded-lg px-3 py-2 text-sm leading-relaxed">{metricSentence(choice.facts)}</p>
+      <p className="bg-muted rounded-lg px-3 py-2 text-sm leading-relaxed">{metricSentence(choice.facts, m)}</p>
       {saved ? (
         <p role="status" className="flex items-center gap-2 text-sm">
           <Check className="text-success size-4" aria-hidden />

@@ -1,17 +1,23 @@
 // Feedback on answers (docs/adr/0043): a thumbs-up or -down, and on a thumbs-down, why.
 
+import type { Messages } from "./i18n/en";
+
 export type Rating = "up" | "down";
 
 /** The reasons the API accepts, in the order shown. */
-export const FEEDBACK_REASONS = [
-  { value: "wrong_number", label: "Wrong number" },
-  { value: "misunderstood", label: "Answered a different question" },
-  { value: "should_abstain", label: "Should have said it can't tell" },
-  { value: "unclear", label: "Hard to understand" },
-  { value: "other", label: "Something else" },
+const FEEDBACK_REASON_VALUES = [
+  "wrong_number",
+  "misunderstood",
+  "should_abstain",
+  "unclear",
+  "other",
 ] as const;
 
-export type FeedbackReason = (typeof FEEDBACK_REASONS)[number]["value"];
+export type FeedbackReason = (typeof FEEDBACK_REASON_VALUES)[number];
+
+export function feedbackReasons(m: Messages): { value: FeedbackReason; label: string }[] {
+  return FEEDBACK_REASON_VALUES.map((value) => ({ value, label: m.feedback.reasons[value] }));
+}
 
 export interface RunFeedback {
   rating: Rating;

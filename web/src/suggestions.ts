@@ -1,14 +1,14 @@
 import type { ColumnProfile, ColumnSpec, Dataset, TableSpec } from "./api";
+import type { Messages } from "./i18n/en";
 
 /** Questions to start from, built from the dataset's own columns
  * (docs/design/2026-11-15-suggested-questions.md). Code, not a model: every question names a
  * column that exists, and sensitive columns are never named. */
 
-export const GENERIC_QUESTIONS = [
-  "What are the totals by month?",
-  "Which items appear most often?",
-  "What date range does the data cover?",
-];
+/** Questions for any dataset, when none of its columns fits a better one. */
+export function genericQuestions(m: Messages): string[] {
+  return [...m.suggestions.generic];
+}
 
 const MAX_QUESTIONS = 5;
 // A text column with this many different values or fewer reads as a status or a channel.
@@ -69,19 +69,21 @@ function mainTable(dataset: Dataset): TableSpec | undefined {
   return [...tables].sort((a, b) => score(b) - score(a) || rows(b) - rows(a))[0];
 }
 
-export function suggestQuestions(dataset: Dataset): string[] {
+/** In the UI language, so clicking one asks in it and the agent answers in it. */
+export function suggestQuestions(dataset: Dataset, m: Messages): string[] {
+  const words = m.suggestions;
   const table = mainTable(dataset);
-  if (!table) return GENERIC_QUESTIONS;
+  if (!table) return genericQuestions(m);
   const profiles = dataset.summary?.tables?.find((s) => s.name === table.name)?.profile;
   const { date, amount, category, status } = roles(table, profiles);
   const questions: (string | false | undefined)[] = [
-    date && amount && `What is the total ${amount.source} by month?`,
-    !date && amount && `What is the total ${amount.source}?`,
-    category && amount && `Top 5 ${category.source} by total ${amount.source}`,
-    status && `How many records are there for each ${status.source}?`,
-    date && amount && `Which month had the highest total ${amount.source}?`,
-    date && `What date range does ${date.source} cover?`,
+    date && amount && words.totalByMonth(amount.source),
+    !date && amount && words.total(amount.source),
+    category && amount && words.top5(category.source, amount.source),
+    status && words.countByStatus(status.source),
+    date && amount && words.bestMonth(amount.source),
+    date && words.dateRange(date.source),
   ];
   const found = questions.filter((q): q is string => Boolean(q)).slice(0, MAX_QUESTIONS);
-  return found.length ? found : GENERIC_QUESTIONS;
+  return found.length ? found : genericQuestions(m);
 }

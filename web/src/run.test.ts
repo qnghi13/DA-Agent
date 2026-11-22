@@ -6,7 +6,10 @@ import {
   initialTrail,
   reduceTrail,
   toolLabel,
+  stopReasonText,
 } from "./run";
+import { en } from "./i18n/en";
+import { vi } from "./i18n/vi";
 
 const sse = (id: string | undefined, event: string, data: unknown) => ({
   id,
@@ -58,7 +61,6 @@ describe("reduceTrail", () => {
 });
 
 describe("formatAnswer", () => {
-  const en = "en-US";
   it("groups numbers and marks percents", () => {
     expect(formatAnswer({ kind: "number", value: 1500000 }, en)).toEqual({ text: "1,500,000" });
     expect(formatAnswer({ kind: "number", value: 12.3456 }, en)).toEqual({ text: "12.35" });
@@ -87,8 +89,8 @@ describe("formatAnswer", () => {
 
 describe("toolLabel", () => {
   it("names tools in plain words and falls back to the raw name", () => {
-    expect(toolLabel("run_sql")).toBe("Queried the data");
-    expect(toolLabel("something_new")).toBe("something_new");
+    expect(toolLabel("run_sql", en)).toBe("Queried the data");
+    expect(toolLabel("something_new", en)).toBe("something_new");
   });
 });
 
@@ -104,37 +106,57 @@ describe("answerSummary", () => {
   });
 
   it("says verified only when the graph answered, and counts the queries", () => {
-    expect(answerSummary("succeeded", result("answered", 3))).toEqual({
+    expect(answerSummary("succeeded", result("answered", 3), en)).toEqual({
       label: "Verified",
       tone: "success",
       detail: "3 queries",
     });
-    expect(answerSummary("succeeded", result("answered", 1)).detail).toBe("1 query");
+    expect(answerSummary("succeeded", result("answered", 1), en).detail).toBe("1 query");
   });
 
   it("marks clarifications, abstentions, and failed jobs", () => {
-    expect(answerSummary("succeeded", result("needs_clarification")).label).toBe("Needs detail");
-    expect(answerSummary("succeeded", result("unverified", 2))).toEqual({
+    expect(answerSummary("succeeded", result("needs_clarification"), en).label).toBe("Needs detail");
+    expect(answerSummary("succeeded", result("unverified", 2), en)).toEqual({
       label: "No answer",
       tone: "warning",
       detail: "2 queries",
     });
-    expect(answerSummary("failed", null)).toEqual({ label: "Failed", tone: "danger", detail: null });
+    expect(answerSummary("failed", null, en)).toEqual({ label: "Failed", tone: "danger", detail: null });
   });
 });
 
 describe("activity", () => {
   it("names what the agent is doing from the latest step", () => {
     const start = initialTrail();
-    expect(activity(start)).toBe("Planning");
+    expect(activity(start, en)).toBe("Planning");
     const planned = reduceTrail(start, sse("1", "plan", { steps: ["a"] }));
-    expect(activity(planned)).toBe("Reading the data");
+    expect(activity(planned, en)).toBe("Reading the data");
     const queried = reduceTrail(
       reduceTrail(planned, sse("2", "tool", { tool: "run_sql", ok: true })),
       sse("3", "tool", { tool: "run_sql", ok: true }),
     );
-    expect(activity(queried)).toBe("Querying the data · 2 queries");
+    expect(activity(queried, en)).toBe("Querying the data · 2 queries");
     const checked = reduceTrail(queried, sse("4", "verify", { passed: false, problems: [] }));
-    expect(activity(checked)).toBe("Checking the answer");
+    expect(activity(checked, en)).toBe("Checking the answer");
+  });
+});
+
+describe("in Vietnamese", () => {
+  it("describes the same step in each language", () => {
+    let trail = initialTrail();
+    trail = reduceTrail(trail, sse("1", "tool", { tool: "run_sql", args: {} }));
+    expect(activity(trail, vi)).not.toBe(activity(trail, en));
+    expect(activity(initialTrail(), vi)).not.toBe(activity(initialTrail(), en));
+  });
+
+  it("explains why a run stopped", () => {
+    expect(stopReasonText("cancelled", vi)).toBe(vi.run.stopReasons.cancelled);
+    expect(stopReasonText("cancelled", vi)).not.toBe(stopReasonText("cancelled", en));
+    expect(stopReasonText("something_new", vi)).toBe("something_new");
+  });
+
+  it("formats numbers the Vietnamese way", () => {
+    expect(formatAnswer({ kind: "number", value: 1234.5 }, vi)).toEqual({ text: "1.234,5" });
+    expect(formatAnswer({ kind: "boolean", value: true }, vi)).toEqual({ text: "Có" });
   });
 });

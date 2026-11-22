@@ -2,6 +2,7 @@
 // Event shapes come from node_events in src/da_agent/agent/graph.py.
 
 import type { RunResult, RunStatus } from "./api";
+import type { Messages } from "./i18n/en";
 import type { SseEvent } from "./sse";
 import type { Tone } from "./status";
 
@@ -94,15 +95,13 @@ function strings(value: unknown): string[] {
 }
 
 /** What a running agent is doing now, in a few words, from its latest step. */
-export function activity(trail: Trail): string {
+export function activity(trail: Trail, m: Messages): string {
   const last = trail.steps.at(-1);
-  if (!last) return "Planning";
-  if (last.kind === "verify") return "Checking the answer";
+  if (!last) return m.run.planning;
+  if (last.kind === "verify") return m.run.checking;
   const queries = trail.steps.filter((step) => step.kind === "tool" && step.tool === "run_sql");
-  if (last.kind === "tool" && queries.length > 0) {
-    return `Querying the data · ${plural(queries.length, "query", "queries")}`;
-  }
-  return "Reading the data";
+  if (last.kind === "tool" && queries.length > 0) return m.run.querying(queries.length);
+  return m.run.reading;
 }
 
 /**
@@ -112,51 +111,25 @@ export function activity(trail: Trail): string {
 export function answerSummary(
   status: RunStatus,
   result: RunResult | null,
+  m: Messages,
 ): { label: string; tone: Tone; detail: string | null } {
+  const words = m.run;
   if (status === "cancelled") {
-    const detail = result?.queries.length
-      ? plural(result.queries.length, "query", "queries")
-      : null;
-    return { label: "Stopped", tone: "neutral", detail };
+    const detail = result?.queries.length ? words.queries(result.queries.length) : null;
+    return { label: words.stopped, tone: "neutral", detail };
   }
-  if (status === "failed" || !result) return { label: "Failed", tone: "danger", detail: null };
-  const detail = result.queries.length
-    ? plural(result.queries.length, "query", "queries")
-    : null;
-  if (result.stop_reason === "answered") return { label: "Verified", tone: "success", detail };
+  if (status === "failed" || !result) return { label: words.failed, tone: "danger", detail: null };
+  const detail = result.queries.length ? words.queries(result.queries.length) : null;
+  if (result.stop_reason === "answered") return { label: words.verified, tone: "success", detail };
   if (result.stop_reason === "needs_clarification") {
-    return { label: "Needs detail", tone: "warning", detail };
+    return { label: words.needsDetail, tone: "warning", detail };
   }
-  return { label: "No answer", tone: "warning", detail };
+  return { label: words.noAnswer, tone: "warning", detail };
 }
 
-function plural(count: number, one: string, many: string): string {
-  return `${count} ${count === 1 ? one : many}`;
+export function toolLabel(tool: string, m: Messages): string {
+  return m.run.tools[tool] ?? tool;
 }
-
-const TOOL_LABELS: Record<string, string> = {
-  describe_dataset: "Read the table descriptions",
-  run_sql: "Queried the data",
-  make_chart: "Drew a chart",
-  search_rules: "Looked up the business rules",
-  submit_answer: "Proposed an answer",
-};
-
-export function toolLabel(tool: string): string {
-  return TOOL_LABELS[tool] ?? tool;
-}
-
-const STOP_REASONS: Record<string, string> = {
-  answered: "Answered",
-  needs_clarification: "The agent needs more detail to answer.",
-  iteration_limit: "Stopped after too many steps without an answer.",
-  budget_exceeded: "Stopped: this question reached its spending limit.",
-  llm_error: "The language model could not be reached.",
-  invalid_tool_call: "The model kept making invalid tool calls.",
-  no_tool_call: "The model stopped without answering.",
-  cancelled: "You stopped this question.",
-  deadline_exceeded: "Stopped: this question ran out of time.",
-};
 
 /** Whether a run may still change: the UI follows it and offers to stop it. */
 export function isRunActive(status: RunStatus): boolean {
@@ -182,8 +155,8 @@ export function canActOnQueries(status: RunStatus): boolean {
   return status === "succeeded";
 }
 
-export function stopReasonText(reason: string | undefined): string | undefined {
-  return reason ? (STOP_REASONS[reason] ?? reason) : undefined;
+export function stopReasonText(reason: string | undefined, m: Messages): string | undefined {
+  return reason ? (m.run.stopReasons[reason] ?? reason) : undefined;
 }
 
 export interface Answer {
@@ -197,33 +170,33 @@ export type FormattedAnswer =
   | { list: string[] }
   | { table: { columns: string[]; rows: string[][] } };
 
-function formatScalar(value: unknown, locale?: string): string {
+function formatScalar(value: unknown, m: Messages): string {
   if (typeof value === "number") {
-    return value.toLocaleString(locale, { maximumFractionDigits: 2 });
+    return value.toLocaleString(m.locale, { maximumFractionDigits: 2 });
   }
-  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "boolean") return value ? m.run.yes : m.run.no;
   if (value === null || value === undefined) return "";
   return String(value);
 }
 
-export function formatAnswer(answer: Answer, locale?: string): FormattedAnswer {
+export function formatAnswer(answer: Answer, m: Messages): FormattedAnswer {
   switch (answer.kind) {
     case "unanswerable":
-      return { text: "No answer" };
+      return { text: m.run.noAnswer };
     case "percent":
-      return { text: `${formatScalar(answer.value, locale)}%` };
+      return { text: `${formatScalar(answer.value, m)}%` };
     case "list":
-      return { list: Array.isArray(answer.value) ? answer.value.map((v) => formatScalar(v, locale)) : [] };
+      return { list: Array.isArray(answer.value) ? answer.value.map((v) => formatScalar(v, m)) : [] };
     case "table": {
       const table = answer.value as { columns?: string[]; rows?: unknown[][] } | undefined;
       return {
         table: {
           columns: table?.columns ?? [],
-          rows: (table?.rows ?? []).map((row) => row.map((cell) => formatScalar(cell, locale))),
+          rows: (table?.rows ?? []).map((row) => row.map((cell) => formatScalar(cell, m))),
         },
       };
     }
     default:
-      return { text: formatScalar(answer.value, locale) };
+      return { text: formatScalar(answer.value, m) };
   }
 }

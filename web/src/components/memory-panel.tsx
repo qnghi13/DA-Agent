@@ -327,13 +327,14 @@ function DefinitionCard({
   onRename: (name: string, aliases: string[]) => Promise<boolean>;
   onDelete: () => Promise<boolean>;
 }) {
+  const m = useT();
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(entry.name ?? "");
   const [aliases, setAliases] = useState((entry.aliases ?? []).join(", "));
   const [error, setError] = useState<string | null>(null);
 
   async function save() {
-    const read = readMetricName(name, aliases);
+    const read = readMetricName(name, aliases, m);
     if ("error" in read) {
       setError(read.error);
       return;
@@ -436,6 +437,7 @@ function NoteCard({
 }
 
 function MetricBody({ entry }: { entry: MemoryEntry }) {
+  const m = useT();
   return (
     <div className="flex flex-col gap-1">
       <p className="text-sm font-medium">
@@ -444,7 +446,7 @@ function MetricBody({ entry }: { entry: MemoryEntry }) {
           <span className="text-muted-foreground font-normal"> · also {entry.aliases.join(", ")}</span>
         )}
       </p>
-      <p className="text-sm leading-relaxed">{entry.facts ? metricSentence(entry.facts) : entry.text}</p>
+      <p className="text-sm leading-relaxed">{entry.facts ? metricSentence(entry.facts, m) : entry.text}</p>
       {entry.stale && entry.superseded_by === null && (
         <p className="text-warning flex items-start gap-1.5 text-xs">
           <AlertTriangle className="mt-px size-3.5 shrink-0" aria-hidden />

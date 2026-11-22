@@ -1,174 +1,143 @@
 import type { Explanation, ExprFact, FilterFact } from "./api";
+import type { Messages } from "./i18n/en";
 
 /** Sentences for "How it was calculated" (docs/design/2026-11-15-plain-explanation.md). The API
- * returns facts read from the SQL; this file is the only place that words them, so translating
- * the UI changes only this file. */
+ * returns facts read from the SQL; this file puts them together, and the words and their order
+ * come from the UI language's dictionary (web/src/i18n). */
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function numberFormat(m: Messages): Intl.NumberFormat {
+  return new Intl.NumberFormat(m.locale, { maximumFractionDigits: 6 });
+}
 
-const UNITS: Record<string, string> = {
-  day: "day",
-  month: "month",
-  year: "year",
-  quarter: "quarter",
-  hour: "hour of day",
-  weekday: "day of week",
-  month_of_year: "month of year",
-};
-
-const AGGREGATES: Record<string, string> = {
-  sum: "total of",
-  avg: "average",
-  min: "lowest",
-  max: "highest",
-  median: "median",
-};
-
-const OPERATORS: Record<string, string> = { add: "+", subtract: "−", multiply: "×", divide: "÷" };
-
-const COMPARISONS: Record<string, string> = {
-  equals: "is",
-  not_equals: "is not",
-  greater: "is greater than",
-  at_least: "is at least",
-  less: "is less than",
-  at_most: "is at most",
-  starts_with: "starts with",
-  ends_with: "ends with",
-  contains: "contains",
-};
-
-const MATCHES: Record<string, string> = {
-  ignore_case: " (ignoring case)",
-  ignore_accents: " (ignoring accents)",
-  ignore_case_and_accents: " (ignoring case and accents)",
-};
-
-const number = new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 });
-
-function date(iso: string): string {
+function date(iso: string, m: Messages): string {
   const [year, month, day] = iso.split("-").map(Number);
-  return `${day} ${MONTHS[month - 1]} ${year}`;
+  return m.explain.date(day, month, year);
 }
 
 function isExpr(value: unknown): value is ExprFact {
   return typeof value === "object" && value !== null && "kind" in value;
 }
 
-function value(item: unknown): string {
-  if (isExpr(item)) return describeExpr(item);
-  if (typeof item === "number") return number.format(item);
+function value(item: unknown, m: Messages): string {
+  if (isExpr(item)) return describeExpr(item, m);
+  if (typeof item === "number") return numberFormat(m).format(item);
   if (typeof item === "string") return `“${item}”`;
   return String(item);
 }
 
 /** Values joined with "or": “a” or “b” or “c”. */
-function either(values: unknown[]): string {
-  return values.map(value).join(" or ");
+function either(values: unknown[], m: Messages): string {
+  return values.map((item) => value(item, m)).join(m.explain.or);
 }
 
-export function describeExpr(fact: ExprFact): string {
+const OPERATORS: Record<string, string> = { add: "+", subtract: "−", multiply: "×", divide: "÷" };
+
+export function describeExpr(fact: ExprFact, m: Messages): string {
+  const words = m.explain;
   switch (fact.kind) {
     case "column":
-      return fact.unit ? `${fact.column} (${UNITS[fact.unit] ?? fact.unit})` : (fact.column ?? "");
+      return fact.unit ? `${fact.column} (${words.units[fact.unit] ?? fact.unit})` : (fact.column ?? "");
     case "number":
-      return number.format(fact.value ?? 0);
+      return numberFormat(m).format(fact.value ?? 0);
     case "all":
-      return "all columns";
+      return words.allColumns;
     case "arithmetic": {
       const side = (part?: ExprFact) =>
-        part ? (part.kind === "arithmetic" ? `(${describeExpr(part)})` : describeExpr(part)) : "";
+        part ? (part.kind === "arithmetic" ? `(${describeExpr(part, m)})` : describeExpr(part, m)) : "";
       return `${side(fact.left)} ${OPERATORS[fact.op ?? ""] ?? fact.op} ${side(fact.right)}`;
     }
     case "aggregate": {
-      const inner = fact.of ? describeExpr(fact.of) : null;
+      const inner = fact.of ? describeExpr(fact.of, m) : null;
       const of = inner && fact.of?.kind === "arithmetic" ? `(${inner})` : inner;
-      let text: string;
-      if (fact.func === "count") {
-        text = of ? `number of ${fact.distinct ? "different " : ""}${of}` : "number of rows";
-      } else {
-        text = `${AGGREGATES[fact.func ?? ""] ?? fact.func} ${fact.distinct ? "different " : ""}${of ?? "rows"}`;
-      }
+      const distinct = Boolean(fact.distinct);
+      const text =
+        fact.func === "count"
+          ? words.count(of, distinct)
+          : words.aggregate(fact.func ?? "", of ?? words.rows, distinct);
       const condition = fact.condition ?? [];
-      return condition.length ? `${text} where ${condition.map(describeFilter).join(" and ")}` : text;
+      if (!condition.length) return text;
+      return words.where(text, condition.map((item) => describeFilter(item, m)).join(words.and));
     }
   }
 }
 
-export function describeFilter(fact: FilterFact): string {
-  const subject = describeExpr(fact.of);
-  const match = MATCHES[fact.match] ?? "";
+export function describeFilter(fact: FilterFact, m: Messages): string {
+  const words = m.explain;
+  const subject = describeExpr(fact.of, m);
+  const match = words.matches[fact.match] ?? "";
   const [first, second] = fact.values;
   switch (fact.op) {
     case "period":
-      if (first && second) return `${subject} from ${date(String(first))} to ${date(String(second))}`;
-      if (first) return `${subject} on or after ${date(String(first))}`;
-      return `${subject} on or before ${date(String(second))}`;
+      if (first && second) return words.period(subject, date(String(first), m), date(String(second), m));
+      if (first) return words.onOrAfter(subject, date(String(first), m));
+      return words.onOrBefore(subject, date(String(second), m));
     case "in":
-      return `${subject} is ${either(fact.values)}${match}`;
+      return `${words.is(subject, either(fact.values, m))}${match}`;
     case "not_in":
-      return `${subject} is not ${either(fact.values)}${match}`;
+      return `${words.isNot(subject, either(fact.values, m))}${match}`;
     case "between":
-      return `${subject} is between ${value(first)} and ${value(second)}`;
+      return words.between(subject, value(first, m), value(second, m));
     case "is_blank":
-      return `${subject} is empty`;
+      return words.empty(subject);
     case "is_not_blank":
-      return `${subject} is not empty`;
+      return words.notEmpty(subject);
     case "is_true":
-      return `${subject} is yes`;
+      return words.isYes(subject);
     case "is_false":
-      return `${subject} is no`;
+      return words.isNo(subject);
     default:
-      return `${subject} ${COMPARISONS[fact.op] ?? fact.op} ${either(fact.values)}${match}`;
+      return `${subject} ${words.comparisons[fact.op] ?? fact.op} ${either(fact.values, m)}${match}`;
   }
 }
 
-function source(explanation: Explanation): string {
+function source(explanation: Explanation, m: Messages): string {
+  const words = m.explain;
   const joins = explanation.joins.map((join) => {
-    const on = join.on.map((pair) => pair.join(" = ")).join(" and ");
-    const kept = join.kind === "left" ? " (rows without a match kept)" : "";
-    return `matched with ${join.table}${on ? ` on ${on}` : ""}${kept}`;
+    const on = join.on.map((pair) => pair.join(" = ")).join(words.and);
+    const kept = join.kind === "left" ? words.keptUnmatched : "";
+    return `${words.matchedWith(join.table, on)}${kept}`;
   });
   return [explanation.tables.join(", "), ...joins].filter(Boolean).join(", ");
 }
 
-function shown(explanation: Explanation): string | null {
+function shown(explanation: Explanation, m: Messages): string | null {
   const { order, limit } = explanation;
-  const by = order.map((item) => describeExpr(item.by)).join(", ");
-  if (order.length && limit !== null) {
-    return `${order[0].descending ? "top" : "bottom"} ${limit} by ${by}`;
-  }
-  if (order.length) return `sorted by ${by}, ${order[0].descending ? "highest" : "lowest"} first`;
-  if (limit !== null) return `the first ${limit} rows`;
+  const by = order.map((item) => describeExpr(item.by, m)).join(", ");
+  if (order.length && limit !== null) return m.explain.top(order[0].descending, limit, by);
+  if (order.length) return m.explain.sorted(by, order[0].descending);
+  if (limit !== null) return m.explain.firstRows(limit);
   return null;
 }
 
 /** One labelled line per part of the query, in the order a person would read them. */
-export function explanationLines(explanation: Explanation): { label: string; text: string }[] {
+export function explanationLines(explanation: Explanation, m: Messages): { label: string; text: string }[] {
+  const labels = m.explain.labels;
   const lines: { label: string; text: string }[] = [];
   const add = (label: string, text: string | null) => {
     if (text) lines.push({ label, text });
   };
-  add("Data", source(explanation));
-  add("Calculated", explanation.measures.map(describeExpr).join("; "));
+  const expr = (item: ExprFact) => describeExpr(item, m);
+  const filter = (item: FilterFact) => describeFilter(item, m);
+  add(labels.data, source(explanation, m));
+  add(labels.calculated, explanation.measures.map(expr).join("; "));
   if (explanation.groups.length === 0) {
-    const columns = explanation.shown.map(describeExpr).join(", ");
-    add("Shows", columns && explanation.distinct_rows ? `${columns}, each combination once` : columns);
+    const columns = explanation.shown.map(expr).join(", ");
+    add(labels.shows, columns && explanation.distinct_rows ? m.explain.eachCombinationOnce(columns) : columns);
   }
-  add("Only rows where", explanation.filters.map(describeFilter).join("; "));
-  add("Grouped by", explanation.groups.map(describeExpr).join(", "));
-  add("Only groups where", explanation.having.map(describeFilter).join("; "));
-  add("Shown", shown(explanation));
+  add(labels.rowsWhere, explanation.filters.map(filter).join("; "));
+  add(labels.groupedBy, explanation.groups.map(expr).join(", "));
+  add(labels.groupsWhere, explanation.having.map(filter).join("; "));
+  add(labels.shown, shown(explanation, m));
   return lines;
 }
 
 /** The queries an answer ran, without repeats: a model sometimes runs the same query again to
  * check it, and two copies of one calculation only add noise. Queries count as the same when
  * they read the same in plain words; the first one is kept. */
-export function uniqueExplanations(explanations: Explanation[]): Explanation[] {
+export function uniqueExplanations(explanations: Explanation[], m: Messages): Explanation[] {
   const seen = new Set<string>();
   return explanations.filter((explanation) => {
-    const key = JSON.stringify([explanation.complete, explanationLines(explanation)]);
+    const key = JSON.stringify([explanation.complete, explanationLines(explanation, m)]);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

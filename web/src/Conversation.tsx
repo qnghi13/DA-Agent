@@ -545,7 +545,8 @@ function DesktopPanel({
 }
 
 function EmptyState({ dataset, onExample }: { dataset: Dataset; onExample: (text: string) => void }) {
-  const questions = useMemo(() => suggestQuestions(dataset), [dataset]);
+  const m = useT();
+  const questions = useMemo(() => suggestQuestions(dataset, m), [dataset, m]);
   return (
     <div className="flex flex-col items-center gap-6 py-16 text-center">
       <div className="flex flex-col gap-2">

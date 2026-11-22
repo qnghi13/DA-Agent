@@ -123,7 +123,7 @@ export function DatasetView({
     );
   }
 
-  const status = datasetStatus(dataset.status);
+  const status = datasetStatus(dataset.status, m);
   return (
     <SetupPage
       step={2}

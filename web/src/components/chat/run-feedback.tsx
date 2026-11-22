@@ -6,7 +6,7 @@ import { useT } from "@/i18n/context";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  FEEDBACK_REASONS,
+  feedbackReasons,
   type FeedbackReason,
   type Rating,
   type RunFeedback,
@@ -135,7 +135,7 @@ export function RunFeedbackControl({ api, run }: { api: Api; run: Run }) {
         <div className="bg-card flex basis-full flex-col gap-3 rounded-xl border p-3">
           <p className="text-sm font-medium">What was wrong? (optional)</p>
           <div className="flex flex-wrap gap-2" role="group" aria-label="Reasons">
-            {FEEDBACK_REASONS.map((reason) => (
+            {feedbackReasons(m).map((reason) => (
               <Button
                 key={reason.value}
                 type="button"

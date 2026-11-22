@@ -2,6 +2,7 @@ import { ChevronRight, FileText } from "lucide-react";
 import type { ColumnProfile, Dataset } from "@/api";
 import { columnDetail, share } from "@/profile";
 import { cn } from "@/lib/utils";
+import { useT } from "@/i18n/context";
 
 /** Files, tables, and the build's notes for one dataset; the approved spec when it has one. */
 export function DatasetSummary({ dataset, showSpec = true }: { dataset: Dataset; showSpec?: boolean }) {
@@ -83,6 +84,7 @@ export function DatasetSummary({ dataset, showSpec = true }: { dataset: Dataset;
 
 /** The data overview of one table: each column's type, how full it is, and what it holds. */
 function Columns({ columns, rows }: { columns: ColumnProfile[]; rows: number }) {
+  const m = useT();
   return (
     <details className="group mt-2">
       <summary className="text-muted-foreground hover:text-foreground flex cursor-pointer list-none items-center gap-1 text-xs">
@@ -92,7 +94,7 @@ function Columns({ columns, rows }: { columns: ColumnProfile[]; rows: number }) 
       <ul className="mt-2 divide-y border-t">
         {columns.map((column) => {
           const failed = column.filled - column.parsed;
-          const detail = columnDetail(column);
+          const detail = columnDetail(column, m);
           return (
             <li key={column.name} className="flex flex-col gap-0.5 py-2">
               <div className="flex items-baseline justify-between gap-3">
@@ -101,7 +103,7 @@ function Columns({ columns, rows }: { columns: ColumnProfile[]; rows: number }) 
                   <span className="text-muted-foreground text-xs">{column.type}</span>
                 </span>
                 <span className="text-muted-foreground shrink-0 font-mono text-xs tabular-nums">
-                  {share(column.filled, rows)} filled
+                  {share(column.filled, rows, m)} filled
                   {column.distinct !== null && ` · ${column.distinct.toLocaleString()} distinct`}
                 </span>
               </div>

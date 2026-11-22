@@ -15,6 +15,7 @@ import { lazy, Suspense, useEffect, useReducer, useRef, useState } from "react";
 import { type Api, type Explanation, type Run, type RunStatus } from "@/api";
 import { errorMessage } from "@/i18n/errors";
 import { useT } from "@/i18n/context";
+import type { Messages } from "@/i18n/en";
 import { RunFeedbackControl } from "@/components/chat/run-feedback";
 import { type MetricChoice, SaveMetricDialog } from "@/components/chat/save-metric-dialog";
 import { DataTable } from "@/components/data-table";
@@ -159,6 +160,7 @@ function useElapsed(): number {
 }
 
 function Progress({ trail, queued }: { trail: Trail; queued: boolean }) {
+  const m = useT();
   const elapsed = useElapsed();
   return (
     <div className="flex flex-col gap-2" role="status" aria-live="polite">
@@ -167,7 +169,7 @@ function Progress({ trail, queued }: { trail: Trail; queued: boolean }) {
           {queued ? "Queued" : "Running"}
         </StatusBadge>
         <span className="text-foreground font-medium">
-          {queued ? "Waiting for a worker" : activity(trail)}
+          {queued ? "Waiting for a worker" : activity(trail, m)}
         </span>
         <span className="text-muted-foreground tabular-nums">{elapsed} s</span>
       </div>
@@ -191,6 +193,7 @@ function Progress({ trail, queued }: { trail: Trail; queued: boolean }) {
  * the evidence panel, which lists the plan.
  */
 export function StepLine({ step, compact = false }: { step: TrailStep; compact?: boolean }) {
+  const m = useT();
   let ok = true;
   let text: string;
   if (step.kind === "plan") {
@@ -220,7 +223,7 @@ export function StepLine({ step, compact = false }: { step: TrailStep; compact?:
       : "The checks found problems, so the agent kept working";
   } else {
     ok = step.ok;
-    text = toolLabel(step.tool);
+    text = toolLabel(step.tool, m);
     if (step.rowCount !== null) {
       text += ` · ${step.rowCount.toLocaleString()} row${step.rowCount === 1 ? "" : "s"}`;
     }
@@ -237,10 +240,10 @@ export function StepLine({ step, compact = false }: { step: TrailStep; compact?:
   );
 }
 
-function answerText(run: Run): string | null {
+function answerText(run: Run, m: Messages): string | null {
   const answer = run.result?.answer;
   if (!answer) return null;
-  const formatted = formatAnswer(answer);
+  const formatted = formatAnswer(answer, m);
   if ("text" in formatted) return formatted.text;
   if ("list" in formatted) return formatted.list.join("\n");
   return [formatted.table.columns, ...formatted.table.rows].map((row) => row.join("\t")).join("\n");
@@ -263,10 +266,11 @@ function Answer({
   onShowWork: (trigger: HTMLElement) => void;
   onCorrect?: (trigger: HTMLElement) => void;
 }) {
+  const m = useT();
   const result = run.result;
-  const summary = answerSummary(run.status, result);
+  const summary = answerSummary(run.status, result, m);
   const charts = (result?.steps ?? []).flatMap((step) => (step.chart ? [step.chart] : []));
-  const text = answerText(run);
+  const text = answerText(run, m);
   const [copied, setCopied] = useState(false);
   const question = result?.question_for_user ?? trail.question;
 
@@ -311,7 +315,7 @@ function Answer({
         </>
       ) : (
         <p className="text-muted-foreground text-[15px]">
-          {stopReasonText(result?.stop_reason ?? (run.status === "cancelled" ? "cancelled" : undefined)) ??
+          {stopReasonText(result?.stop_reason ?? (run.status === "cancelled" ? "cancelled" : undefined), m) ??
             result?.error ??
             "No answer."}
         </p>
@@ -361,8 +365,9 @@ function Answer({
 }
 
 function AnswerValue({ run }: { run: Run }) {
+  const m = useT();
   const answer = run.result!.answer!;
-  const formatted = formatAnswer(answer);
+  const formatted = formatAnswer(answer, m);
   return (
     <div className="flex flex-col gap-2">
       {"text" in formatted && (
@@ -409,8 +414,9 @@ function HowCalculated({
   run: Run;
   onOpenMemory?: (trigger: HTMLElement) => void;
 }) {
+  const m = useT();
   const [choice, setChoice] = useState<MetricChoice | null>(null);
-  const explanations = uniqueExplanations(run.explanations ?? []);
+  const explanations = uniqueExplanations(run.explanations ?? [], m);
   if (explanations.length === 0) return null;
   const partial = explanations.some((explanation) => !explanation.complete);
   const used = uniqueById(explanations.flatMap((explanation) => explanation.metrics_used ?? []));
@@ -450,7 +456,7 @@ function HowCalculated({
               </p>
             )}
             <dl className="grid grid-cols-[minmax(0,8.5rem)_1fr] gap-x-3 gap-y-1.5">
-              {explanationLines(explanation).map((line) => (
+              {explanationLines(explanation, m).map((line) => (
                 <div key={line.label} className="contents">
                   <dt className="text-muted-foreground">{line.label}</dt>
                   <dd className="min-w-0 break-words">{line.text}</dd>
@@ -497,6 +503,7 @@ function SaveMetricButtons({
   explanation: Explanation;
   onChoose: (candidate: Candidate) => void;
 }) {
+  const m = useT();
   const candidates = explanation.metric_candidates ?? [];
   if (candidates.length === 0) return null;
   return (
@@ -511,7 +518,7 @@ function SaveMetricButtons({
         >
           <BookmarkPlus />
           {candidates.length > 1
-            ? `Save “${describeExpr(candidate.facts.measure)}” as a definition`
+            ? `Save “${describeExpr(candidate.facts.measure, m)}” as a definition`
             : "Save as a definition"}
         </Button>
       ))}

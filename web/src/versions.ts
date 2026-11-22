@@ -1,6 +1,7 @@
 // Pure logic for adding files to a dataset (docs/design/2026-11-21-add-files.md).
 
 import type { Dataset, DatasetVersion, OverlapChoice, VersionChange, VersionOverlap } from "./api";
+import type { Messages } from "./i18n/en";
 
 const OPEN: readonly DatasetVersion["status"][] = [
   "uploaded",
@@ -67,30 +68,33 @@ function parseRate(version: DatasetVersion, table: string): number | null {
 }
 
 /** One line for the status card. */
-export function statusLine(version: DatasetVersion): string {
-  if (version.stuck && isOpenVersion(version)) {
-    return "Checking the new files stopped before it finished. Discard them and add them again.";
-  }
+export function statusLine(version: DatasetVersion, m: Messages): string {
+  const words = m.versions;
+  if (version.stuck && isOpenVersion(version)) return words.stuck;
   switch (version.status) {
     case "uploaded":
     case "checking":
-      return "Checking new files…";
+      return words.checking;
     case "needs_choice":
     case "proposed":
-      return "Your new files need a decision";
+      return words.needsDecision;
     case "building":
-      return "Adding the new files…";
+      return words.adding;
     case "failed":
-      return `Couldn't add files: ${version.error ?? "no details were recorded"}`;
+      return words.failed(version.error ?? null);
     case "discarded":
-      return "Discarded the new files";
+      return words.discarded;
     case "applied": {
       const grown = (version.changes ?? []).filter((c) => c.new_rows > 0);
       const rows = grown.reduce((sum, c) => sum + c.new_rows, 0);
-      const table = grown.length === 1 ? grown[0].table : `${grown.length} tables`;
+      const table = grown.length === 1 ? grown[0].table : words.tables(grown.length);
       const rate = grown.length === 1 ? parseRate(version, grown[0].table) : null;
-      const tail = rate === null ? "" : ` (parse rate ${rate.toFixed(1)}%)`;
-      return `Added ${rows.toLocaleString("en-US")} rows to ${table}${tail}`;
+      const tenths = new Intl.NumberFormat(m.locale, {
+        minimumFractionDigits: 1,
+        maximumFractionDigits: 1,
+      });
+      const count = new Intl.NumberFormat(m.locale).format(rows);
+      return words.added(count, table, rate === null ? null : tenths.format(rate));
     }
   }
 }
@@ -114,10 +118,13 @@ export function missingDecisions(
 }
 
 /** A note when overlapping rows are also in another file of the same upload, or null. */
-export function earlierNewFilesText(overlap: Pick<VersionOverlap, "earlier_new_files">): string | null {
+export function earlierNewFilesText(
+  overlap: Pick<VersionOverlap, "earlier_new_files">,
+  m: Messages,
+): string | null {
   const files = overlap.earlier_new_files ?? [];
   if (files.length === 0) return null;
-  return `Some of these rows are also in ${files.join(", ")}, sent in this same upload.`;
+  return m.versions.earlierNewFiles(files.join(", "));
 }
 
 /** The dataset's files a replace choice on this table may name: the table's own. */

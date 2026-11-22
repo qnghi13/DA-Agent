@@ -255,6 +255,7 @@ function OverlapSection({
   onChoice: (choice: OverlapChoice) => void;
   onFile: (stored: string) => void;
 }) {
+  const m = useT();
   const overlaps = change.overlaps.filter((o) => !o.removed_by_dedupe);
   const allowed = change.allowed_choices ?? ["replace", "keep_both"];
   const id = `overlap-${change.table}`;
@@ -266,8 +267,8 @@ function OverlapSection({
       {overlaps.map((overlap, i) => (
         <div key={i} className="flex flex-col gap-1 text-sm">
           <p>{KIND_TEXT[overlap.kind](overlap.rows, overlap.key, overlap.column)}</p>
-          {earlierNewFilesText(overlap) && (
-            <p className="text-muted-foreground">{earlierNewFilesText(overlap)}</p>
+          {earlierNewFilesText(overlap, m) && (
+            <p className="text-muted-foreground">{earlierNewFilesText(overlap, m)}</p>
           )}
           {overlap.examples && overlap.examples.length > 0 && (
             <ul className="text-muted-foreground bg-muted flex flex-col gap-0.5 rounded-md px-3 py-2 font-mono text-xs">

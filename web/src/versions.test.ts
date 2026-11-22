@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { DatasetVersion } from "./api";
+import { en } from "./i18n/en";
+import { vi } from "./i18n/vi";
 import {
   addedFiles,
   canDiscard,
@@ -67,13 +69,13 @@ describe("isOlderVersion", () => {
 
 describe("statusLine", () => {
   it("says the files are being checked while the version is new", () => {
-    expect(statusLine(version({ status: "uploaded" }))).toBe("Checking new files…");
-    expect(statusLine(version({ status: "checking" }))).toBe("Checking new files…");
+    expect(statusLine(version({ status: "uploaded" }), en)).toBe("Checking new files…");
+    expect(statusLine(version({ status: "checking" }), en)).toBe("Checking new files…");
   });
 
   it("asks for a decision when the version waits for one", () => {
-    expect(statusLine(version({ status: "needs_choice" }))).toBe("Your new files need a decision");
-    expect(statusLine(version({ status: "proposed" }))).toBe("Your new files need a decision");
+    expect(statusLine(version({ status: "needs_choice" }), en)).toBe("Your new files need a decision");
+    expect(statusLine(version({ status: "proposed" }), en)).toBe("Your new files need a decision");
   });
 
   it("reports the rows added and the parse rate from the summary", () => {
@@ -92,17 +94,17 @@ describe("statusLine", () => {
       ],
     };
     const line = statusLine(
-      version({ summary: summary as unknown as DatasetVersion["summary"], changes: [change] as never }),
+      version({ summary: summary as unknown as DatasetVersion["summary"], changes: [change] as never }), en
     );
     expect(line).toBe("Added 1,240 rows to orders (parse rate 99.9%)");
   });
 
   it("leaves the parse rate out when the summary has none", () => {
-    expect(statusLine(version({ changes: [change] as never }))).toBe("Added 1,240 rows to orders");
+    expect(statusLine(version({ changes: [change] as never }), en)).toBe("Added 1,240 rows to orders");
   });
 
   it("reports the failure reason", () => {
-    expect(statusLine(version({ status: "failed", error: "too many columns" }))).toBe(
+    expect(statusLine(version({ status: "failed", error: "too many columns" }), en)).toBe(
       "Couldn't add files: too many columns",
     );
   });
@@ -165,24 +167,24 @@ describe("missingDecisions", () => {
 
 describe("earlierNewFilesText", () => {
   it("names the files of the same upload that already hold the rows", () => {
-    expect(earlierNewFilesText({ earlier_new_files: ["dec.csv"] })).toBe(
+    expect(earlierNewFilesText({ earlier_new_files: ["dec.csv"] }, en)).toBe(
       "Some of these rows are also in dec.csv, sent in this same upload.",
     );
-    expect(earlierNewFilesText({ earlier_new_files: ["a.csv", "b.csv"] })).toBe(
+    expect(earlierNewFilesText({ earlier_new_files: ["a.csv", "b.csv"] }, en)).toBe(
       "Some of these rows are also in a.csv, b.csv, sent in this same upload.",
     );
   });
 
   it("says nothing when the rows repeat only older data", () => {
-    expect(earlierNewFilesText({ earlier_new_files: [] })).toBeNull();
-    expect(earlierNewFilesText({})).toBeNull();
+    expect(earlierNewFilesText({ earlier_new_files: [] }, en)).toBeNull();
+    expect(earlierNewFilesText({}, en)).toBeNull();
   });
 });
 
 describe("a version left by a job that ended", () => {
   it("says the check stopped and can be discarded", () => {
     const stuck = version({ status: "checking", stuck: true });
-    expect(statusLine(stuck)).toBe(
+    expect(statusLine(stuck, en)).toBe(
       "Checking the new files stopped before it finished. Discard them and add them again.",
     );
     expect(canDiscard(stuck)).toBe(true);
@@ -213,5 +215,14 @@ describe("replaceOptions", () => {
   it("picks the file when a table has only one to replace", () => {
     const more = [...files, { name: "Items 2.csv", stored_as: "items_2.csv", bytes: 1 }];
     expect(replaceDefaults([orders, items], more)).toEqual({ orders: "orders.csv" });
+  });
+});
+
+describe("statusLine in Vietnamese", () => {
+  it("groups the row count the Vietnamese way", () => {
+    const line = statusLine(version({ changes: [change] as never }), vi);
+    expect(line).toContain("1.240");
+    expect(line).toContain("orders");
+    expect(line).not.toBe(statusLine(version({ changes: [change] as never }), en));
   });
 });

@@ -58,7 +58,7 @@ export function Workspace({
 
   const current =
     selection.kind === "dataset" ? datasets.find((d) => d.id === selection.id) : undefined;
-  const status = current && datasetStatus(current.status);
+  const status = current && datasetStatus(current.status, m);
 
   const list = (
     <DatasetList
@@ -179,6 +179,7 @@ function DatasetList({
   error: string | null;
   onSelect: (next: Selection) => void;
 }) {
+  const m = useT();
   return (
     <nav className="flex flex-col gap-1 p-3">
       <Button
@@ -195,7 +196,7 @@ function DatasetList({
       )}
       {datasets.map((dataset) => {
         const active = selection.kind === "dataset" && selection.id === dataset.id;
-        const status = datasetStatus(dataset.status);
+        const status = datasetStatus(dataset.status, m);
         return (
           <button
             type="button"

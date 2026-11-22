@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Api } from "./api";
+import { en } from "./i18n/en";
 import { answerSummary, initialTrail, isRunActive, reduceTrail, stopReasonText } from "./run";
 
 const end = (status: string) => ({ id: undefined, event: "end", data: JSON.stringify({ status }) });
@@ -28,13 +29,13 @@ describe("cancelling a run", () => {
   });
 
   it("labels a cancelled run Stopped, without calling it a failure", () => {
-    expect(answerSummary("cancelled", null)).toEqual({
+    expect(answerSummary("cancelled", null, en)).toEqual({
       label: "Stopped",
       tone: "neutral",
       detail: null,
     });
-    expect(stopReasonText("cancelled")).toBe("You stopped this question.");
-    expect(stopReasonText("deadline_exceeded")).toBe("Stopped: this question ran out of time.");
+    expect(stopReasonText("cancelled", en)).toBe("You stopped this question.");
+    expect(stopReasonText("deadline_exceeded", en)).toBe("Stopped: this question ran out of time.");
   });
 
   it("treats only queued and running runs as active", () => {

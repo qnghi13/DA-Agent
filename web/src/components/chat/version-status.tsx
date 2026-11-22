@@ -116,7 +116,7 @@ export function VersionStatus({
           aria-hidden
         />
       )}
-      <span className="min-w-0 flex-1 break-words">{statusLine(version)}</span>
+      <span className="min-w-0 flex-1 break-words">{statusLine(version, m)}</span>
       {waiting && (
         <>
           <Button size="sm" onClick={(event) => onReview(event.currentTarget)}>

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Api } from "./api";
-import { FEEDBACK_REASONS, nextFeedback } from "./feedback";
+import { feedbackReasons, nextFeedback } from "./feedback";
+import { en } from "./i18n/en";
+import { vi as viMessages } from "./i18n/vi";
 
 describe("feedback on an answer", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -12,14 +14,17 @@ describe("feedback on an answer", () => {
   });
 
   it("offers the reasons the API accepts, in plain words", () => {
-    expect(FEEDBACK_REASONS.map((reason) => reason.value)).toEqual([
+    expect(feedbackReasons(en).map((reason) => reason.value)).toEqual([
       "wrong_number",
       "misunderstood",
       "should_abstain",
       "unclear",
       "other",
     ]);
-    expect(FEEDBACK_REASONS.every((reason) => reason.label.length > 0)).toBe(true);
+    expect(feedbackReasons(en).every((reason) => reason.label.length > 0)).toBe(true);
+    const vietnamese = feedbackReasons(viMessages);
+    expect(vietnamese.map((reason) => reason.value)).toEqual(feedbackReasons(en).map((r) => r.value));
+    expect(vietnamese[0].label).not.toBe(feedbackReasons(en)[0].label);
   });
 
   it("puts and deletes the run's feedback", async () => {
