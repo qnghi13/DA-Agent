@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Explanation, ExprFact, FilterFact } from "./api";
-import { describeExpr, describeFilter, explanationLines } from "./explain";
+import { describeExpr, describeFilter, explanationLines, uniqueExplanations } from "./explain";
 
 const col = (column: string, unit: string | null = null): ExprFact => ({ kind: "column", column, unit });
 const agg = (func: string, of: ExprFact | null, extra: Partial<ExprFact> = {}): ExprFact => ({
@@ -138,5 +138,31 @@ describe("explanationLines", () => {
 
     expect(sorted).toContainEqual({ label: "Shown", text: "sorted by Giá, lowest first" });
     expect(limited).toContainEqual({ label: "Shown", text: "the first 10 rows" });
+  });
+});
+
+describe("uniqueExplanations", () => {
+  const completed = filter(col("Trạng thái"), "equals", ["completed"]);
+  const count = agg("count", col("Mã đơn"), { distinct: true });
+
+  it("keeps one of the queries that read the same in plain words", () => {
+    const first = explanation({ query_index: 0, measures: [count], filters: [completed] });
+    const again = explanation({ query_index: 1, measures: [count], filters: [completed] });
+
+    expect(uniqueExplanations([first, again])).toEqual([first]);
+  });
+
+  it("keeps queries that differ, in their order", () => {
+    const completedCount = explanation({ query_index: 0, measures: [count], filters: [completed] });
+    const allCount = explanation({ query_index: 1, measures: [count] });
+
+    expect(uniqueExplanations([completedCount, allCount])).toEqual([completedCount, allCount]);
+  });
+
+  it("keeps a query that cannot be put fully into words next to one that can", () => {
+    const whole = explanation({ query_index: 0, measures: [count] });
+    const partial = explanation({ query_index: 1, measures: [count], complete: false });
+
+    expect(uniqueExplanations([whole, partial])).toEqual([whole, partial]);
   });
 });

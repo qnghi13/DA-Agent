@@ -161,3 +161,16 @@ export function explanationLines(explanation: Explanation): { label: string; tex
   add("Shown", shown(explanation));
   return lines;
 }
+
+/** The queries an answer ran, without repeats: a model sometimes runs the same query again to
+ * check it, and two copies of one calculation only add noise. Queries count as the same when
+ * they read the same in plain words; the first one is kept. */
+export function uniqueExplanations(explanations: Explanation[]): Explanation[] {
+  const seen = new Set<string>();
+  return explanations.filter((explanation) => {
+    const key = JSON.stringify([explanation.complete, explanationLines(explanation)]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}

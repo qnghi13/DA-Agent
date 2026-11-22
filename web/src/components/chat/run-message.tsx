@@ -3,6 +3,7 @@ import {
   BookMarked,
   BookmarkPlus,
   Check,
+  ChevronRight,
   CircleHelp,
   Copy,
   Loader2,
@@ -16,7 +17,7 @@ import { RunFeedbackControl } from "@/components/chat/run-feedback";
 import { type MetricChoice, SaveMetricDialog } from "@/components/chat/save-metric-dialog";
 import { DataTable } from "@/components/data-table";
 import { StatusBadge } from "@/components/status-badge";
-import { describeExpr, explanationLines } from "@/explain";
+import { describeExpr, explanationLines, uniqueExplanations } from "@/explain";
 import { Button } from "@/components/ui/button";
 import {
   type Trail,
@@ -406,13 +407,17 @@ function HowCalculated({
   onOpenMemory?: (trigger: HTMLElement) => void;
 }) {
   const [choice, setChoice] = useState<MetricChoice | null>(null);
-  const explanations = run.explanations ?? [];
+  const explanations = uniqueExplanations(run.explanations ?? []);
   if (explanations.length === 0) return null;
   const partial = explanations.some((explanation) => !explanation.complete);
   const used = uniqueById(explanations.flatMap((explanation) => explanation.metrics_used ?? []));
   return (
-    <details open className="group rounded-xl border px-4 py-3 text-sm">
+    <details className="group rounded-xl border px-4 py-3 text-sm">
       <summary className="text-muted-foreground flex cursor-pointer list-none items-center gap-2 font-medium select-none">
+        <ChevronRight
+          className="size-4 transition-transform group-open:rotate-90"
+          aria-hidden
+        />
         <Sigma className="size-4" aria-hidden />
         How it was calculated
       </summary>
