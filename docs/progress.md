@@ -1,6 +1,6 @@
 # Progress
 
-Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-21 (SLOs and alerts)
+Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-22 (add files to a dataset)
 **Phase:** optimisation. Challenge rules: ≤15B params in total, offline Docker, 2×5090, 6 h,
 re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for the submission.
 
@@ -18,27 +18,23 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
   (Groq +55). Then status variants and line-vs-header revenue (~12, checked by hand SQL), debt
   4, budget abstains 8 (SQLite functions, made-up columns). Semantic layer: private folder.
 ## Next step
-- **Add files to a dataset (2026-11-21):** spec approved (`docs/design/2026-11-21-add-files.md`),
-  plan written (`...-add-files-plan.md`, 9 tasks); not started. Versions in one dataset, ask on
-  overlap, labelled old answers, model repairs the user approves.
+- **Add files to a dataset (2026-11-22):** built on `feat/add-files` (ADR 0045, note 24; not
+  merged or pushed). Versions in one dataset, ask on overlap, labelled old answers, model repairs
+  the user approves. Final review found 2 critical seams (fixed); real e2e on Groq (11 calls,
+  $0.0047) found a drop-overlap quality bug (fixed, re-run ok). Open minors: ADR 0045 list.
 0. Metric definitions on `main` (ADR 0036, note 16): saved from an answer's SQL, matched by
    code; eval +1 -> +7 (20 dev questions, $0.095). Phase 2, other readings with the answer, was
    built on a branch and removed (ADR 0037): `gpt-oss-20b` never flagged the ambiguity (4 real
    runs). Users: non-technical first; UI in English.
-   Harness track (user, 2026-11-19: learn the parts around the agent, not features). Done: run
-   manifest (ADR 0038, note 17); record/replay (ADR 0039, note 18: 3 Groq questions replayed
-   17/17, same answers, $0.012); pass^k (ADR 0040, note 19: `smoke` x3 on Groq +16/+12/+10, std
-   3.1, pass^3 50%, pass@3 67%, $0.205: one-run gains under ~9 points are noise); breaker and
-   outbound limits (ADR 0041, note 20); cancel with a Stop button, run deadline, time travel CLI
-   (ADR 0042, note 21); feedback with reasons, golden cases, 👍 rate per version (ADR 0043,
-   note 22); SLOs and alerts, Prometheus and Alertmanager (ADR 0044, note 23). Harness done.
+   Harness track done (ADRs 0038–0044, notes 17–23): manifest, record/replay, pass^k (one-run
+   gains under ~9 points are noise), breaker, cancel and deadline, feedback, SLOs and alerts.
    Later: an LLM judge checked against feedback.
 1. v0.1.0 released (ADR 0028); holdout ran once (+44, never rerun). Open: run 97d7bc1f guessed
    an absent `product_id` (audit: a UI guardrail, not a score fix); `\uXXXX` escapes written into
    SQL text (2 runs in all reports).
 ## Baselines (Groq `gpt-oss-20b`, before 559f88a): `regression` +53 (93/40/17), holdout +44.
 ## Done
-- ADRs 0001–0044, notes 01–23. Scorer 3000/3000; splits in `eval/splits/splits.json`.
+- ADRs 0001–0045, notes 01–24. Scorer 3000/3000; splits in `eval/splits/splits.json`.
 - Agent: `LLMClient`, SQL guard, LangGraph with checkpoints and verify, Groq `gpt-oss-20b`.
   Sandbox: all escape tests pass; ingestion and agent SQL run in it (ADRs 0009–0012).
   `datasets-dev/`: 24/24 ok, parse 99.98%+, exclusion precision and recall 100%.
@@ -52,7 +48,7 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
 - No rows, questions, rulebook, or answers in any commit or image (organiser rules). When the
   challenge ends: delete `train/`, `eval/reports/`, and Docker volumes with eval data.
 
-## Spend so far: about $3.07 (agent runs $2.48, spec proposals $0.57, demos $0.006).
+## Spend so far: about $3.08 (agent runs $2.48, spec proposals $0.57, demos and e2e $0.011).
 
 ## Watch out
 
