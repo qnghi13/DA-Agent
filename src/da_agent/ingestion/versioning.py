@@ -141,14 +141,17 @@ def quality_problems(report: BuildReport, grown: set[str]) -> dict[str, list[Qua
     """Problems of the rows from new files in each grown table, judged like `parse_problems`.
 
     The share of excluded rows uses the new files' raw rows, which the report does not count
-    directly: the clean rows from new files plus the rows their exclude rules removed.
+    directly: the clean rows from new files, the rows their exclude rules removed, and the rows
+    the user chose to drop as overlaps (known duplicates, never judged as a rule).
     """
     found: dict[str, list[QualityProblem]] = {}
     for table in report.tables:
         if table.name not in grown:
             continue
         problems: list[QualityProblem] = []
-        raw_new = table.new_rows + sum(r.rows for r in table.new_excluded)
+        raw_new = (
+            table.new_rows + sum(r.rows for r in table.new_excluded) + table.new_overlap_dropped
+        )
         for rule in table.new_excluded:
             messages = _record_problems(table.name, raw_new, rule, MAX_EXCLUDED_SHARE)
             if messages:

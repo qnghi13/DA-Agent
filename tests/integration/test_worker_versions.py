@@ -23,7 +23,14 @@ from da_agent.api.app import ApiSettings, create_app
 from da_agent.ingestion.build import CLEAN_DATABASE, build
 from da_agent.ingestion.raw import RAW_DATABASE, ingest
 from da_agent.ingestion.report import IngestReport
-from da_agent.ingestion.spec import ColumnSpec, DatasetSpec, OverlapDrop, TableSpec
+from da_agent.ingestion.spec import (
+    ColumnSpec,
+    DatasetSpec,
+    OverlapDrop,
+    RowCondition,
+    RowRule,
+    TableSpec,
+)
 from da_agent.ingestion.versioning import RepairChange
 from da_agent.llm.client import CostLedger, LLMClient, ModelPrice, Route
 from da_agent.llm.types import TransientLLMError
@@ -108,7 +115,16 @@ class InProcessRunner:
 
 
 class Setup:
-    def __init__(self, schema: str, conn: psycopg.Connection, workspace: UUID, tmp: Path) -> None:
+    def __init__(
+        self,
+        schema: str,
+        conn: psycopg.Connection,
+        workspace: UUID,
+        tmp: Path,
+        spec: DatasetSpec = SPEC,
+        orders: str = ORDERS,
+    ) -> None:
+        self.spec, self.orders = spec, orders
         self.schema, self.conn, self.workspace = schema, conn, workspace
         self.uploads, self.datasets = tmp / "uploads", tmp / "datasets"
         self.runner = InProcessRunner(self.uploads, tmp / "staging")
@@ -121,20 +137,20 @@ class Setup:
 
     def _ready_dataset(self) -> UUID:
         """Version 1 as the normal upload path leaves it: no stored headers."""
-        files = [{"name": "orders.csv", "stored_as": "orders.csv", "bytes": len(ORDERS)}]
+        files = [{"name": "orders.csv", "stored_as": "orders.csv", "bytes": len(self.orders)}]
         datasets = DatasetStore(self.conn)
         dataset_id = datasets.create(self.workspace, "Shop", "Orders of one shop.", files=files)
         folder = self.uploads / str(dataset_id)
         folder.mkdir(parents=True)
-        (folder / "orders.csv").write_text(ORDERS, encoding="utf-8")
+        (folder / "orders.csv").write_text(self.orders, encoding="utf-8")
         ingested = self.runner.ingest(IngestRun(upload_id=str(dataset_id)))
         assert ingested.output_dir is not None
-        built = self.runner.build(BuildRun(ingest_id=ingested.output_dir.name, spec=SPEC))
+        built = self.runner.build(BuildRun(ingest_id=ingested.output_dir.name, spec=self.spec))
         assert built.output_dir is not None
         self.datasets.mkdir(parents=True)
         built.output_dir.rename(self.datasets / str(dataset_id))
         shutil.rmtree(ingested.output_dir)
-        datasets.mark_proposed(dataset_id, SPEC.model_dump(mode="json"), {}, [])
+        datasets.mark_proposed(dataset_id, self.spec.model_dump(mode="json"), {}, [])
         assert datasets.approve(self.workspace, dataset_id, None) == "ready"
         self.runner.builds.clear()
         return dataset_id
@@ -254,6 +270,33 @@ def test_the_same_file_sent_again_through_the_api_waits_with_an_exact_overlap(
     assert setup.entry("orders")["kind"] == "grown"
     assert [o["kind"] for o in setup.entry("orders")["overlaps"]][:1] == ["exact"]
     assert setup.current_version() == 1
+
+
+def test_dropping_a_resent_file_with_a_footer_row_applies(
+    schema: str, conn: psycopg.Connection, workspace: UUID, tmp_path: Path
+) -> None:
+    rows = "".join(f"{i},10,01/02/2026\n" for i in range(1, 601))
+    orders = f"id,total,day\n{rows}TOTAL,6000,\n"
+    footer = RowRule(when=[RowCondition(column="id", op="equals", value="total")], reason="footer")
+    spec = SPEC.model_copy(
+        update={"tables": [SPEC.tables[0].model_copy(update={"exclude_rows": [footer]})]}
+    )
+    setup = Setup(schema, conn, workspace, tmp_path, spec, orders)
+    setup.add_files({"orders.csv": orders})
+    llm, _ = fake_llm()
+    setup.run(llm)
+    assert setup.version().status == "needs_choice"
+    choices = {"tables": {"orders": "drop_overlap"}, "replace_files": {}, "apply_anyway": False}
+    setup.store.approve(setup.workspace, setup.dataset_id, 2, choices, None, [])
+
+    setup.run(llm)
+
+    assert (setup.version().status, setup.current_version()) == ("applied", 2)
+    assert setup.rows("SELECT count(*) FROM orders") == [(600,)]
+    reasons = setup.rows(
+        "SELECT reason, count(*) FROM _excluded WHERE _source <> 'orders.csv' GROUP BY reason"
+    )
+    assert sorted(reasons) == [("already in orders.csv", 600), ("footer", 1)]
 
 
 def test_a_new_file_records_the_file_it_replaces(setup: Setup) -> None:

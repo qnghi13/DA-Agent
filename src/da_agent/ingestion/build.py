@@ -175,6 +175,11 @@ class TableBuild(BaseModel):
     new_excluded: list[ExcludedRule] = Field(
         default_factory=list, description="The excluded rows of new files only."
     )
+    new_overlap_dropped: int = Field(
+        default=0,
+        description="Rows of new files the user chose to drop as overlaps: known duplicates, "
+        "counted in the new files' raw rows but never judged as an exclude rule.",
+    )
     error: str | None = None
 
 
@@ -431,6 +436,12 @@ def _build_table(
     report.excluded = _excluded_rules(connection, marked, labels, full, identifiers, "true")
     if new_sources:
         report.new_excluded = _excluded_rules(connection, marked, labels, full, identifiers, new)
+        reasons = ", ".join(lit("already in " + ", ".join(d.against)) for d in table.drop_overlap)
+        if reasons:
+            report.new_overlap_dropped = _scalar(
+                connection,
+                f"SELECT count(*) FROM {q(marked)} WHERE __excluded IN ({reasons}) AND {new}",
+            )
     for shape in _subtotal_shapes(raw_report):
         kept = (
             f"SELECT count(*) FROM {q(marked)} WHERE __excluded IS NULL "

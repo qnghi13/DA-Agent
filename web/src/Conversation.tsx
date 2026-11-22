@@ -309,8 +309,8 @@ export function Conversation({
                   <div key={id} className="flex flex-col gap-8">
                     {dividers.has(id) && (
                       <VersionDivider
-                        version={dividers.get(id) as number}
-                        files={addedFiles(watch.versions, dividers.get(id) as number)}
+                        version={dividers.get(id)!.to}
+                        files={addedFiles(watch.versions, dividers.get(id)!.from, dividers.get(id)!.to)}
                       />
                     )}
                     {starts.has(id) && <ConversationBreak />}

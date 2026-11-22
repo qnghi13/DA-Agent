@@ -7,7 +7,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from da_agent.ingestion.build import CLEAN_DATABASE, build
+from da_agent.ingestion.build import CLEAN_DATABASE, BuildReport, build
 from da_agent.ingestion.raw import RAW_DATABASE, ingest
 from da_agent.ingestion.spec import (
     ColumnSpec,
@@ -1017,6 +1017,28 @@ def test_drop_overlap_moves_rows_to_excluded(tmp_path: Path, out: Path) -> None:
         ("already in orders.csv", "orders_1.csv", '{"order_id":"1","status":"paid"}')
     ]
     assert result.tables[0].new_rows == 1
+
+
+def test_new_overlap_dropped_counts_dropped_rows_and_not_rule_rows(
+    tmp_path: Path, out: Path
+) -> None:
+    rows_1 = "".join(f"{i},10\n" for i in range(1, 7))
+    old = f"order_id,amount\n{rows_1}Total,60\n"
+    spec = orders_spec(
+        exclude_rows=[
+            RowRule(
+                when=[RowCondition(column="order_id", op="equals", value="total")], reason="total"
+            )
+        ],
+        drop_overlap=[OverlapDrop(file="orders_1.csv", against=["orders.csv"], key=[])],
+    )
+
+    result = overlap_build(tmp_path, out, {"orders.csv": old, "orders_1.csv": old}, spec)
+
+    table = result.tables[0]
+    assert (table.new_rows, table.new_overlap_dropped) == (0, 6)
+    assert [(r.reason, r.rows) for r in table.new_excluded] == [("total", 1)]
+    assert BuildReport.model_validate_json(result.model_dump_json()) == result
 
 
 def test_drop_overlap_by_key_keeps_changed_rows_out(tmp_path: Path, out: Path) -> None:

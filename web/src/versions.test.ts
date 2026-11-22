@@ -41,14 +41,14 @@ describe("versionDividers", () => {
       { id: "e", dataset_version: 3 },
     ];
     expect([...versionDividers(runs)]).toEqual([
-      ["c", 2],
-      ["e", 3],
+      ["c", { from: 1, to: 2 }],
+      ["e", { from: 2, to: 3 }],
     ]);
   });
 
   it("counts a run without a version as version 1", () => {
     const runs = [{ id: "a" }, { id: "b", dataset_version: 1 }, { id: "c", dataset_version: 2 }];
-    expect([...versionDividers(runs)]).toEqual([["c", 2]]);
+    expect([...versionDividers(runs)]).toEqual([["c", { from: 1, to: 2 }]]);
   });
 
   it("shows nothing for no runs", () => {
@@ -123,8 +123,25 @@ describe("addedFiles", () => {
       version({ version: 1, files: [f("a"), f("b")] }),
       version({ version: 2, files: [f("a"), f("c")] }),
     ];
-    expect(addedFiles(versions, 2)).toEqual(["C"]);
-    expect(addedFiles(versions, 1)).toEqual(["A", "B"]);
+    expect(addedFiles(versions, 1, 2)).toEqual(["C"]);
+    expect(addedFiles(versions, 0, 1)).toEqual(["A", "B"]);
+  });
+
+  it("names every file added across a gap of versions, skipping a failed one", () => {
+    const f = (stored_as: string) => ({ name: stored_as, stored_as, bytes: 1 });
+    const versions = [
+      version({ version: 1, files: [f("orders.csv")] }),
+      version({ version: 2, files: [f("orders.csv"), f("orders_jul.csv")] }),
+      version({
+        version: 3,
+        status: "failed",
+        files: [f("orders.csv"), f("orders_jul.csv"), f("orders.csv.2")],
+      }),
+      version({ version: 4, files: [f("orders.csv"), f("orders_jul.csv"), f("products.csv")] }),
+    ];
+    expect(addedFiles(versions, 1, 4)).toEqual(["orders_jul.csv", "products.csv"]);
+    expect(addedFiles(versions, 2, 4)).toEqual(["products.csv"]);
+    expect(addedFiles(versions, 1, 3)).toEqual(["orders_jul.csv"]);
   });
 });
 

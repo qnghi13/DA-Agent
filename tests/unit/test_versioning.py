@@ -307,3 +307,19 @@ def test_quality_problems_exclude_rule_on_new_rows() -> None:
     problems = quality_problems(BuildReport(tables=[table]), {"orders"})
     assert [p.key for p in problems["orders"]] == ["exclude_rows.2"]
     assert "blank id" in problems["orders"][0].message
+
+
+def test_quality_problems_count_rows_dropped_as_overlaps() -> None:
+    footer = ExcludedRule(reason="footer", position=1, rows=1, full_rows=0)
+    table = TableBuild(
+        name="orders",
+        source="orders",
+        rows=600,
+        new_rows=0,
+        new_excluded=[footer],
+        new_overlap_dropped=600,
+    )
+    assert quality_problems(BuildReport(tables=[table]), {"orders"}) == {}
+    # Without the dropped rows the same footer would be 1 of 1 rows.
+    table.new_overlap_dropped = 0
+    assert quality_problems(BuildReport(tables=[table]), {"orders"})

@@ -25,15 +25,16 @@ export function canDiscard(version: Pick<DatasetVersion, "status" | "stuck">): b
   return isWaitingForUser(version) || (isOpenVersion(version) && version.stuck === true);
 }
 
-/** The run id before which a divider shows, and the version that starts there. */
+/** The run id before which a divider shows, with the versions it spans: the earlier run's and
+ * the version that starts there. */
 export function versionDividers(
   runs: { id: string; dataset_version?: number }[],
-): Map<string, number> {
-  const dividers = new Map<string, number>();
+): Map<string, { from: number; to: number }> {
+  const dividers = new Map<string, { from: number; to: number }>();
   let previous: number | null = null;
   for (const run of runs) {
     const version = run.dataset_version ?? 1;
-    if (previous !== null && version > previous) dividers.set(run.id, version);
+    if (previous !== null && version > previous) dividers.set(run.id, { from: previous, to: version });
     previous = version;
   }
   return dividers;
@@ -44,14 +45,16 @@ export function isOlderVersion(run: { dataset_version?: number }, current: numbe
   return (run.dataset_version ?? 1) < current;
 }
 
-/** Names of the files a version has that the version before it did not. */
-export function addedFiles(versions: DatasetVersion[], version: number): string[] {
-  const sorted = [...versions].sort((a, b) => a.version - b.version);
-  const found = sorted.find((v) => v.version === version);
-  if (!found) return [];
-  const before = [...sorted].reverse().find((v) => v.version < version);
-  const known = new Set((before?.files ?? []).map((f) => f.stored_as));
-  return found.files.filter((f) => !known.has(f.stored_as)).map((f) => f.name);
+/** Names of the files added after version `from` up to and including version `to`: those the
+ * newest applied version up to `to` has and the one at `from` did not. Failed and discarded
+ * versions add nothing. */
+export function addedFiles(versions: DatasetVersion[], from: number, to: number): string[] {
+  const applied = versions.filter((v) => v.status === "applied").sort((a, b) => a.version - b.version);
+  const start = [...applied].reverse().find((v) => v.version <= from);
+  const end = [...applied].reverse().find((v) => v.version <= to);
+  if (!end || end.version <= (start?.version ?? 0)) return [];
+  const known = new Set((start?.files ?? []).map((f) => f.stored_as));
+  return end.files.filter((f) => !known.has(f.stored_as)).map((f) => f.name);
 }
 
 /** Share of filled cells that parsed, over one table's columns; null when the summary lacks it. */
