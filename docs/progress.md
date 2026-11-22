@@ -20,7 +20,7 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
 ## Next step
 - **Vietnamese UI** on `main` (ADR 0046, note 25; not pushed): Tiếng Việt option, typed
   dictionaries in `web/src/i18n`, API error `code`/`params`. Column descriptions stay English.
-- **Answer language** (`feat/vi-answers`, ADR 0047): a Vietnamese question gets `reason` and
+- **Answer language** on `main` (ADR 0047): a Vietnamese question gets `reason` and
   `clarify_question` in Vietnamese, decided by code. **Not measured on eval** (user's call):
   compare totals at the next eval run. Add files: on `main` (ADR 0045; minors in its list).
 0. Metric definitions on `main` (ADR 0036, note 16): saved from an answer's SQL, matched by
