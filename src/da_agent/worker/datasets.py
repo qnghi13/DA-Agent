@@ -43,6 +43,7 @@ FAILURES = {
     "choices_invalid": "The choices could not be applied to these files.",
     "quality_failed": "Rows in the new files still fail the quality checks.",
     "version_failed": "The new files could not be checked.",
+    "unavailable": "A service needed to check the new files was unavailable. Add the files again.",
 }
 # A directory under datasets_root or uploads_root: one level, as the Runner's `_child` accepts.
 DIRECTORY_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")

@@ -304,7 +304,9 @@ class DatasetVersionStore:
         return "building"
 
     def discard(self, workspace_id: UUID, dataset_id: UUID, version: int) -> None:
-        """Drop an open version that waits for the user. Raises DatasetStateError otherwise."""
+        """Drop an open version that waits for the user, or one left in a worker step whose
+        latest job has ended (a worker killed on its last attempt): nothing would move it on,
+        and an open version blocks every later upload. Raises DatasetStateError otherwise."""
         with self._conn.transaction():
             row = self._conn.execute(
                 "SELECT v.status FROM dataset_versions v JOIN datasets d ON d.id = v.dataset_id "
@@ -314,10 +316,26 @@ class DatasetVersionStore:
             ).fetchone()
             if row is None:
                 raise DatasetNotFoundError("version not found")
-            if row[0] not in ("uploaded", "needs_choice", "proposed"):
+            if row[0] in ("checking", "building"):
+                if not self.stuck(workspace_id, dataset_id, version):
+                    raise DatasetStateError(
+                        f"the version is still {row[0]}; it can be discarded when that ends"
+                    )
+            elif row[0] not in ("uploaded", "needs_choice", "proposed"):
                 raise DatasetStateError(f"the version is {row[0]}; it cannot be discarded")
             self._conn.execute(
                 "UPDATE dataset_versions SET status = 'discarded', updated_at = now() "
                 "WHERE dataset_id = %s AND version = %s",
                 (dataset_id, version),
             )
+
+    def stuck(self, workspace_id: UUID, dataset_id: UUID, version: int) -> bool:
+        """Whether a version in a worker step has no job left to move it on: its latest
+        `version` job has ended. Such a version can be discarded."""
+        row = self._conn.execute(
+            "SELECT status FROM jobs WHERE workspace_id = %s AND kind = 'version' "
+            "AND payload ->> 'dataset_id' = %s AND payload ->> 'version' = %s "
+            "ORDER BY created_at DESC, id DESC LIMIT 1",
+            (workspace_id, str(dataset_id), str(version)),
+        ).fetchone()
+        return row is None or row[0] not in ("queued", "running")

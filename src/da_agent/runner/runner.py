@@ -197,9 +197,13 @@ def _drain(stream: IO[bytes], limit: int, kept: bytearray, overflow: list[bool])
             overflow[0] = True
 
 
+# How a result from a sandbox that never started begins: an outage, not a problem with the input.
+NOT_STARTED = "the sandbox could not start"
+
+
 def _not_started(error: OSError) -> str:
     """Docker missing or not running. Says what failed without paths or host details."""
-    return f"the sandbox could not start ({type(error).__name__}); try again later"
+    return f"{NOT_STARTED} ({type(error).__name__}); try again later"
 
 
 def bounded_execute(command: list[str], *, input: bytes, timeout: float, limit: int) -> Captured:

@@ -133,6 +133,7 @@ def test_the_dataset_shows_its_current_and_open_version(
     assert after["current_version"] == 1
     assert after["open_version"]["version"] == 2
     assert after["open_version"]["status"] == "uploaded"
+    assert after["open_version"]["stuck"] is False  # its job is queued
 
 
 def test_a_dataset_that_is_not_ready_takes_no_files(client: TestClient, key: str) -> None:
@@ -389,6 +390,33 @@ def test_a_version_that_is_checking_cannot_be_discarded(
 
     assert response.status_code == 409
     assert (settings.uploads_root / f"{dataset_id}-v2").exists()
+
+
+def test_a_version_left_checking_by_a_job_that_ended_can_be_discarded(
+    client: TestClient, conn: psycopg.Connection, key: str, settings: ApiSettings
+) -> None:
+    dataset_id = ready_dataset(client, conn, key)
+    add(client, key, dataset_id, [("b.csv", b"a\n1\n")])
+    folder = _upload_dir(conn, dataset_id)
+    conn.execute("UPDATE dataset_versions SET status = 'checking' WHERE version = 2")
+    conn.execute("UPDATE jobs SET status = 'failed', finished_at = now() WHERE kind = 'version'")
+
+    shown = client.get(f"/v1/datasets/{dataset_id}", headers=auth(key)).json()["open_version"]
+    response = client.post(f"/v1/datasets/{dataset_id}/versions/2/discard", headers=auth(key))
+
+    assert shown["stuck"] is True
+    assert response.status_code == 204
+    assert not (settings.uploads_root / folder).exists()
+    assert add(client, key, dataset_id, [("c.csv", b"a\n1\n")]).status_code == 202
+
+
+def _upload_dir(conn: psycopg.Connection, dataset_id: str, version: int = 2) -> str:
+    row = conn.execute(
+        "SELECT upload_dir FROM dataset_versions WHERE dataset_id = %s AND version = %s",
+        (dataset_id, version),
+    ).fetchone()
+    assert row is not None
+    return str(row[0])
 
 
 @pytest.mark.security

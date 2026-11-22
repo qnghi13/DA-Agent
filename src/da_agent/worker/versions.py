@@ -7,9 +7,10 @@ Step `build` applies the user's choices, builds, and applies. The model only pro
 its output and writes `drop_overlap` itself.
 
 A failure marks the version failed and the job completes; the current version keeps serving
-(ADR 0019). Only `apply` changes what runs read, in one transaction, and every status change
-expects the status the step owns, so a retried or late step never applies twice or revives a
-discarded version.
+(ADR 0019). An outage of the Runner or the model provider is no failure of the files: the job is
+retried with the upload kept, and only the last attempt fails the version. Only `apply` changes
+what runs read, in one transaction, and every status change expects the status the step owns, so
+a retried or late step never applies twice or revives a discarded version.
 """
 
 import shutil
@@ -56,7 +57,17 @@ from da_agent.ingestion.versioning import (
     rename_sources,
 )
 from da_agent.llm.client import LLMClient, RunBudget
-from da_agent.runner.runner import BuildResult, BuildRun, IngestResult, IngestRun, SandboxRunner
+from da_agent.llm.types import AllRoutesFailedError
+from da_agent.runner.client import UNAVAILABLE
+from da_agent.runner.runner import (
+    NOT_STARTED,
+    BuildResult,
+    BuildRun,
+    IngestResult,
+    IngestRun,
+    JobResult,
+    SandboxRunner,
+)
 from da_agent.storage.dataset_versions import DatasetVersionStore, VersionRecord
 from da_agent.storage.datasets import DatasetStateError, DatasetStore
 from da_agent.storage.db import connect
@@ -73,6 +84,17 @@ STEP_STATUS = {"check": "checking", "build": "building"}
 
 class _VersionFailed(Exception):
     """The version cannot go on; the message is shown to the user."""
+
+
+class _Outage(Exception):
+    """The Runner or the model provider is down: retry the step, keep the upload."""
+
+
+def _unavailable(result: JobResult[Any]) -> bool:
+    """A sandbox that is down or never started, as exports and queries detect it."""
+    return result.status == "error" and (
+        result.stderr == UNAVAILABLE or result.stderr.startswith(NOT_STARTED)
+    )
 
 
 @dataclass
@@ -135,6 +157,11 @@ class VersionHandler:
                 return run.check() if step == "check" else run.build()
             except _VersionFailed as failure:
                 return run.fail(str(failure))
+            except (_Outage, AllRoutesFailedError) as outage:
+                if job.attempts >= job.max_attempts:
+                    # No retry is left: a failed version frees the slot; a stuck one blocks it.
+                    return run.fail(FAILURES["unavailable"])
+                raise RetryableJobError(UNAVAILABLE) from outage
             except RetryableJobError:
                 raise  # the version stays in its step until the retry
             except Exception:
@@ -192,6 +219,8 @@ class _VersionRun:
             result = self.h.runner.ingest(IngestRun(upload_id=upload_dir))
         if result.output_dir is not None:
             self.staging.append(result.output_dir)
+        if _unavailable(result):
+            raise _Outage(result.stderr)
         if result.status != "ok" or result.report is None or result.output_dir is None:
             raise _VersionFailed(FAILURES["ingest_failed"])
         return result, result.report, result.output_dir.name
@@ -203,6 +232,9 @@ class _VersionRun:
             result = self.h.runner.build(request)
         if result.output_dir is not None:
             self.staging.append(result.output_dir)
+        if _unavailable(result):
+            # Raised here, so a proposal's validation never shows an outage to the model.
+            raise _Outage(result.stderr)
         return result
 
     def built(self, ingest_id: str, spec: DatasetSpec, new: tuple[str, ...]) -> BuildReport:

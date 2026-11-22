@@ -20,6 +20,11 @@ export function isWaitingForUser(version: Pick<DatasetVersion, "status">): boole
   return WAITING.includes(version.status);
 }
 
+/** Waiting for the user, or left in a step by a job that ended: the user can drop it. */
+export function canDiscard(version: Pick<DatasetVersion, "status" | "stuck">): boolean {
+  return isWaitingForUser(version) || (isOpenVersion(version) && version.stuck === true);
+}
+
 /** The run id before which a divider shows, and the version that starts there. */
 export function versionDividers(
   runs: { id: string; dataset_version?: number }[],
@@ -60,6 +65,9 @@ function parseRate(version: DatasetVersion, table: string): number | null {
 
 /** One line for the status card. */
 export function statusLine(version: DatasetVersion): string {
+  if (version.stuck && isOpenVersion(version)) {
+    return "Checking the new files stopped before it finished. Discard them and add them again.";
+  }
   switch (version.status) {
     case "uploaded":
     case "checking":

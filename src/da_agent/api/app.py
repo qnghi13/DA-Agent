@@ -669,9 +669,17 @@ def get_dataset(dataset_id: str, conn: Db, caller: Caller) -> dict[str, Any]:
         "SELECT current_version FROM datasets WHERE id = %s", (record.id,)
     ).fetchone()
     opened = next((v for v in versions if v.status in OPEN_STATUSES), None)
+    view = None
+    if opened is not None:
+        # A version left in a worker step by a job that ended can only be discarded.
+        busy = opened.status in ("checking", "building")
+        stuck = busy and DatasetVersionStore(conn).stuck(
+            caller.workspace_id, record.id, opened.version
+        )
+        view = _version_view(opened) | {"stuck": stuck}
     return _dataset_view(record) | {
         "current_version": current[0] if current else None,
-        "open_version": _version_view(opened) if opened else None,
+        "open_version": view,
     }
 
 

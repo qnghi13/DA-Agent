@@ -159,6 +159,8 @@ export interface DatasetVersion {
   repairs: RepairChange[] | null;
   error: string | null;
   created_at: string;
+  /** On the dataset's open version: left in a worker step by a job that ended. */
+  stuck?: boolean;
 }
 
 export interface VersionApproval {

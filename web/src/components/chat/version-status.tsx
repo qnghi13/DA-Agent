@@ -2,7 +2,7 @@ import { AlertCircle, Check, Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type Api, type Dataset, type DatasetVersion, errorMessage } from "@/api";
 import { Button } from "@/components/ui/button";
-import { isOpenVersion, isWaitingForUser, statusLine } from "@/versions";
+import { canDiscard, isOpenVersion, isWaitingForUser, statusLine } from "@/versions";
 
 const POLL_MS = 3000;
 
@@ -84,7 +84,8 @@ export function VersionStatus({
   const [error, setError] = useState<string | null>(null);
   const open = isOpenVersion(version);
   const waiting = isWaitingForUser(version);
-  const failed = version.status === "failed";
+  const stuck = open && canDiscard(version) && !waiting;
+  const failed = version.status === "failed" || stuck;
 
   async function discard() {
     setError(null);
@@ -122,6 +123,11 @@ export function VersionStatus({
             Discard
           </Button>
         </>
+      )}
+      {stuck && (
+        <Button size="sm" variant="ghost" onClick={discard}>
+          Discard
+        </Button>
       )}
       {!open && (
         <Button size="icon" variant="ghost" className="size-7" aria-label="Dismiss" onClick={onDismiss}>

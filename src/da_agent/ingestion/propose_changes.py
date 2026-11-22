@@ -30,7 +30,7 @@ from da_agent.ingestion.versioning import (
     repair_diff,
 )
 from da_agent.llm.client import LLMClient, RunBudget
-from da_agent.llm.types import LLMError, LLMRequest, Message
+from da_agent.llm.types import AllRoutesFailedError, LLMError, LLMRequest, Message
 
 NEW_TABLES_PROMPT = """\
 
@@ -118,6 +118,8 @@ def propose_new_tables(
         request = LLMRequest(messages=messages, max_output_tokens=MAX_OUTPUT_TOKENS)
         try:
             response = llm.complete(request, run_id=run_id, budget=budget)
+        except AllRoutesFailedError:
+            raise  # an outage, for the caller to retry; never a proposal problem
         except LLMError as error:
             best.error = str(error)[:500]
             return best
@@ -239,6 +241,8 @@ def propose_repairs(
         request = LLMRequest(messages=messages, max_output_tokens=MAX_OUTPUT_TOKENS)
         try:
             response = llm.complete(request, run_id=run_id, budget=budget)
+        except AllRoutesFailedError:
+            raise  # an outage, for the caller to retry; never a repair problem
         except LLMError as error:
             return [], str(error)[:500]
         proposed, problems = _parse(response.content)

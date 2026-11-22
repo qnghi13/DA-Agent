@@ -2,13 +2,21 @@
 
 import json
 
+import pytest
+
 from da_agent.ingestion.build import BuildReport, ColumnBuild, ExcludedRule, TableBuild
 from da_agent.ingestion.propose_changes import propose_new_tables, propose_repairs
 from da_agent.ingestion.report import ColumnProfile, ColumnReport, IngestReport, TableReport
 from da_agent.ingestion.spec import ColumnSpec, DatasetSpec, RowCondition, RowRule, TableSpec
 from da_agent.ingestion.versioning import QualityProblem
 from da_agent.llm.client import CostLedger, LLMClient, Route, RunBudget
-from da_agent.llm.types import LLMRequest, LLMResponse, PermanentLLMError, Usage
+from da_agent.llm.types import (
+    AllRoutesFailedError,
+    LLMRequest,
+    LLMResponse,
+    PermanentLLMError,
+    Usage,
+)
 
 
 class ScriptedAdapter:
@@ -198,10 +206,10 @@ def repair_fixture(sensitive: bool = False):
     return spec, report, failing
 
 
-def repair(script: list, validate=lambda spec: [], sensitive: bool = False):
+def repair(script: list, validate=lambda spec: [], sensitive: bool = False, **options):
     spec, report, failing = repair_fixture(sensitive)
     llm, adapter = make_llm(script)
-    out = propose_repairs(report, failing, spec, llm, run_id="r1", validate=validate)
+    out = propose_repairs(report, failing, spec, llm, run_id="r1", validate=validate, **options)
     return out, adapter
 
 
@@ -256,10 +264,26 @@ def test_repairs_a_proposed_drop_overlap_never_survives() -> None:
     assert all("drop_overlap" not in c.path for c in changes)
 
 
-def test_repairs_llm_error_returns_error() -> None:
-    (changes, error), _ = repair([PermanentLLMError("down")])
+def test_repairs_budget_error_returns_error() -> None:
+    (changes, error), adapter = repair(
+        [reply("money")] * 2,
+        validate=lambda spec: ["still failing"],
+        budget=RunBudget(max_total_tokens=100),
+    )
 
     assert changes == [] and error
+    assert len(adapter.requests) == 1
+
+
+def test_repairs_a_provider_outage_goes_to_the_caller() -> None:
+    # The worker retries an outage; it is no problem for the review to show.
+    with pytest.raises(AllRoutesFailedError):
+        repair([PermanentLLMError("down")])
+
+
+def test_new_tables_a_provider_outage_goes_to_the_caller() -> None:
+    with pytest.raises(AllRoutesFailedError):
+        new_tables([PermanentLLMError("down")])
 
 
 def test_repairs_no_change_is_sent_back() -> None:

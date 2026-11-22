@@ -4,6 +4,7 @@ The fake Runner runs the real ingest and build in this process, so no Docker is 
 calls go to a scripted adapter. Needs Postgres (DA_AGENT_TEST_POSTGRES_URL).
 """
 
+import dataclasses
 import json
 import shutil
 import threading
@@ -25,6 +26,8 @@ from da_agent.ingestion.report import IngestReport
 from da_agent.ingestion.spec import ColumnSpec, DatasetSpec, OverlapDrop, TableSpec
 from da_agent.ingestion.versioning import RepairChange
 from da_agent.llm.client import CostLedger, LLMClient, ModelPrice, Route
+from da_agent.llm.types import TransientLLMError
+from da_agent.runner.client import UNAVAILABLE
 from da_agent.runner.runner import BuildResult, BuildRun, IngestResult, IngestRun
 from da_agent.storage.dataset_versions import DatasetVersionStore, VersionRecord
 from da_agent.storage.datasets import DatasetStore
@@ -39,6 +42,7 @@ from da_agent.telemetry.tracing import configure_tracing
 from da_agent.worker.datasets import FAILURES
 from da_agent.worker.limits import WorkspaceBudgets
 from da_agent.worker.versions import VersionHandler
+from da_agent.worker.worker import RetryableJobError
 from tests.integration.conftest import POSTGRES_URL
 from tests.integration.test_api import auth
 from tests.unit.test_prepare_pipeline import Scripted
@@ -660,3 +664,120 @@ def test_version_job_traces_its_steps(setup: Setup, new: dict[str, str], span: s
 
     names = {s.name for s in exporter.get_finished_spans()}
     assert {"version.ingest", "version.match", "version.build", span} <= names
+
+
+# --- Outages: the Runner or the model provider is down (retry, never a failed upload) ---
+
+NOT_STARTED = "the sandbox could not start (FileNotFoundError); try again later"
+
+
+def down(kind: type[IngestResult] | type[BuildResult], message: str) -> Any:
+    def call(request: Any) -> Any:
+        return kind(status="error", exit_code=None, stderr=message, report=None,
+                    output_dir=None, duration_seconds=0)  # fmt: skip
+
+    return call
+
+
+def last_attempt(job: Job) -> Job:
+    return dataclasses.replace(job, attempts=job.max_attempts)
+
+
+@pytest.mark.parametrize("message", [UNAVAILABLE, NOT_STARTED])
+@pytest.mark.parametrize("step", ["ingest", "build"])
+def test_a_runner_outage_is_retried_and_keeps_the_upload(
+    setup: Setup, monkeypatch: pytest.MonkeyPatch, message: str, step: str
+) -> None:
+    setup.add_files({"orders_2.csv": "id,total,day\n3,300,01/03/2026\n"})
+    kind = IngestResult if step == "ingest" else BuildResult
+    monkeypatch.setattr(setup.runner, step, down(kind, message))
+    llm, _ = fake_llm()
+
+    with pytest.raises(RetryableJobError):
+        setup.run(llm)
+
+    assert (setup.version().status, setup.version().error) == ("checking", None)
+    assert (setup.uploads / setup.folder / "orders_2.csv").exists()
+    assert setup.current_version() == 1
+
+
+def test_a_runner_outage_during_a_proposal_is_not_sent_to_the_model(
+    setup: Setup, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    setup.add_files({"customers.csv": "name,city\nAn,Hue\n"})
+    build = setup.runner.build
+    calls = []
+
+    def first_build_then_down(request: BuildRun) -> BuildResult:
+        calls.append(request)
+        if len(calls) == 1:
+            return build(request)  # the build with the current spec
+        return down(BuildResult, UNAVAILABLE)(request)  # validating the proposal
+
+    monkeypatch.setattr(setup.runner, "build", first_build_then_down)
+    llm, adapter = fake_llm(CUSTOMERS_REPLY, CUSTOMERS_REPLY, CUSTOMERS_REPLY)
+
+    with pytest.raises(RetryableJobError):
+        setup.run(llm)
+
+    assert len(adapter.requests) == 1
+    assert setup.version().status == "checking"
+    assert (setup.uploads / setup.folder / "customers.csv").exists()
+
+
+class DownAdapter:
+    """A provider that is down: every call fails as a transient error."""
+
+    provider = "down"
+
+    def __init__(self) -> None:
+        self.requests: list[Any] = []
+
+    def complete(self, request: Any, model: str) -> Any:
+        self.requests.append(request)
+        raise TransientLLMError("503 from the provider")
+
+
+def down_llm() -> LLMClient:
+    price = ModelPrice(input_per_million=1.0, output_per_million=1.0)
+    return LLMClient(
+        [Route(DownAdapter(), "m", price)], CostLedger(), sleep=lambda _: None, max_retries=0
+    )  # type: ignore[list-item]
+
+
+@pytest.mark.parametrize(
+    "new",
+    [
+        {"customers.csv": "name,city\nAn,Hue\n"},  # new table: the proposal
+        {"orders_2.csv": "id,total,day\n3,300,02/28/2026\n"},  # failing dates: the repair
+    ],
+)
+def test_a_model_provider_outage_is_retried_and_keeps_the_upload(
+    setup: Setup, new: dict[str, str]
+) -> None:
+    setup.add_files(new)
+
+    with pytest.raises(RetryableJobError):
+        setup.run(down_llm())
+
+    assert setup.version().status == "checking"
+    assert (setup.uploads / setup.folder / next(iter(new))).exists()
+
+
+@pytest.mark.parametrize("outage", ["runner", "model"])
+def test_an_outage_on_the_last_attempt_fails_the_version_with_a_readable_reason(
+    setup: Setup, monkeypatch: pytest.MonkeyPatch, outage: str
+) -> None:
+    setup.add_files({"customers.csv": "name,city\nAn,Hue\n"})
+    llm, _ = fake_llm(CUSTOMERS_REPLY)
+    if outage == "runner":
+        monkeypatch.setattr(setup.runner, "ingest", down(IngestResult, UNAVAILABLE))
+    else:
+        llm = down_llm()
+
+    outcome = setup.handler(llm)(last_attempt(setup.claim()), threading.Event())
+
+    version = setup.version()
+    assert outcome["status"] == "failed"
+    assert (version.status, version.error) == ("failed", FAILURES["unavailable"])
+    assert setup.current_version() == 1

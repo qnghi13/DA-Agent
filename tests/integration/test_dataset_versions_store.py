@@ -294,6 +294,44 @@ def test_discard_refuses_busy_and_finished_versions(
         store.discard(workspace, dataset_id, version)
 
 
+def _end_jobs(conn: psycopg.Connection, status: str) -> None:
+    conn.execute(
+        "UPDATE jobs SET status = %s, finished_at = now() WHERE kind = 'version'", (status,)
+    )
+
+
+@pytest.mark.parametrize("ended", ["failed", "succeeded", "cancelled"])
+@pytest.mark.parametrize("step", ["checking", "building"])
+def test_discard_frees_a_version_whose_job_ended_in_its_step(
+    conn: psycopg.Connection, workspace: UUID, step: str, ended: str
+) -> None:
+    # A worker killed on the last attempt, or a crash while marking: nothing will move it on.
+    dataset_id = ready_dataset(conn, workspace)
+    store = DatasetVersionStore(conn)
+    version = store.open_version(workspace, dataset_id, NEW, "v2", 20)
+    store.mark(dataset_id, version, step)
+    _end_jobs(conn, ended)
+
+    store.discard(workspace, dataset_id, version)
+
+    record = store.get(workspace, dataset_id, version)
+    assert record is not None and record.status == "discarded"
+
+
+def test_discard_waits_for_the_latest_job_of_the_version(
+    conn: psycopg.Connection, workspace: UUID
+) -> None:
+    dataset_id = ready_dataset(conn, workspace)
+    store = DatasetVersionStore(conn)
+    version = store.open_version(workspace, dataset_id, NEW, "v2", 20)
+    _end_jobs(conn, "succeeded")  # the check ended
+    store.mark(dataset_id, version, "proposed")
+    store.approve(workspace, dataset_id, version, {}, None, [])  # the build job is queued
+
+    with pytest.raises(DatasetStateError, match="still"):
+        store.discard(workspace, dataset_id, version)
+
+
 def test_another_workspace_never_sees_a_version(conn: psycopg.Connection, workspace: UUID) -> None:
     dataset_id = ready_dataset(conn, workspace)
     store = DatasetVersionStore(conn)

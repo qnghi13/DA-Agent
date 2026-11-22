@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DatasetVersion } from "./api";
 import {
   addedFiles,
+  canDiscard,
   earlierNewFilesText,
   isOlderVersion,
   isOpenVersion,
@@ -156,5 +157,22 @@ describe("earlierNewFilesText", () => {
   it("says nothing when the rows repeat only older data", () => {
     expect(earlierNewFilesText({ earlier_new_files: [] })).toBeNull();
     expect(earlierNewFilesText({})).toBeNull();
+  });
+});
+
+describe("a version left by a job that ended", () => {
+  it("says the check stopped and can be discarded", () => {
+    const stuck = version({ status: "checking", stuck: true });
+    expect(statusLine(stuck)).toBe(
+      "Checking the new files stopped before it finished. Discard them and add them again.",
+    );
+    expect(canDiscard(stuck)).toBe(true);
+  });
+
+  it("cannot be discarded while its job may still run", () => {
+    expect(canDiscard(version({ status: "building", stuck: false }))).toBe(false);
+    expect(canDiscard(version({ status: "checking" }))).toBe(false);
+    expect(canDiscard(version({ status: "needs_choice" }))).toBe(true);
+    expect(canDiscard(version({ status: "applied" }))).toBe(false);
   });
 });
