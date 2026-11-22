@@ -319,8 +319,8 @@ def _rejected(error: UploadRejectedError) -> HTTPException:
     return coded(400, "upload.unsupported_type", str(error), params)
 
 
-def _not_ready(status: str) -> HTTPException:
-    detail = f"the dataset is {status}, not ready"
+def _not_ready(status: str, detail: str | None = None) -> HTTPException:
+    detail = detail or f"the dataset is {status}, not ready"
     return coded(409, "dataset.not_ready", detail, {"status": status})
 
 
@@ -1398,7 +1398,7 @@ def create_query(
     if record is None:
         raise _not_found()
     if record.status != "ready":
-        raise _not_ready(record.status)
+        raise _not_ready(record.status, "the dataset is not ready")
     # A query runs in the sandbox and calls no model.
     _may_start_job(conn, caller, settings, calls_model=False)
     payload = {"run_id": str(job.id), "dataset_id": str(dataset_id), "sql": sql}

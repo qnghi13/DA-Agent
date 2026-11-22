@@ -111,6 +111,7 @@ def test_a_dataset_that_is_not_ready_is_409(
 
     assert response.status_code == 409
     assert response.json()["detail"] == "the dataset is not ready"
+    assert response.json()["code"] == "dataset.not_ready"
 
 
 def test_a_query_starts_when_the_model_budget_is_spent(
