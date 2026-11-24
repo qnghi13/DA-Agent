@@ -1,4 +1,4 @@
-import { AlertCircle, ArrowRight, Check, ChevronRight, Loader2 } from "lucide-react";
+import { AlertCircle, ArrowRight, Check, ChevronRight, Loader2, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { type Api, BUSY_STATUSES, type Dataset, type DatasetSpec } from "./api";
 import { errorMessage } from "@/i18n/errors";
@@ -14,7 +14,56 @@ import { datasetStatus } from "./status";
 
 const POLL_MS = 2000;
 
-export function DatasetView({
+export function DatasetView(
+  props: Parameters<typeof DatasetViewBody>[0] & { onDeleted: () => void },
+) {
+  const m = useT();
+  const { api, datasetId, onDeleted } = props;
+  const [name, setName] = useState(datasetId);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function remove() {
+    if (!window.confirm(m.dataset.confirmDelete(name))) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await api.deleteDataset(datasetId);
+      onDeleted();
+    } catch (caught) {
+      setDeleteError(errorMessage(caught, m));
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-center justify-end gap-3 border-b px-4 py-1.5">
+        {deleteError && (
+          <p role="alert" className="text-danger mr-auto text-sm">
+            {deleteError}
+          </p>
+        )}
+        <Button variant="ghost" size="sm" disabled={deleting} onClick={() => void remove()}>
+          <Trash2 />
+          {m.dataset.delete}
+        </Button>
+      </div>
+      <div className="min-h-0 flex-1">
+        <DatasetViewBody
+          api={api}
+          datasetId={datasetId}
+          onChange={(dataset) => {
+            setName(dataset.name);
+            props.onChange(dataset);
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function DatasetViewBody({
   api,
   datasetId,
   onChange,

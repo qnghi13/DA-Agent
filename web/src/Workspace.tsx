@@ -3,6 +3,7 @@ import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { type Api, type Dataset } from "./api";
 import { errorMessage } from "@/i18n/errors";
 import { useT } from "@/i18n/context";
+import { saveConversation } from "./memory";
 import { DatasetView } from "./DatasetView";
 import { Logo } from "./components/logo";
 import { StatusBadge } from "./components/status-badge";
@@ -162,6 +163,12 @@ export function Workspace({
               api={api}
               datasetId={selection.id}
               onChange={onDatasetChange}
+              onDeleted={() => {
+                const id = selection.id;
+                saveConversation(id, null);
+                setDatasets((current) => current.filter((d) => d.id !== id));
+                setSelection({ kind: "upload" });
+              }}
             />
           )}
         </main>

@@ -158,6 +158,9 @@ export const en = {
     },
     noDetails: "No details were recorded.",
     filesAndReport: "Files and build report",
+    delete: "Delete dataset",
+    confirmDelete: (name: string) =>
+      `Delete ${name}? Its files, every answer and chat about it, notes, and metrics are deleted for good.`,
   },
   summary: {
     tables: "Tables",

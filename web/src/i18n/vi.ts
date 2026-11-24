@@ -146,6 +146,9 @@ export const vi: Messages = {
     },
     noDetails: "Không có thông tin chi tiết.",
     filesAndReport: "Tệp và báo cáo dựng dữ liệu",
+    delete: "Xoá dữ liệu",
+    confirmDelete: (name: string) =>
+      `Xoá ${name}? Các tệp, mọi câu trả lời và cuộc trò chuyện về dữ liệu này, ghi chú và chỉ số sẽ bị xoá vĩnh viễn.`,
   },
   summary: {
     tables: "Bảng",

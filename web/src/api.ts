@@ -379,6 +379,11 @@ export class Api {
     return this.request(`/v1/memory/${encodeURIComponent(id)}/${decision}`, { method: "POST" });
   }
 
+  /** Starts deleting a dataset; it is gone from the list and 404 everywhere at once. */
+  deleteDataset(id: string): Promise<void> {
+    return this.request(`/v1/datasets/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
   deleteMemory(id: string): Promise<void> {
     return this.request(`/v1/memory/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
