@@ -37,7 +37,7 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
    guessed (run 97d7bc1f; a UI guardrail); `\uXXXX` escapes in SQL text (2 runs in all reports).
 ## Baselines (Groq `gpt-oss-20b`, before 559f88a): `regression` +53 (93/40/17), holdout +44.
 ## Done
-- ADRs 0001–0049, notes 01–25. Scorer 3000/3000; splits in `eval/splits/splits.json`.
+- ADRs 0001–0049, notes 01–26. Scorer 3000/3000; splits in `eval/splits/splits.json`.
 - Agent, sandbox (escape tests pass), backend over HTTP, reports; RAG cut (note 05).
   `datasets-dev/`: 24/24 ok, parse 99.98%+, exclusion precision and recall 100%.
 ## Not verified

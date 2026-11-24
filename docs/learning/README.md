@@ -34,3 +34,4 @@ Mỗi cột mốc có một ghi chú tiếng Việt, theo khung sau:
 | [23. SLO và cảnh báo](23-slo-alerts.md) | Harness: SLI, SLO, error budget, burn rate hai cửa sổ, Prometheus và Alertmanager |
 | [24. Thêm file vào dataset](24-dataset-versions.md) | Phiên bản dữ liệu, code quyết định và model chỉ đề xuất, hỏi khi trùng dòng |
 | [25. Giao diện tiếng Việt](25-vietnamese-ui.md) | i18n bằng từ điển có kiểu, trật tự từ, định dạng số, mã lỗi API, test chữ cứng |
+| [26. Baseline one-shot và lệnh gọi tool bị hỏng](26-baseline-garbled-tool-calls.md) | Baseline công bằng, phủ rộng hay chính xác, chẩn đoán bằng dữ liệu, định dạng harmony, sửa tên tool có giới hạn |
