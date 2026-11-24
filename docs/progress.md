@@ -18,9 +18,9 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
   (Groq +55). Then status variants and line-vs-header revenue (~12, checked by hand SQL), debt
   4, budget abstains 8 (SQLite functions, made-up columns). Semantic layer: private folder.
 ## Next step
-- **Dataset deletion** (ADR 0050, note 27, design doc): on `main` (not pushed);
-  real-app check pending (migration 0018; delete from the UI with a run in flight). Phoenix
-  traces and golden rerun reports are not deleted (threat model).
+- **Dataset deletion** (ADR 0050, note 27, design doc): on `main` (not pushed); checked in the
+  running app (UI delete, a run stopped mid-call, rows and folders gone, spend and audit kept).
+  Phoenix traces and golden rerun reports are not deleted (threat model).
 - **Garbled tool calls** (ADR 0049): adapter reads back `X<|channel|>...`, one
   retry per turn. `regression` +61 -> **+67** (102/35/13, $0.280), stops 7 -> 2, 64 read back.
 - **One-shot baseline** (ADR 0048): +40, then +42 after 0049 (its rejects are real `run_sql`

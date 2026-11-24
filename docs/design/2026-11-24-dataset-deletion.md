@@ -1,7 +1,7 @@
 # Delete a dataset
 
-**Status:** implemented and merged into `main` (2026-11-24); not yet checked
-in the running app. Recorded in [ADR 0050](../adr/0050-dataset-deletion.md). The user chose a
+**Status:** implemented and merged into `main` (2026-11-24); checked in the
+running app the same day. Recorded in [ADR 0050](../adr/0050-dataset-deletion.md). The user chose a
 background delete job (approach A).
 
 ## Why
