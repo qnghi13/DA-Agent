@@ -104,6 +104,13 @@ def _install(build_dir: Path, root: Path, name: str) -> None:
     shutil.rmtree(old, ignore_errors=True)
 
 
+def _remove_ingest(prepared: PreparedDataset) -> None:
+    """Remove the parsed upload this job's ingest left in staging. Nothing reads it after the job:
+    the build is installed and the summary is already in memory."""
+    if prepared.ingest.output_dir is not None:
+        shutil.rmtree(prepared.ingest.output_dir, ignore_errors=True)
+
+
 def _dataset_id(job: Job) -> UUID:
     try:
         return UUID(str(job.payload.get("dataset_id")))
@@ -168,12 +175,15 @@ class IngestHandler(_DatasetJob):
                 str(record.id), self.runner, self.llm, run_id=str(job.id),
                 description=record.description, budget=budget,
             )  # fmt: skip
-            report = self._finish(store, record, prepared)
-            if report is not None:
-                spec = (prepared.spec or DatasetSpec(tables=[])).model_dump(mode="json")
-                documents = prepared.ingest.report.documents if prepared.ingest.report else []
-                summary = _summary(prepared, report)
-                store.mark_proposed(record.id, spec, summary, documents)
+            try:
+                report = self._finish(store, record, prepared)
+                if report is not None:
+                    spec = (prepared.spec or DatasetSpec(tables=[])).model_dump(mode="json")
+                    documents = prepared.ingest.report.documents if prepared.ingest.report else []
+                    summary = _summary(prepared, report)
+                    store.mark_proposed(record.id, spec, summary, documents)
+            finally:
+                _remove_ingest(prepared)
         return {"status": prepared.status}
 
 
@@ -186,9 +196,12 @@ class BuildHandler(_DatasetJob):
                 raise PermanentJobError(f"the dataset is {record.status}, not waiting for a build")
             spec = DatasetSpec.model_validate(record.spec)
             prepared = rebuild_dataset(str(record.id), self.runner, spec)
-            report = self._finish(store, record, prepared)
-            if report is not None:
-                store.mark_ready(record.id, _summary(prepared, report))
+            try:
+                report = self._finish(store, record, prepared)
+                if report is not None:
+                    store.mark_ready(record.id, _summary(prepared, report))
+            finally:
+                _remove_ingest(prepared)
         return {"status": prepared.status}
 
 

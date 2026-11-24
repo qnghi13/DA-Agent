@@ -9,6 +9,7 @@ import os
 import signal
 import sys
 import threading
+import time
 from collections.abc import Mapping
 from dataclasses import asdict
 from typing import Any
@@ -35,6 +36,7 @@ from da_agent.worker.limits import WorkspaceBudgets
 from da_agent.worker.memory import MemoryLoader
 from da_agent.worker.queries import QueryHandler
 from da_agent.worker.runs import RunHandler
+from da_agent.worker.staging import purge_staging
 from da_agent.worker.versions import VersionHandler
 from da_agent.worker.worker import Worker, WorkerConfig
 
@@ -52,6 +54,8 @@ def build_worker(
     )  # fmt: skip
     for root in roots_to_make:
         root.mkdir(parents=True, exist_ok=True)
+    # Staging a crashed job left behind holds parsed rows; nothing links it to a dataset.
+    purge_staging(settings.staging_root, now=time.time())
     runner: SandboxRunner
     if settings.runner_url and settings.runner_token:
         # Deployed: only the Runner service holds the Docker socket (ADR 0024).

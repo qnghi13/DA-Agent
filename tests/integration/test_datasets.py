@@ -357,3 +357,55 @@ def test_a_deleting_dataset_cannot_be_approved(conn: psycopg.Connection, workspa
 
     with pytest.raises(DatasetNotFoundError):
         DatasetStore(conn).approve(workspace, d, None)
+
+
+class FailingBuildRunner(FakeRunner):
+    def build(self, request: BuildRun) -> BuildResult:
+        return BuildResult(
+            status="error", exit_code=1, stderr="boom", report=None, output_dir=None,
+            duration_seconds=1,
+        )  # fmt: skip
+
+
+def staging_runner(tmp_path: Path, cls: type[FakeRunner] = WritingRunner) -> FakeRunner:
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    return cls(staging, [report(), report()])
+
+
+def test_ingest_and_build_leave_no_staging_folder(
+    schema: str, conn: psycopg.Connection, workspace: UUID, tmp_path: Path
+) -> None:
+    runner = staging_runner(tmp_path)
+    dataset_id, _ = ingest(schema, conn, workspace, tmp_path, runner)
+    assert list((tmp_path / "staging").iterdir()) == []
+
+    edited = json.loads(GOOD.replace('"total"', '"amount"'))
+    assert DatasetStore(conn).approve(workspace, dataset_id, edited) == "building"
+    job = JobQueue(conn).claim("w", lease_seconds=30)
+    assert job is not None and job.kind == "build"
+    BuildHandler(**database(schema), runner=runner, datasets_root=tmp_path / "datasets")(
+        job, threading.Event()
+    )
+
+    assert list((tmp_path / "staging").iterdir()) == []
+
+
+def test_a_failed_build_leaves_no_staging_folder(
+    schema: str, conn: psycopg.Connection, workspace: UUID, tmp_path: Path
+) -> None:
+    runner = staging_runner(tmp_path, FailingBuildRunner)
+
+    dataset_id = DatasetStore(conn).create(workspace, "Shop", "")
+    JobQueue(conn).enqueue(workspace, "ingest", {"dataset_id": str(dataset_id)})
+    job = JobQueue(conn).claim("w", lease_seconds=30)
+    assert job is not None
+    client, _ = llm([GOOD] * 4)
+    handler = IngestHandler(
+        **database(schema), runner=runner, llm=client, datasets_root=tmp_path / "datasets"
+    )
+
+    outcome = handler(job, threading.Event())
+
+    assert outcome["status"] == "build_failed"
+    assert list((tmp_path / "staging").iterdir()) == []
