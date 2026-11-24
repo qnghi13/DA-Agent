@@ -1,6 +1,6 @@
 # Progress
 
-Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-24 (one-shot baseline)
+Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-24 (baseline, garbled tool calls)
 **Phase:** optimisation. Challenge rules: ≤15B params in total, offline Docker, 2×5090, 6 h,
 re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for the submission.
 
@@ -18,14 +18,14 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
   (Groq +55). Then status variants and line-vs-header revenue (~12, checked by hand SQL), debt
   4, budget abstains 8 (SQLite functions, made-up columns). Semantic layer: private folder.
 ## Next step
-- **One-shot baseline** (ADR 0048, d080067): `regression` +40 (76/36/38, $0.148) vs current agent
-  **+61** (98/37/15, $0.331, same day; was +53): the gap is mostly coverage. ADR 0047 no harm.
-- Portfolio polish committed (8dd6a96..ff8b2f8). Open: a tie dropped by `LIMIT 1` (needs eval);
-  Groq `invalid_tool_call` on the submit-only last turn (also the baseline's main abstain).
+- **Garbled tool calls** (ADR 0049, not committed): adapter reads back `X<|channel|>...`, one
+  retry per turn. `regression` +61 -> **+67** (102/35/13, $0.280), stops 7 -> 2, 64 read back.
+- **One-shot baseline** (ADR 0048): +40, then +42 after 0049 (its rejects are real `run_sql`
+  wishes); gap to the agent is mostly coverage. ADR 0047 no harm. Open: `LIMIT 1` ties.
 - **Vietnamese UI** on `main` (ADR 0046, note 25; not pushed): Tiếng Việt option, typed
   dictionaries in `web/src/i18n`, API error `code`/`params`. Column descriptions stay English.
 - **Answer language** on `main` (ADR 0047): a Vietnamese question gets `reason` and
-  `clarify_question` in Vietnamese, decided by code. Eval after it: +61 (above). Add files: on `main` (ADR 0045; minors in its list).
+  `clarify_question` in Vietnamese, decided by code. Add files: on `main` (ADR 0045).
 0. Metric definitions on `main` (ADR 0036, note 16): saved from an answer's SQL, matched by
    code; eval +1 -> +7 (20 dev questions, $0.095). Phase 2, other readings with the answer, was
    built on a branch and removed (ADR 0037): `gpt-oss-20b` never flagged the ambiguity (4 real
@@ -37,7 +37,7 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
    guessed (run 97d7bc1f; a UI guardrail); `\uXXXX` escapes in SQL text (2 runs in all reports).
 ## Baselines (Groq `gpt-oss-20b`, before 559f88a): `regression` +53 (93/40/17), holdout +44.
 ## Done
-- ADRs 0001–0048, notes 01–25. Scorer 3000/3000; splits in `eval/splits/splits.json`.
+- ADRs 0001–0049, notes 01–25. Scorer 3000/3000; splits in `eval/splits/splits.json`.
 - Agent, sandbox (escape tests pass), backend over HTTP, reports; RAG cut (note 05).
   `datasets-dev/`: 24/24 ok, parse 99.98%+, exclusion precision and recall 100%.
 ## Not verified
@@ -48,7 +48,7 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
 - No rows, questions, rulebook, or answers in any commit or image (organiser rules). When the
   challenge ends: delete `train/`, `eval/reports/`, and Docker volumes with eval data.
 
-## Spend so far: about $3.60 (agent runs $2.96, spec proposals $0.57, demos and e2e $0.05).
+## Spend so far: about $4.02 (agent runs $3.38, spec proposals $0.57, demos and e2e $0.05).
 - Demo video (2026-11-22, not in the repo): re-record once the open items under Next step are fixed.
 
 ## Watch out

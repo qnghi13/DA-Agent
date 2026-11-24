@@ -84,8 +84,9 @@ datasets, so it already has the data preparation that moved the score most. Groq
   73% of the agent's answers are right against 68% of the baseline's.
 - **Why the baseline abstains:** 36 of its 38 abstentions are turns without a usable call, 33 of
   them on the answer turn. Offered only `submit_answer`, the model called another tool, which
-  Groq rejects as malformed (23), or replied in text (10): it wanted another query. The agent's
-  extra turns and nudges recover these.
+  Groq rejects as malformed (23), or replied in text (10): it wanted another query. A recorded
+  rerun confirmed it: 23 of its 24 rejected calls were `run_sql`. The agent's extra turns
+  recover these.
 - **Where the gap is:** numbers (+21 against +37) and lists (6 abstained against 4). Percentages,
   dates, and text score about the same.
 - **What it means:** with prepared data and the rules in the prompt, one query already gets two
@@ -94,6 +95,30 @@ datasets, so it already has the data preparation that moved the score most. Groq
 - **Current code against `final-regression`:** +61 against +53, within the noise of one run each.
   The changes since (code-computed periods, shorthand expansion, answer language of ADR 0047)
   show no harm on this set.
+
+## Garbled tool calls (2026-11-24)
+
+[ADR 0049](../adr/0049-garbled-tool-calls.md): when Groq rejects a call whose name is an offered
+tool with `gpt-oss` format tokens attached (`submit_answer<|channel|>commentary`), code reads it
+back as that tool's call, and a malformed call is retried once within its turn. Same code
+otherwise, same day, `regression`, one run each, recorded.
+
+| Run | Correct | Wrong | Abstained | Score | Stopped on a malformed call | Calls | Cost |
+|---|---|---|---|---|---|---|---|
+| Agent, before | 98 | 37 | 15 | +61 | 7 | 797 | $0.331 |
+| Agent, after | 102 | 35 | 13 | **+67** | 2 | 747 | $0.280 |
+| One-shot baseline, before | 76 | 36 | 38 | +40 | 25 | 263 | $0.148 |
+| One-shot baseline, after | 75 | 33 | 42 | +42 | 24 | 263 | $0.137 |
+
+- **The mechanism works:** 64 calls were read back in the agent run, and runs stopped on a
+  malformed call fell from 7 to 2. The run used 50 fewer model calls, cost 15% less, and its mean
+  latency fell from 11.7 s to 9.1 s.
+- **The score:** +6 is within run-to-run noise (about 10 points), so the gain is the stops and
+  calls above, not a score claim.
+- **The baseline gains nothing:** its rejected calls are a real wish for another query, not a
+  garbled name, and it does not get the retry, which is agent behaviour.
+- **Still rejected in the agent run (29):** `json` 8, arguments that are not JSON 7, unparsable
+  output 6, `run_sql` not offered 4, `answer` 2, others 2. Most were saved by the retry.
 
 ## Metric definitions (2026-11-15)
 
