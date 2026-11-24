@@ -1,7 +1,7 @@
 // Run progress and answers: turning SSE events into the evidence trail, and answers into text.
 // Event shapes come from node_events in src/da_agent/agent/graph.py.
 
-import type { RunResult, RunStatus } from "./api";
+import type { RunResult, RunStatus, VegaLiteSpec } from "./api";
 import type { Messages } from "./i18n/en";
 import type { SseEvent } from "./sse";
 import type { Tone } from "./status";
@@ -170,7 +170,11 @@ export type FormattedAnswer =
   | { list: string[] }
   | { table: { columns: string[]; rows: string[][] } };
 
+// A timestamp at midnight, as DATE_TRUNC returns it: shown as the date it stands for.
+const MIDNIGHT = /^(\d{4}-\d{2}-\d{2})[ T]00:00:00(\.0+)?$/;
+
 function formatScalar(value: unknown, m: Messages): string {
+  if (typeof value === "string") return MIDNIGHT.exec(value)?.[1] ?? value;
   if (typeof value === "number") {
     return value.toLocaleString(m.locale, { maximumFractionDigits: 2 });
   }
@@ -199,4 +203,20 @@ export function formatAnswer(answer: Answer, m: Messages): FormattedAnswer {
     default:
       return { text: formatScalar(answer.value, m) };
   }
+}
+
+/**
+ * The charts a run drew, each once. A model sometimes draws the same chart again, perhaps with a
+ * better title: the repeat replaces the first, so the chart keeps its last title and place.
+ */
+export function runCharts(steps: RunResult["steps"]): VegaLiteSpec[] {
+  const byContent = new Map<string, VegaLiteSpec>();
+  for (const step of steps) {
+    if (!step.chart) continue;
+    const { title: _title, ...content } = step.chart as VegaLiteSpec & { title?: unknown };
+    const key = JSON.stringify(content);
+    byContent.delete(key);
+    byContent.set(key, step.chart);
+  }
+  return [...byContent.values()];
 }

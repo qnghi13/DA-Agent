@@ -5,6 +5,7 @@ import {
   formatAnswer,
   initialTrail,
   reduceTrail,
+  runCharts,
   toolLabel,
   stopReasonText,
 } from "./run";
@@ -84,6 +85,43 @@ describe("formatAnswer", () => {
     expect(formatAnswer({ kind: "unanswerable", reason: "no cost data" }, en)).toEqual({
       text: "No answer",
     });
+  });
+
+  it("drops a midnight time, as DATE_TRUNC returns it, but keeps a real time of day", () => {
+    const rows = [["2026-04-01 00:00:00", 9064000], ["2026-05-01T00:00:00", 7998000]];
+    expect(formatAnswer({ kind: "table", value: { columns: ["month", "revenue"], rows } }, en))
+      .toEqual({
+        table: { columns: ["month", "revenue"], rows: [["2026-04-01", "9,064,000"], ["2026-05-01", "7,998,000"]] },
+      });
+    expect(formatAnswer({ kind: "date", value: "2026-06-01 00:00:00" }, en)).toEqual({
+      text: "2026-06-01",
+    });
+    expect(formatAnswer({ kind: "text", value: "2026-06-01 09:30:00" }, en)).toEqual({
+      text: "2026-06-01 09:30:00",
+    });
+  });
+});
+
+describe("runCharts", () => {
+  const spec = (title: string, revenue: number) => ({
+    title,
+    mark: { type: "bar" },
+    data: { values: [{ channel: "web", revenue }] },
+  });
+
+  it("draws each chart once, under its last title, in the order drawn", () => {
+    const steps = [
+      { tool: "make_chart", ok: true, chart: spec("Revenue", 1) },
+      { tool: "run_sql", ok: true, chart: null },
+      { tool: "make_chart", ok: true, chart: spec("Orders", 2) },
+      { tool: "make_chart", ok: true, chart: spec("Revenue by channel", 1) },
+    ];
+
+    expect(runCharts(steps)).toEqual([spec("Orders", 2), spec("Revenue by channel", 1)]);
+  });
+
+  it("is empty without charts", () => {
+    expect(runCharts([{ tool: "run_sql", ok: true }])).toEqual([]);
   });
 });
 

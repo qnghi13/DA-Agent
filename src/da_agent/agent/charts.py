@@ -7,6 +7,7 @@ evaluate expressions (data URLs, transforms, signals). See docs/adr/0015.
 
 import datetime as dt
 import math
+import re
 from decimal import Decimal
 from typing import Any
 
@@ -20,6 +21,8 @@ MARKS = ("bar", "line", "point", "area", "arc")
 # Bounds state and the final result, which carry every spec of the run.
 MAX_CHARTS = 3
 MAX_TITLE_CHARS = 120
+# A timestamp at midnight, as DATE_TRUNC returns and the sandbox sends it: a date in disguise.
+MIDNIGHT = re.compile(r"([0-9]{4}-[0-9]{2}-[0-9]{2})[ T]00:00:00(\.0+)?")
 
 MAKE_CHART_SPEC = ToolSpec(
     name=MAKE_CHART,
@@ -54,15 +57,24 @@ class ChartError(ValueError):
 
 def _plain(value: Any) -> Any:
     """A database value as JSON: Decimal to float, dates to ISO text, anything odd to text."""
-    if value is None or isinstance(value, bool | int | str):
+    if isinstance(value, str):
+        return _plain_text(value)
+    if value is None or isinstance(value, bool | int):
         return value
     if isinstance(value, float):
         return value if math.isfinite(value) else None
     if isinstance(value, Decimal):
         return float(value) if value.is_finite() else None
-    if isinstance(value, dt.date | dt.datetime):
+    if isinstance(value, dt.datetime):
+        return _plain(value.isoformat(sep=" "))
+    if isinstance(value, dt.date):
         return value.isoformat()
     return str(value)
+
+
+def _plain_text(value: str) -> str:
+    midnight = MIDNIGHT.fullmatch(value)
+    return midnight.group(1) if midnight else value
 
 
 def _is_number(value: Any) -> bool:
@@ -79,9 +91,18 @@ def _field_type(values: list[Any]) -> str:
 
 
 def _time_unit(values: list[Any]) -> str | None:
-    """Months or days as the unit, so axis ticks fall on them rather than between."""
-    lengths = {len(v) for v in values if isinstance(v, str)}
-    return {7: "yearmonth", 10: "yearmonthdate"}.get(lengths.pop()) if len(lengths) == 1 else None
+    """Months or days as the unit, so axis ticks fall on them rather than between.
+
+    Dates that all fall on the first of a month, as DATE_TRUNC('month', ...) returns, are months.
+    """
+    texts = [v for v in values if isinstance(v, str)]
+    lengths = {len(v) for v in texts}
+    if len(lengths) != 1:
+        return None
+    length = lengths.pop()
+    if length == 10 and len(set(texts)) > 1 and all(v.endswith("-01") for v in texts):
+        return "yearmonth"
+    return {7: "yearmonth", 10: "yearmonthdate"}.get(length)
 
 
 def _field(name: str) -> str:
@@ -132,7 +153,13 @@ def chart_spec(arguments: dict[str, Any], result: QueryResult) -> dict[str, Any]
         if types[role] == "temporal":
             unit = _time_unit([v[names[role]] for v in values])
             if unit:
-                encoded["timeUnit"] = unit
+                # The column name, not Vega-Lite's "month (year-month)".
+                encoded["timeUnit"], encoded["title"] = unit, names[role]
+                if role == "x" and mark == "bar" and unit == "yearmonth":
+                    # One bar per month, under its label: on a time scale a bar runs from its
+                    # month's tick to the next, which few bars make plain. Vega-Lite allows a
+                    # band scale only for discrete types, so the field becomes ordinal.
+                    encoded["type"] = "ordinal"
         elif types[role] == "nominal" and role == "x" and mark != "arc":
             # Keep the order of the query rows: Vega-Lite would sort labels alphabetically.
             encoded["sort"] = None

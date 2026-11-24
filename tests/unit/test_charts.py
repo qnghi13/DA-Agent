@@ -135,6 +135,81 @@ def test_months_and_days_get_a_time_unit_so_ticks_fall_on_them() -> None:
     assert by_day["encoding"]["x"]["timeUnit"] == "yearmonthdate"
 
 
+@pytest.mark.parametrize(
+    "cells",
+    [
+        # DATE_TRUNC returns a timestamp; the sandbox sends it as text, a local engine as datetime.
+        ["2026-04-01 00:00:00", "2026-05-01 00:00:00", "2026-06-01 00:00:00"],
+        [dt.datetime(2026, 4, 1), dt.datetime(2026, 5, 1), dt.datetime(2026, 6, 1)],
+        ["2026-04-01", "2026-05-01", "2026-06-01"],
+    ],
+)
+def test_month_starts_are_months_not_days_or_timestamps(cells: list[Any]) -> None:
+    months = QueryResult(
+        columns=["month", "revenue"],
+        rows=[[cell, 100 * i] for i, cell in enumerate(cells)],
+        truncated=False,
+    )
+
+    built = spec({"mark": "line", "x": "month", "y": "revenue"}, months)
+
+    assert built["encoding"]["x"]["type"] == "temporal"
+    assert built["encoding"]["x"]["timeUnit"] == "yearmonth"
+    assert [v["month"] for v in built["data"]["values"]] == [
+        "2026-04-01",
+        "2026-05-01",
+        "2026-06-01",
+    ]
+
+
+def test_bars_over_months_sit_on_their_month_and_axes_keep_the_column_name() -> None:
+    months = QueryResult(
+        columns=["month", "revenue"],
+        rows=[["2026-04-01 00:00:00", 9], ["2026-05-01 00:00:00", 8]],
+        truncated=False,
+    )
+
+    bars = spec({"mark": "bar", "x": "month", "y": "revenue"}, months)
+    line = spec({"mark": "line", "x": "month", "y": "revenue"}, months)
+
+    # One band per month, labelled by it, rather than a bar from one month's tick to the next.
+    assert bars["encoding"]["x"] == {
+        "field": "month",
+        "type": "ordinal",
+        "timeUnit": "yearmonth",
+        "title": "month",
+    }
+    assert line["encoding"]["x"]["type"] == "temporal"
+    assert line["encoding"]["x"]["title"] == "month"
+
+
+def test_midnight_timestamps_on_other_days_are_days() -> None:
+    days = QueryResult(
+        columns=["day", "n"],
+        rows=[["2026-01-01 00:00:00", 1], ["2026-01-02 00:00:00", 2]],
+        truncated=False,
+    )
+
+    built = spec({"mark": "line", "x": "day", "y": "n"}, days)
+
+    assert built["encoding"]["x"]["timeUnit"] == "yearmonthdate"
+    assert built["data"]["values"][1]["day"] == "2026-01-02"
+
+
+def test_timestamps_with_a_time_of_day_keep_it() -> None:
+    hours = QueryResult(
+        columns=["at", "n"],
+        rows=[["2026-01-01 09:00:00", 1], ["2026-01-01 10:30:00", 2]],
+        truncated=False,
+    )
+
+    built = spec({"mark": "line", "x": "at", "y": "n"}, hours)
+
+    assert built["encoding"]["x"]["type"] == "temporal"
+    assert "timeUnit" not in built["encoding"]["x"]
+    assert built["data"]["values"][1]["at"] == "2026-01-01 10:30:00"
+
+
 def test_labels_keep_the_order_of_the_query_rows() -> None:
     built = spec({"mark": "bar", "x": "channel", "y": "revenue"})
 

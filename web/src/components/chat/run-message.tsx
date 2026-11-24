@@ -31,6 +31,7 @@ import {
   initialTrail,
   isRunActive,
   reduceTrail,
+  runCharts,
   stopReasonText,
   toolLabel,
 } from "@/run";
@@ -267,7 +268,7 @@ function Answer({
   const m = useT();
   const result = run.result;
   const summary = answerSummary(run.status, result, m);
-  const charts = (result?.steps ?? []).flatMap((step) => (step.chart ? [step.chart] : []));
+  const charts = runCharts(result?.steps ?? []);
   const text = answerText(run, m);
   const [copied, setCopied] = useState(false);
   const question = result?.question_for_user ?? trail.question;
