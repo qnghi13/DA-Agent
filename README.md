@@ -53,8 +53,8 @@ questions in English and Vietnamese, and see the SQL behind each answer.*
 What measuring taught: the largest gain came from data preparation, not from the agent. Removing
 double entries that code can prove took one shop's score from −11 to +13, while the LangGraph
 workflow scored the same as a plain tool loop. A one-shot text-to-SQL prompt on the same prepared
-data scores +40 against the agent's +53, at 40% of the cost: the agent answers more questions,
-not more accurately. The workflow stays for checkpoints and verification, not for score.
+data scores +40 against the agent's +61, at 45% of the cost: the agent mostly answers more
+questions, not better ones. The workflow stays for checkpoints and verification, not for score.
 
 ## Quick start
 
@@ -181,11 +181,13 @@ rules; it is not in this repository and is not redistributed.
 |---|---|---|---|---|---|
 | 150 dev questions (24 shops) | 62% | 27% | 11% | +53 | $0.38 |
 | 150 holdout questions (6 unseen shops, run once) | 60% | 31% | 9% | +44 | $0.30 |
+| Same 150 dev questions, current agent (2026-11-24) | 65% | 25% | 10% | +61 | $0.33 |
 | Same 150 dev questions, one-shot text-to-SQL baseline | 51% | 24% | 25% | +40 | $0.15 |
 
 Holdout is within noise of dev. The baseline reads the same prepared data and the whole
-rulebook, writes one query, and answers from it: it is as accurate when it answers (68% against
-70%), but abstains more often, mostly because the model wanted a second query. Details, the history of changes, and caveats are in
+rulebook, writes one query, and answers from it. The agent adds +21, mostly by answering more
+questions (135 against 112) rather than by answering them better (73% of answers right against
+68%): the baseline abstains when the model wants a second query. Details, the history of changes, and caveats are in
 [docs/eval](docs/eval/README.md).
 
 ## Documentation

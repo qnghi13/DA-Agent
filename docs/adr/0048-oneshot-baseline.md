@@ -29,10 +29,9 @@ answer over many turns.
 
 **Consequences:**
 - A question costs two calls and about 13,000 tokens, most of them the rulebook.
-- First run (2026-11-24, `regression`, $0.148): +40 (76 / 36 / 38) against the agent's +53. As
-  accurate when it answers; most abstentions are an answer turn where the model wanted another
-  query. Details in `docs/eval/README.md`.
-- The agent's published score comes from older code (`final-regression`, 2026-11-09). The gap
-  between the two is the headline number, so it should be large next to run-to-run noise before
-  it is called a result: two single runs of 150 questions differ by about 10 points (one standard
-  deviation) by chance, scaled from the pass^k runs of ADR 0040.
+- First run (2026-11-24, `regression`, $0.148): +40 (76 / 36 / 38) against +61 for the agent on
+  the same code and day ($0.331). Most of the gap is coverage; most baseline abstentions are an
+  answer turn where the model wanted another query. Details in `docs/eval/README.md`.
+- The gap is the headline number, so it is compared with run-to-run noise: two single runs of
+  150 questions differ by about 10 points (one standard deviation) by chance, scaled from the
+  pass^k runs of ADR 0040. The agent is rerun on the same code and day for the comparison.

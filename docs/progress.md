@@ -18,15 +18,14 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
   (Groq +55). Then status variants and line-vs-header revenue (~12, checked by hand SQL), debt
   4, budget abstains 8 (SQLite functions, made-up columns). Semantic layer: private folder.
 ## Next step
-- **One-shot baseline** (ADR 0048, not committed): `regression` +40 (76/36/38, $0.148) vs agent
-  +53, same accuracy when answering. Next: rerun the current agent on `regression` (old code).
+- **One-shot baseline** (ADR 0048, d080067): `regression` +40 (76/36/38, $0.148) vs current agent
+  **+61** (98/37/15, $0.331, same day; was +53): the gap is mostly coverage. ADR 0047 no harm.
 - Portfolio polish committed (8dd6a96..ff8b2f8). Open: a tie dropped by `LIMIT 1` (needs eval);
   Groq `invalid_tool_call` on the submit-only last turn (also the baseline's main abstain).
 - **Vietnamese UI** on `main` (ADR 0046, note 25; not pushed): Tiếng Việt option, typed
   dictionaries in `web/src/i18n`, API error `code`/`params`. Column descriptions stay English.
 - **Answer language** on `main` (ADR 0047): a Vietnamese question gets `reason` and
-  `clarify_question` in Vietnamese, decided by code. **Not measured on eval** (user's call):
-  compare totals at the next eval run. Add files: on `main` (ADR 0045; minors in its list).
+  `clarify_question` in Vietnamese, decided by code. Eval after it: +61 (above). Add files: on `main` (ADR 0045; minors in its list).
 0. Metric definitions on `main` (ADR 0036, note 16): saved from an answer's SQL, matched by
    code; eval +1 -> +7 (20 dev questions, $0.095). Phase 2, other readings with the answer, was
    built on a branch and removed (ADR 0037): `gpt-oss-20b` never flagged the ambiguity (4 real
@@ -49,7 +48,7 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
 - No rows, questions, rulebook, or answers in any commit or image (organiser rules). When the
   challenge ends: delete `train/`, `eval/reports/`, and Docker volumes with eval data.
 
-## Spend so far: about $3.27 (agent runs $2.63, spec proposals $0.57, demos and e2e $0.05).
+## Spend so far: about $3.60 (agent runs $2.96, spec proposals $0.57, demos and e2e $0.05).
 - Demo video (2026-11-22, not in the repo): re-record once the open items under Next step are fixed.
 
 ## Watch out
