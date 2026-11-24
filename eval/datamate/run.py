@@ -10,6 +10,7 @@ With a local model server, --workers runs several questions at the same time (do
 With --datasets-dir, every shop is a prepared clean dataset and SQL runs in the sandbox (ADR 0011).
 --agent graph runs the LangGraph workflow (ADR 0013); --checkpoint-url keeps its checkpoints in
 Postgres, so a killed run continues each unfinished question where it stopped.
+--agent oneshot runs the text-to-SQL baseline: one query, then an answer (ADR 0048).
 
 The run never reads answers.jsonl. Scoring happens afterwards in a separate scorer process.
 """
@@ -45,6 +46,7 @@ from da_agent.reports.html import render_report
 from da_agent.reports.metric import Definition
 from da_agent.runner.runner import Runner, RunnerConfig
 from da_agent.telemetry.tracing import configure_tracing
+from eval.baselines.oneshot import run_oneshot
 from eval.datamate.adapter import (
     ShopContext,
     UnsupportedShopError,
@@ -71,7 +73,8 @@ class RunConfig:
     max_total_tokens: int | None = None
     delay_seconds: float = 0.0
     max_consecutive_failures: int = 3
-    agent: Literal["loop", "graph"] = "loop"
+    # "oneshot" is the text-to-SQL baseline the agent is measured against (ADR 0048).
+    agent: Literal["loop", "graph", "oneshot"] = "loop"
     # Offer make_chart and write an HTML report per question to output_dir/reports. Changes the
     # tools the model sees, so a run with reports is not comparable with the baselines.
     reports: bool = False
@@ -442,6 +445,16 @@ class _Run:
                     charts=config.reports,
                     agent_version=config.manifest["version"] if config.manifest else None,
                 )
+            elif config.agent == "oneshot":
+                result = run_oneshot(
+                    question["question"],
+                    as_of=question["as_of_date"],
+                    dataset=shop.dataset,
+                    documents=documents,
+                    llm=self.llm,
+                    run_id=id_,
+                    limits=self.limits,
+                )
             else:
                 result = run_agent(
                     question["question"],
@@ -586,7 +599,7 @@ def main() -> int:
         help="prepared datasets, queried in the sandbox; without it, pos.sqlite runs in process",
     )
     parser.add_argument("--image", default="da-agent-sandbox:dev")
-    parser.add_argument("--agent", choices=["loop", "graph"], default="loop")
+    parser.add_argument("--agent", choices=["loop", "graph", "oneshot"], default="loop")
     parser.add_argument(
         "--checkpoint-url", help="Postgres URL; graph runs then survive a killed eval process"
     )

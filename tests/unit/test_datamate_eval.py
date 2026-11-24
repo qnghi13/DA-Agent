@@ -1069,3 +1069,26 @@ def test_the_run_deadline_reaches_the_agent_and_the_manifest(
 def test_live_replay_misses_need_a_replay(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="--replay"):
         eval_routes("groq:m", {}, tmp_path, record=False, replay_dir=None, replay_miss="live")
+
+
+def test_the_oneshot_baseline_runs_through_the_same_harness(data_dir: Path, tmp_path: Path) -> None:
+    query = ToolCall(
+        id="q", name="run_sql", arguments={"sql": "SELECT count(*) AS n FROM khach_hang"}
+    )
+    script = [
+        LLMResponse(tool_calls=[query], usage=Usage(input_tokens=40, output_tokens=10)),
+        answer(1),
+    ]
+    llm, ledger, adapter = make_llm(script)
+    questions = read_jsonl(data_dir / "questions.jsonl")[:1]
+
+    metrics = run_questions(
+        questions, data_dir, llm, ledger, RunConfig(tmp_path / "out", agent="oneshot")
+    )
+
+    assert metrics["stop_reasons"] == {"answered": 1}
+    assert read_jsonl(tmp_path / "out" / "submission.jsonl")[0]["answer"] == 1
+    assert [[tool.name for tool in r.tools] for r in adapter.requests] == [
+        ["run_sql"],
+        ["submit_answer"],
+    ]

@@ -63,6 +63,34 @@ code can prove took B from −11 to +13. The graph matched the simpler loop's to
 sets (+31 each) for about 13% more tokens. It is kept for checkpoints, resumption, and
 verification routing, not for score.
 
+## Baseline: one-shot text-to-SQL (2026-11-24)
+
+What the agent adds over a plain prompt ([ADR 0048](../adr/0048-oneshot-baseline.md)): the
+model reads the schema, the whole rulebook, the date, and the question, writes one query, and
+answers from its result. Two calls, no retry, no verification. It runs on the same prepared
+datasets, so it already has the data preparation that moved the score most. Groq
+`gpt-oss-20b`, `regression`, one run.
+
+| Run | Correct | Wrong | Abstained | Score | Cost | Mean latency |
+|---|---|---|---|---|---|---|
+| One-shot baseline | 76 (51%) | 36 (24%) | 38 (25%) | +40 | $0.148 | 4.9 s |
+| Agent, `final-regression` (2026-11-09) | 93 (62%) | 40 (27%) | 17 (11%) | +53 | $0.378 | 9.1 s |
+
+- **Equally accurate when it answers:** 68% of the baseline's answers are right, against 70% of
+  the agent's. The agent's gain is coverage: it answers 133 questions, the baseline 112.
+- **Why the baseline abstains:** 36 of its 38 abstentions are turns without a usable call, 33 of
+  them on the answer turn. Offered only `submit_answer`, the model called another tool, which
+  Groq rejects as malformed (23), or replied in text (10): it wanted another query. The agent's
+  extra turns and nudges recover these.
+- **Where the gap is:** numbers (+21 against +33) and lists (6 abstained against 1). Percentages,
+  dates, and text score the same.
+- **How sure:** +13 is about 1.3 standard deviations of the difference between two single runs
+  (about 10 points on 150 questions, from the pass^k runs), and the agent ran on older code. It
+  is a direction, not a measurement. The agent costs 2.6 times as much per question.
+- **What it means:** with prepared data and the rules in the prompt, a good model gets most of
+  the way in one query. The agent earns its cost by answering more questions, not by answering
+  them better; it is also what makes runs resumable and checked.
+
 ## Metric definitions (2026-11-15)
 
 What saved definitions ([ADR 0036](../adr/0036-metric-definitions.md)) change, on 20 `regression`
