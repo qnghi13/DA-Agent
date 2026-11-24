@@ -17,7 +17,7 @@ import json
 import operator
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
-from typing import Annotated, Any, TypedDict
+from typing import Annotated, Any, Protocol, Required, TypedDict
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
@@ -82,8 +82,9 @@ REPAIR_NOTICE = (
 
 
 class AgentState(TypedDict, total=False):
-    question: str
-    as_of: str
+    # The input of every run; the other keys appear as nodes write them.
+    question: Required[str]
+    as_of: Required[str]
     clarifications: Annotated[list[str], operator.add]
     plan_steps: list[str]
     clarify_question: str
@@ -124,7 +125,8 @@ class AgentContext:
     stop: StopToken = field(default_factory=StopToken)
 
 
-Node = Callable[[AgentState, Runtime[AgentContext]], dict[str, Any]]
+class Node(Protocol):
+    def __call__(self, state: AgentState, runtime: Runtime[AgentContext]) -> dict[str, Any]: ...
 
 
 def _traced(name: str, node: Node) -> Node:
@@ -251,7 +253,7 @@ def agent_node(state: AgentState, runtime: Runtime[AgentContext]) -> dict[str, A
 def tools_node(state: AgentState, runtime: Runtime[AgentContext]) -> dict[str, Any]:
     """Run the calls of the last model turn. Every tool only reads, so a resume may repeat this."""
     context = runtime.context
-    last = Message.model_validate(state["messages"][-1])
+    last = Message.model_validate(state.get("messages", [])[-1])
     replies: list[dict[str, Any]] = []
     steps: list[dict[str, Any]] = []
     proposed: dict[str, Any] | None = None
@@ -376,7 +378,7 @@ def _after_plan(state: AgentState, runtime: Runtime[AgentContext]) -> str:
 def _after_agent(state: AgentState) -> str:
     if state.get("stop_reason"):
         return "abstain"
-    last = state["messages"][-1]
+    last = state.get("messages", [])[-1]
     return "tools" if last.get("tool_calls") else "agent"
 
 

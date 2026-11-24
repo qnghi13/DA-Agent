@@ -17,6 +17,7 @@ from typing import Any
 
 import sqlglot
 from sqlglot import exp
+from sqlglot.errors import SqlglotError
 from sqlglot.optimizer.normalize_identifiers import normalize_identifiers
 
 from da_agent.agent.verify import date_bound
@@ -62,12 +63,12 @@ class Definition:
 def _parse(sql: str, dialect: str) -> exp.Select | None:
     try:
         tree = sqlglot.parse_one(sql, read=dialect)
-    except sqlglot.errors.SqlglotError:
+    except SqlglotError:
         return None
     return tree if isinstance(tree, exp.Select) else None
 
 
-def _canonical(node: exp.Expression, dialect: str) -> str:
+def _canonical(node: exp.Expr, dialect: str) -> str:
     node = node.copy()
     for column in node.find_all(exp.Column):
         column.set("table", None)
@@ -78,14 +79,14 @@ def _canonical(node: exp.Expression, dialect: str) -> str:
     return normalize_identifiers(node, dialect=dialect).sql(dialect=dialect, identify=True)
 
 
-def _unwrap(node: exp.Expression) -> exp.Expression:
+def _unwrap(node: exp.Expr) -> exp.Expr:
     """The value under an alias and wrappers that only change how it is shown."""
     while isinstance(node, (exp.Alias, exp.Coalesce, *TRANSPARENT)):
         node = node.this
     return node
 
 
-def _conjuncts(node: exp.Expression | None) -> list[exp.Expression]:
+def _conjuncts(node: exp.Expr | None) -> list[exp.Expr]:
     if node is None:
         return []
     parts, stack = [], [node]
@@ -100,11 +101,11 @@ def _conjuncts(node: exp.Expression | None) -> list[exp.Expression]:
     return parts
 
 
-def _is_period(node: exp.Expression) -> bool:
+def _is_period(node: exp.Expr) -> bool:
     return isinstance(node, DATE_CONDITIONS) and date_bound(node) is not None
 
 
-def _split(node: exp.Expression) -> tuple[exp.Expression, list[exp.Expression]]:
+def _split(node: exp.Expr) -> tuple[exp.Expr, list[exp.Expr]]:
     """An aggregate with its condition taken out: SUM(x) FILTER (WHERE c) and
     SUM(CASE WHEN c THEN x ELSE 0 END) are both (SUM(x), [c]). Anything else is (node, [])."""
     if isinstance(node, exp.Filter) and isinstance(node.this, _AGGREGATE_TYPES):
@@ -177,7 +178,7 @@ def definition_columns(definition: Definition, dialect: str = "duckdb") -> set[t
     for text in [definition.measure, *definition.filters]:
         try:
             node = sqlglot.parse_one(text, read=dialect)
-        except sqlglot.errors.SqlglotError:
+        except SqlglotError:
             continue
         columns |= {(definition.table.lower(), c.name.lower()) for c in node.find_all(exp.Column)}
     return columns

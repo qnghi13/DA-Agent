@@ -653,13 +653,15 @@ def main() -> int:
             manifest=manifest,
             replay=cassette,
         )
-        opener = None
+        opener: Callable[[str], ShopContext] | None = None
         if args.datasets_dir:
             datasets = args.datasets_dir.resolve()
             runner = Runner(RunnerConfig(image=args.image, datasets_root=datasets))
 
-            def opener(shop_id: str) -> ShopContext:
+            def open_prepared(shop_id: str) -> ShopContext:
                 return open_prepared_shop(args.data_dir, shop_id, datasets, runner)
+
+            opener = open_prepared
 
         with ExitStack() as stack:
             saver = None

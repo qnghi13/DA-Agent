@@ -57,6 +57,14 @@ select = [
 "tests/**" = ["S101", "S603", "S607"]
 ".claude/hooks/**" = ["S603", "S607"]
 
+[tool.pyright]
+# Code that runs: the service, the eval harness, and the sandbox. Tests use fakes in place of
+# real types, so they are not checked yet.
+include = ["src", "eval", "sandbox", "scripts"]
+pythonVersion = "3.12"
+venvPath = "."
+venv = ".venv"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

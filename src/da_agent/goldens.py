@@ -84,7 +84,10 @@ def _positive(text: str) -> int:
 def _worker_handler(settings: Settings, conn: psycopg.Connection) -> RunHandler:
     from da_agent.worker.__main__ import build_worker
 
-    return build_worker(settings, os.environ, ledger_conn=conn).handlers["run"]
+    handler = build_worker(settings, os.environ, ledger_conn=conn).handlers["run"]
+    if not isinstance(handler, RunHandler):
+        raise TypeError("the worker's run handler is not a RunHandler")
+    return handler
 
 
 def _cases_view(cases: Sequence[GoldenCase]) -> list[dict[str, Any]]:

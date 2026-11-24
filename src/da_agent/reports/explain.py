@@ -14,13 +14,14 @@ from typing import Any
 
 import sqlglot
 from sqlglot import exp
+from sqlglot.errors import SqlglotError
 
 from da_agent.agent.answer import AgentResult
 from da_agent.agent.verify import date_bound, evidence_indices
 
 logger = logging.getLogger(__name__)
 
-AGGREGATES: dict[type[exp.Expression], str] = {
+AGGREGATES: dict[type[exp.Expr], str] = {
     exp.Sum: "sum",
     exp.Count: "count",
     exp.Avg: "avg",
@@ -49,7 +50,7 @@ EXTRACT_UNITS = {
     "month": "month_of_year",
     "dow": "weekday",
 }
-FUNCTION_UNITS: dict[type[exp.Expression], str] = {
+FUNCTION_UNITS: dict[type[exp.Expr], str] = {
     exp.Year: "year",
     exp.Quarter: "quarter",
     exp.Month: "month_of_year",
@@ -156,7 +157,7 @@ class _Reader:
     # -- values -------------------------------------------------------------------------------
 
     @staticmethod
-    def _literal(node: exp.Expression) -> Any:
+    def _literal(node: exp.Expr) -> Any:
         while isinstance(node, exp.Cast | exp.TryCast | exp.Paren):
             node = node.this
         if isinstance(node, exp.Neg) and isinstance(node.this, exp.Literal):
@@ -171,7 +172,7 @@ class _Reader:
             return int(number) if number.is_integer() and "." not in str(node.this) else number
         raise _Unexplained("condition")
 
-    def _unit(self, node: exp.Expression) -> tuple[exp.Expression, str | None]:
+    def _unit(self, node: exp.Expr) -> tuple[exp.Expr, str | None]:
         """A time bucket around a column, as (column node, unit)."""
         if isinstance(node, exp.DateTrunc | exp.TimestampTrunc):
             unit = str(node.args.get("unit") or "").lower().strip("'")
@@ -200,7 +201,7 @@ class _Reader:
 
     # -- expressions --------------------------------------------------------------------------
 
-    def _resolve(self, node: exp.Expression) -> exp.Expression:
+    def _resolve(self, node: exp.Expr) -> exp.Expr:
         """An ordinal or a select alias in GROUP BY or ORDER BY, as the selected expression."""
         items = self.select.expressions
         if isinstance(node, exp.Literal) and not node.is_string:
@@ -213,7 +214,7 @@ class _Reader:
                     return item
         return node
 
-    def expr(self, node: exp.Expression, name: str | None = None) -> dict[str, Any]:
+    def expr(self, node: exp.Expr, name: str | None = None) -> dict[str, Any]:
         if isinstance(node, exp.Alias):
             return self.expr(node.this, node.alias)
         if isinstance(node, exp.Window):
@@ -253,7 +254,7 @@ class _Reader:
         unit_node, unit = self._unit(node)
         return self._column(unit_node, unit, name)
 
-    def _column(self, node: exp.Expression, unit: str | None, name: str | None) -> dict[str, Any]:
+    def _column(self, node: exp.Expr, unit: str | None, name: str | None) -> dict[str, Any]:
         while isinstance(node, exp.Paren):
             node = node.this
         if not isinstance(node, exp.Column) or isinstance(node.this, exp.Star):
@@ -261,7 +262,7 @@ class _Reader:
         found = {"kind": "column", "column": self._column_label(node), "unit": unit}
         return found | ({"name": name} if name is not None else {})
 
-    def _aggregate(self, node: exp.Expression, func: str, name: str | None) -> dict[str, Any]:
+    def _aggregate(self, node: exp.Expr, func: str, name: str | None) -> dict[str, Any]:
         argument = node.this
         distinct = isinstance(argument, exp.Distinct)
         if distinct:
@@ -307,10 +308,10 @@ class _Reader:
 
     # -- conditions ---------------------------------------------------------------------------
 
-    def conditions(self, node: exp.Expression | None) -> list[dict[str, Any]]:
+    def conditions(self, node: exp.Expr | None) -> list[dict[str, Any]]:
         if node is None:
             return []
-        parts: list[exp.Expression] = []
+        parts: list[exp.Expr] = []
         stack = [node]
         while stack:
             current = stack.pop()
@@ -355,7 +356,7 @@ class _Reader:
             text = end.isoformat()
             current["values"][1] = text if high is None else min(high, text)
 
-    def _subject(self, node: exp.Expression) -> tuple[dict[str, Any], str]:
+    def _subject(self, node: exp.Expr) -> tuple[dict[str, Any], str]:
         """The left side of a condition, and how it matches: lower() or upper() ignores case,
         strip_accents() ignores accents."""
         case = accents = False
@@ -376,7 +377,7 @@ class _Reader:
         }[(case, accents)]
         return self.expr(node), match
 
-    def _condition(self, node: exp.Expression) -> dict[str, Any]:
+    def _condition(self, node: exp.Expr) -> dict[str, Any]:
         if node.find(exp.Subquery, exp.Select):
             raise _Unexplained("subquery")
         if isinstance(node, exp.Not):
@@ -417,7 +418,7 @@ class _Reader:
                 return self._compare(node, op)
         raise _Unexplained("condition")
 
-    def _compare(self, node: exp.Expression, op: str) -> dict[str, Any]:
+    def _compare(self, node: exp.Expr, op: str) -> dict[str, Any]:
         left, right = node.this, node.expression
         value: Any
         try:
@@ -432,7 +433,7 @@ class _Reader:
         subject, match = self._subject(left)
         return self._filter(subject, op, [value], match)
 
-    def _like(self, subject: dict[str, Any], node: exp.Expression, match: str) -> dict:
+    def _like(self, subject: dict[str, Any], node: exp.Expr, match: str) -> dict:
         pattern = self._literal(node.expression)
         if not isinstance(pattern, str):
             raise _Unexplained("condition")
@@ -446,8 +447,8 @@ class _Reader:
     def _either(self, node: exp.Or) -> dict[str, Any]:
         """a = 1 OR a = 2 reads as a in (1, 2), and LIKEs of one kind on one column as one filter
         with several values. Any other OR is left to the SQL tab."""
-        parts: list[exp.Expression] = []
-        stack: list[exp.Expression] = [node]
+        parts: list[exp.Expr] = []
+        stack: list[exp.Expr] = [node]
         while stack:
             current = stack.pop()
             if isinstance(current, exp.Paren):
@@ -460,13 +461,13 @@ class _Reader:
         first = read[0]
         same = all(r["of"] == first["of"] and r["match"] == first["match"] for r in read)
         ops = {r["op"] for r in read}
+        if not same:
+            raise _Unexplained("condition")
         if ops <= {"equals", "in"}:
             op = "in"
         elif len(ops) == 1 and ops <= {"contains", "starts_with", "ends_with"}:
             op = first["op"]
         else:
-            same = False
-        if not same:
             raise _Unexplained("condition")
         values = [v for r in read for v in r["values"]]
         return self._filter(first["of"], op, values, first["match"])
@@ -498,9 +499,7 @@ class _Reader:
             found.append({"table": self.labels.table(name), "kind": kind, "on": pairs or []})
         return found
 
-    def _join_pairs(
-        self, on: exp.Expression | None, using: list[exp.Expression] | None
-    ) -> list[list[str]]:
+    def _join_pairs(self, on: exp.Expr | None, using: list[exp.Expr] | None) -> list[list[str]]:
         if using:
             return [[self._label_by_name(u.name)] * 2 for u in using]
         if on is None:
@@ -582,7 +581,7 @@ def explain_sql(sql: str, labels: Labels | None = None, dialect: str = "duckdb")
     """What a query does, as facts a person can read without knowing SQL."""
     try:
         tree = sqlglot.parse_one(sql, read=dialect)
-    except sqlglot.errors.SqlglotError:
+    except SqlglotError:
         return Explanation(unexplained=["parse"])
     if isinstance(tree, exp.SetOperation):
         return Explanation(unexplained=["set_operation"])

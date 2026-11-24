@@ -65,7 +65,7 @@ def _write_csv(path: Path, sheet: Sheet) -> None:
 def _write_xlsx(path: Path, sheets: dict[str, Sheet]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     book = openpyxl.Workbook()
-    book.remove(book.active)
+    book.remove(book.worksheets[0])  # the default empty sheet
     for title, sheet in sheets.items():
         target = book.create_sheet(title)
         target.append(sheet.header)

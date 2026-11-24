@@ -44,7 +44,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 from da_agent.agent.answer import AgentResult, result_from_json
 from da_agent.agent.verify import evidence_indices
-from da_agent.api.errors import coded, install_error_handler
+from da_agent.api.errors import Params, coded, install_error_handler
 from da_agent.api.versions import (
     ApprovalInvalidError,
     checked_choices,
@@ -315,7 +315,7 @@ def _save(upload: UploadFile, path: Path, limit: int) -> int:
 
 
 def _rejected(error: UploadRejectedError) -> HTTPException:
-    params = {"file": error.filename, "allowed": error.allowed}
+    params: Params = {"file": error.filename, "allowed": error.allowed}
     return coded(400, "upload.unsupported_type", str(error), params)
 
 
@@ -748,8 +748,8 @@ def add_files(
     replaced = {name for name in replaces or [] if name}
     older = {str(f.get("stored_as")) for f in current.files}
     if replaced - older:
-        names = ", ".join(sorted(replaced - older))
-        raise HTTPException(status_code=400, detail=f"not files of the dataset: {names}")
+        unknown = ", ".join(sorted(replaced - older))
+        raise HTTPException(status_code=400, detail=f"not files of the dataset: {unknown}")
     kept = [f for f in current.files if f.get("stored_as") not in replaced]
     if len(kept) + len(files) > settings.max_files:
         raise coded(
@@ -853,7 +853,11 @@ def approve_version(
     entries = found.changes or []
     try:
         choices = checked_choices(
-            entries, body.choices, body.replace_files, store.current(key).files, body.apply_anyway
+            entries,
+            dict[str, str](body.choices),
+            body.replace_files,
+            store.current(key).files,
+            body.apply_anyway,
         )
         edits = checked_edits(entries, body.spec)
         repairs = checked_repairs(body.repairs, found.repairs or [], record.spec)
@@ -1540,8 +1544,10 @@ def _alert_view(alert: Any) -> dict[str, Any] | None:
     if not isinstance(alert, dict) or not isinstance(alert.get("labels"), dict):
         return None
     labels = {str(key): str(value) for key, value in alert["labels"].items()}
-    annotations = alert.get("annotations") if isinstance(alert.get("annotations"), dict) else {}
-    status = alert.get("status") if isinstance(alert.get("status"), dict) else {}
+    annotations = alert.get("annotations")
+    annotations = annotations if isinstance(annotations, dict) else {}
+    status = alert.get("status")
+    status = status if isinstance(status, dict) else {}
     return {
         "name": labels.pop("alertname", "unknown"),
         "severity": labels.pop("severity", "ticket"),

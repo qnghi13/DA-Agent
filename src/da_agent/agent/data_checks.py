@@ -20,6 +20,7 @@ from dataclasses import dataclass
 import sqlglot
 from opentelemetry import trace
 from sqlglot import exp
+from sqlglot.errors import ParseError
 
 from da_agent.agent.tools import Dataset
 from da_agent.storage.sqlite_dataset import QueryError
@@ -33,7 +34,7 @@ Schema = dict[str, set[str]]
 
 @dataclass(frozen=True)
 class _Select:
-    tree: exp.Expression
+    tree: exp.Expr
     node: exp.Select
     # Aliases of the base tables it reads, mapped to table names.
     sources: dict[str, str]
@@ -60,7 +61,7 @@ def _sources(select: exp.Select, schema: Schema, ctes: set[str]) -> dict[str, st
 def _selects(sql: str, dialect: str, schema: Schema) -> Iterator[_Select]:
     try:
         tree = sqlglot.parse_one(sql, read=dialect)
-    except sqlglot.errors.ParseError:
+    except ParseError:
         return
     ctes = {cte.alias_or_name.lower() for cte in tree.find_all(exp.CTE)}
     for select in tree.find_all(exp.Select):
@@ -78,7 +79,7 @@ def _owner(column: exp.Column, sources: dict[str, str], schema: Schema) -> str |
     return owners[0] if len(owners) == 1 else None
 
 
-def _probe_sql(select: _Select, columns: list[exp.Expression], dialect: str) -> str:
+def _probe_sql(select: _Select, columns: list[exp.Expr], dialect: str) -> str:
     """The SELECT with its FROM, JOIN, and WHERE, and the given columns."""
     probe = select.node.copy()
     for key in DROPPED:
@@ -110,7 +111,7 @@ class _Aggregate:
     aliases: frozenset[str]
 
 
-def _read_by(aggregate: exp.Expression, sources: dict[str, str], schema: Schema) -> frozenset[str]:
+def _read_by(aggregate: exp.Expr, sources: dict[str, str], schema: Schema) -> frozenset[str]:
     """The aliases an aggregate reads; empty when one cannot be placed on a base table."""
     if isinstance(aggregate.this, exp.Star):
         return frozenset(sources)
@@ -144,7 +145,7 @@ def _fanout_problem(
     select: _Select, aggregates: list[_Aggregate], dataset: Dataset, dialect: str
 ) -> str | None:
     aliases = sorted(select.sources)
-    columns: list[exp.Expression] = []
+    columns: list[exp.Expr] = []
     for n, alias in enumerate(aliases):
         rowid = exp.column("rowid", table=alias)
         columns.append(exp.alias_(exp.Count(this=rowid), f"seen_{n}"))
@@ -188,7 +189,7 @@ def fanout_problems(sqls: list[str], dataset: Dataset, dialect: str) -> list[str
 # Unreadable values
 
 
-def _in_quarantine(alias: str, table: str, column: str) -> exp.Expression:
+def _in_quarantine(alias: str, table: str, column: str) -> exp.Expr:
     """Counts the rows whose value of the column could not be read."""
     quarantined = exp.and_(
         exp.column("table_name", table="__q").eq(exp.Literal.string(table)),

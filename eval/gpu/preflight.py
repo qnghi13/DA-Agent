@@ -133,7 +133,7 @@ def main() -> int:
 
     ledger = CostLedger()
     llm = LLMClient(build_routes(args.routes, os.environ), ledger, max_retries=1)
-    report = {"tool_call": check_tool_call(llm)}
+    report: dict[str, Any] = {"tool_call": check_tool_call(llm)}
     report["repeatable"] = check_repeatable(llm, args.repeats, args.busy)
     report["throughput"] = measure_throughput(llm, args.requests, args.concurrency)
     report["cost_usd"] = ledger.totals().cost_usd

@@ -23,6 +23,7 @@ from typing import Any
 
 import sqlglot
 from sqlglot import exp
+from sqlglot.errors import ParseError
 
 from da_agent.agent.answer import AgentAnswer, QueryRecord
 from da_agent.llm.types import Message
@@ -103,7 +104,7 @@ def traces(value: float, numbers: list[float], percent: bool) -> bool:
     return any(abs(value - n) <= tolerance for n in candidates)
 
 
-def _text(node: exp.Expression) -> str | None:
+def _text(node: exp.Expr) -> str | None:
     while isinstance(node, exp.Cast | exp.TryCast):
         node = node.this
     if isinstance(node, exp.Literal) and node.is_string:
@@ -111,7 +112,7 @@ def _text(node: exp.Expression) -> str | None:
     return None
 
 
-def _date(node: exp.Expression) -> tuple[dt.date, bool] | None:
+def _date(node: exp.Expr) -> tuple[dt.date, bool] | None:
     """A date literal, and whether it is exactly midnight (so `< d` ends the day before)."""
     text = _text(node)
     match = DATE_TEXT.match(text) if text else None
@@ -125,7 +126,7 @@ def _date(node: exp.Expression) -> tuple[dt.date, bool] | None:
     return day, midnight
 
 
-def _column(node: exp.Expression) -> str | None:
+def _column(node: exp.Expr) -> str | None:
     while isinstance(node, DATE_WRAPPERS):
         node = node.this
     return node.name.lower() if isinstance(node, exp.Column) else None
@@ -140,7 +141,7 @@ def _span(unit: str, first: dt.date) -> tuple[dt.date, dt.date]:
     return first, first
 
 
-def _formatted(node: exp.Expression, value: str) -> tuple[str, dt.date, dt.date] | None:
+def _formatted(node: exp.Expr, value: str) -> tuple[str, dt.date, dt.date] | None:
     """strftime(col, '%Y-%m') = '2025-03' in either argument order."""
     if not isinstance(node, exp.TimeToStr):
         return None
@@ -155,7 +156,7 @@ def _formatted(node: exp.Expression, value: str) -> tuple[str, dt.date, dt.date]
     return (column, *_span(unit, parsed[0])) if parsed else None
 
 
-def _truncated(node: exp.Expression, day: dt.date) -> tuple[str, dt.date, dt.date] | None:
+def _truncated(node: exp.Expr, day: dt.date) -> tuple[str, dt.date, dt.date] | None:
     """date_trunc('month', col) = DATE '2025-06-01'."""
     if not isinstance(node, exp.TimestampTrunc | exp.DateTrunc):
         return None
@@ -168,7 +169,7 @@ def _truncated(node: exp.Expression, day: dt.date) -> tuple[str, dt.date, dt.dat
 FLIPPED = {exp.GT: exp.LT, exp.GTE: exp.LTE, exp.LT: exp.GT, exp.LTE: exp.GTE, exp.EQ: exp.EQ}
 
 
-def date_bound(node: exp.Expression) -> tuple[str, dt.date | None, dt.date | None] | None:
+def date_bound(node: exp.Expr) -> tuple[str, dt.date | None, dt.date | None] | None:
     """One date condition as (column, start, end)."""
     if isinstance(node, exp.Between):
         column, low, high = _column(node.this), _date(node.args["low"]), _date(node.args["high"])
@@ -202,7 +203,7 @@ def query_periods(sql: str, dialect: str) -> list[Period]:
     the SQL does not parse."""
     try:
         tree = sqlglot.parse_one(sql, read=dialect)
-    except sqlglot.errors.ParseError:
+    except ParseError:
         return []
     scoped: dict[tuple[int, str], list[dt.date | None]] = {}
     for node in tree.find_all(exp.Between, exp.EQ, exp.GT, exp.GTE, exp.LT, exp.LTE):
@@ -320,7 +321,7 @@ def _reads_data(sql: str, dialect: str) -> bool:
     """Whether a query reads a table. One that does not only does arithmetic on typed numbers."""
     try:
         tree = sqlglot.parse_one(sql, read=dialect)
-    except sqlglot.errors.ParseError:
+    except ParseError:
         return True  # The engine ran it, so it is not ours to judge here.
     return tree.find(exp.Table) is not None
 

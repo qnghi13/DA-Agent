@@ -33,8 +33,8 @@ from da_agent.storage.versions import mark_resumed_from
 from da_agent.worker.limits import WorkspaceBudgets
 from da_agent.worker.worker import RetryableJobError
 
-# Returns the dataset and its documents, only if the dataset belongs to the workspace.
-DatasetResolver = Callable[[UUID, str], tuple[Dataset, list[Document]]]
+# Returns the dataset at a version and its documents, only if the dataset belongs to the workspace.
+DatasetResolver = Callable[[UUID, str, int], tuple[Dataset, list[Document]]]
 # Returns the run's memory as documents: the notes in its snapshot and its earlier turns. The
 # second argument maps each table to its visible columns, so stale metrics are left out.
 MemoryResolver = Callable[[Job, dict[str, set[str]]], list[Document]]

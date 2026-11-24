@@ -75,7 +75,12 @@ def _same_table(expected: Any, actual: Any) -> bool:
         return False
     columns, other_columns = expected.get("columns"), actual.get("columns")
     rows, other_rows = expected.get("rows"), actual.get("rows")
-    if not all(isinstance(item, list) for item in (columns, other_columns, rows, other_rows)):
+    if not (
+        isinstance(columns, list)
+        and isinstance(other_columns, list)
+        and isinstance(rows, list)
+        and isinstance(other_rows, list)
+    ):
         return False
     names = [str(name).strip().casefold() for name in columns]
     other_names = [str(name).strip().casefold() for name in other_columns]

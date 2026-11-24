@@ -165,9 +165,12 @@ def _run_fork(settings: Settings, job: Job, fork_id: str) -> dict[str, Any]:
     """Run the fork as the worker would run the job: same dataset, documents, routes, and
     limits. Imported here, since only a fork needs model routes and the sandbox."""
     from da_agent.worker.__main__ import build_worker
+    from da_agent.worker.runs import RunHandler
 
     with connect(settings.database_url, schema=settings.schema) as conn:
         handler = build_worker(settings, os.environ, ledger_conn=conn).handlers["run"]
+        if not isinstance(handler, RunHandler):
+            raise TypeError("the worker's run handler is not a RunHandler")
         return handler.fork(job, fork_id)
 
 

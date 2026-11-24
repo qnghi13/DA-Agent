@@ -101,9 +101,9 @@ class DatasetVersionStore:
 
     def _fetch(self, where: str, params: tuple[Any, ...]) -> list[VersionRecord]:
         with self._conn.cursor(row_factory=class_row(VersionRecord)) as cursor:
-            return cursor.execute(  # type: ignore[call-overload]
+            return cursor.execute(
                 # Columns are a constant and `where` is built in this module, never from a caller.
-                f"SELECT {_COLUMNS} FROM dataset_versions v WHERE {where} ORDER BY version",  # noqa: S608
+                f"SELECT {_COLUMNS} FROM dataset_versions v WHERE {where} ORDER BY version",  # noqa: S608  # pyright: ignore[reportArgumentType]
                 params,
             ).fetchall()
 
@@ -167,7 +167,7 @@ class DatasetVersionStore:
                 )
         except errors.UniqueViolation as error:
             raise DatasetStateError("a version is already open") from error
-        return version
+        return number
 
     def get(self, workspace_id: UUID, dataset_id: UUID, version: int) -> VersionRecord | None:
         found = self._fetch(
