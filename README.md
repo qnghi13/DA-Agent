@@ -1,5 +1,10 @@
 # DA-Agent
 
+[![CI](https://github.com/qnghi13/DA-Agent/actions/workflows/ci.yml/badge.svg)](https://github.com/qnghi13/DA-Agent/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/tag/qnghi13/DA-Agent?label=release)](https://github.com/qnghi13/DA-Agent/pkgs/container/da-agent)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
+
 An open-source agent that analyses uploaded CSV, Excel, and SQLite files. You upload data with a
 free-form description and ask questions. It answers with results you can trace back to the queries
 that produced them.
@@ -25,6 +30,30 @@ questions in English and Vietnamese, and see the SQL behind each answer.*
     <td>The operator dashboard: queue, outcomes, latency, model errors, cost</td>
   </tr>
 </table>
+
+## Highlights
+
+- **Measured on unseen data.** On 150 questions from 6 shops held out from development and run
+  once, 60% correct and 9% abstained, at about $0.002 and 6 seconds (median) per question with
+  `gpt-oss-20b`. A wrong answer costs a point, so the agent abstains rather than guess
+  ([Evaluation](#evaluation)).
+- **Generated code never runs on the host.** File parsing and every SQL query run in containers
+  without network or secrets, behind a read-only SQL guard. Escape attempts are tests.
+- **Answers are checked by code, not by another model.** Numbers must come from query results,
+  periods must fall inside the data, and joins must not double-count. A failed check gets two
+  repairs, then the agent abstains.
+- **Crash-safe and budgeted.** Every model turn is a Postgres checkpoint, so a killed worker's
+  run resumes without repeating steps. Token and money limits per run and workspace, a circuit
+  breaker for model providers, cancel, and deadlines.
+- **Operable.** OpenTelemetry traces, a cost ledger per model call, an audit log, an operator
+  dashboard, and Prometheus SLO alerts.
+- **Decisions on record.** 47 [architecture decision records](docs/adr/README.md), a
+  [threat model](docs/threat-model.md), and about 1,800 Python and 160 web tests in CI.
+
+What measuring taught: the largest gain came from data preparation, not from the agent. Removing
+double entries that code can prove took one shop's score from −11 to +13, while the LangGraph
+workflow scored the same as a plain tool loop. The workflow stays for checkpoints and
+verification, not for score.
 
 ## Quick start
 
@@ -63,12 +92,21 @@ add `-v` to delete all data.
 
 ## How it works
 
+```mermaid
+flowchart LR
+    browser["Browser<br/>React UI"] -- "HTTP, SSE" --> api["API<br/>FastAPI"]
+    api --> pg[("Postgres<br/>jobs, checkpoints,<br/>audit log, costs")]
+    worker["Worker<br/>ingestion, LangGraph agent"] -- "claims jobs" --> pg
+    worker --> llm["LLMClient"] --> providers(("Model<br/>providers"))
+    worker -- "one SQL query" --> runner["Runner"] --> sandbox["Sandbox<br/>DuckDB, no network,<br/>read-only dataset"]
+```
+
+The same system drawn as one bench, with numbers that follow a question through it:
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-dark.svg" />
   <img src="docs/images/architecture-light.svg" alt="The system drawn as one bench: a terminal cabled to an intake box, a four-drawer card cabinet, a carriage on rails cabled to a teleprinter with an antenna, and an airlock that passes one lit SQL card into a sealed glass box holding a clamped data cartridge." />
 </picture>
-
-The system as one bench. The numbers follow a question through it:
 
 1. **Browser** (the terminal): the React UI, talking to the API over HTTP and SSE (two cables).
 2. **API** (the intake box): FastAPI. It checks sign-in, scopes each request to a workspace, and
@@ -149,6 +187,7 @@ Holdout is within noise of dev. Details, the history of changes, and caveats are
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [Operations](docs/operations.md): running without Compose, time travel, golden reruns, alerts
 - [Evaluation results](docs/eval/README.md)
 - [Threat model](docs/threat-model.md)
 - [Decision records](docs/adr/README.md)
@@ -164,10 +203,12 @@ Requires [uv](https://docs.astral.sh/uv/) and Python 3.12.
 uv sync
 uv run pytest
 uv run ruff check .
+uv run pyright          # src, eval, sandbox, and scripts
 ```
 
 Tests that need Postgres are skipped unless `DA_AGENT_TEST_POSTGRES_URL` is set; each test runs in
-its own schema.
+its own schema. To run the backend without Compose, and for the operator tools, see
+[Operations](docs/operations.md).
 
 The project was built with Claude Code. `CLAUDE.md`, `.claude/settings.json`, the hooks, agents,
 and the `tdd` and `agent-architecture` skills are part of the repo. Third-party skills are not
@@ -177,67 +218,6 @@ committed; restore them if you want the same setup (needs Node):
 npx skills experimental_install          # the versions pinned in skills-lock.json
 playwright-cli install --skills          # from @playwright/cli, for browser checks of the UI
 ```
-
-## Running the backend without Compose
-
-For development. Without `DA_AGENT_RUNNER_URL` the worker starts sandbox containers itself, so it
-needs Docker and the sandbox image; Compose runs a separate Runner service instead
-([ADR 0024](docs/adr/0024-runner-service.md)). Postgres holds jobs, checkpoints, and costs.
-
-```bash
-docker build -f sandbox/Dockerfile -t da-agent-sandbox:dev .
-export DA_AGENT_DATABASE_URL=postgresql://USER:PASSWORD@localhost:5432/da_agent
-export DA_AGENT_DATA_DIR=/path/to/data            # uploads, staging, and built datasets
-export DA_AGENT_ROUTES=groq:openai/gpt-oss-20b    # the worker only; GROQ_API_KEY too
-
-uv run python -m da_agent.admin create-workspace "My shop"   # prints a key once
-DA_AGENT_PUBLIC_URL=http://localhost:5173 uv run python -m da_agent.api --port 8000
-uv run python -m da_agent.admin login-link --workspace WORKSPACE_ID   # for the browser
-uv run python -m da_agent.worker
-```
-
-Then, with the key as a bearer token:
-
-```bash
-curl -H "Authorization: Bearer $KEY" -F name=Sales -F files=@sales.csv localhost:8000/v1/datasets
-curl -H "Authorization: Bearer $KEY" localhost:8000/v1/datasets/$DATASET        # review the spec
-curl -H "Authorization: Bearer $KEY" -X POST -H 'Content-Type: application/json' -d '{}' \
-     localhost:8000/v1/datasets/$DATASET/approve
-curl -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
-     -d "{\"dataset_id\": \"$DATASET\", \"question\": \"Total revenue in June?\"}" localhost:8000/v1/runs
-curl -N -H "Authorization: Bearer $KEY" localhost:8000/v1/runs/$RUN/events     # live progress
-curl -H "Authorization: Bearer $KEY" localhost:8000/v1/runs/$RUN/report > report.html
-curl -H "Authorization: Bearer $KEY" "localhost:8000/v1/runs?dataset_id=$DATASET"  # history
-```
-
-Operators can read and rerun a run's checkpoints with the worker's settings
-([ADR 0042](docs/adr/0042-cancel-deadline-time-travel.md)); a fork calls the model:
-
-```bash
-uv run python -m da_agent.timetravel list $RUN               # every step of a run
-uv run python -m da_agent.timetravel show $RUN $CHECKPOINT   # the state at one step
-uv run python -m da_agent.timetravel fork $RUN $CHECKPOINT   # run on from there in a new thread
-```
-
-Answers users rated 👍 become golden cases, which operators rerun after a change
-([ADR 0043](docs/adr/0043-feedback-goldens.md)); `run` spends only with `--yes`:
-
-```bash
-uv run python -m da_agent.goldens list --workspace $WORKSPACE      # cases and runs rated 👎
-uv run python -m da_agent.goldens run --workspace $WORKSPACE --yes # same / changed / error
-```
-
-Compose also runs Prometheus (`127.0.0.1:9090`) and Alertmanager (`127.0.0.1:9093`) for SLOs and
-alerts ([ADR 0044](docs/adr/0044-slo-alerts.md)). Set `DA_AGENT_ALERT_WEBHOOK_URL` in `.env` to
-receive alerts; rules are in `deploy/prometheus/rules/` and their tests run with `uv run pytest`.
-
-Traces go to any OpenTelemetry (OTLP) endpoint set in `DA_AGENT_OTLP_ENDPOINT`, such as a local
-Phoenix (`http://127.0.0.1:6006/v1/traces`). Setting `DA_AGENT_TRACE_UI_URL=http://127.0.0.1:6006`
-on the API adds an "Open trace" link to each run in the UI. Phoenix shows every workspace's
-traces, so set it only where the operator is the only user.
-
-Every setting is listed in [`src/da_agent/config.py`](src/da_agent/config.py). The interactive API
-reference is at `/docs`.
 
 ## Running the web UI
 
