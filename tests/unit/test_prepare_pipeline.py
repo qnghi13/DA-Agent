@@ -322,3 +322,37 @@ def test_tables_missing_from_the_spec_are_deduplicated_too(tmp_path: Path) -> No
     [table] = runner.specs[-1].tables
     assert (table.source, table.name, table.dedupe) == ("don", "orders", "exact")
     assert prepared.deduplicated == ["orders"]
+
+
+def test_a_failure_after_ingest_leaves_no_folder_in_staging(tmp_path: Path) -> None:
+    import pytest
+
+    class Exploding(FakeRunner):
+        def build(self, request: BuildRun) -> BuildResult:
+            if self.specs:
+                raise RuntimeError("worker lost")
+            return super().build(request)
+
+    runner = Exploding(tmp_path, [build_report(parsed=60)])
+    client, _ = llm([GOOD, GOOD])
+
+    with pytest.raises(RuntimeError):
+        prepare_dataset("up", runner, client, run_id="r")  # type: ignore[arg-type]
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_a_failed_rebuild_leaves_no_folder_in_staging(tmp_path: Path) -> None:
+    import pytest
+
+    from da_agent.ingestion.pipeline import rebuild_dataset
+    from da_agent.ingestion.spec import DatasetSpec
+
+    class Exploding(FakeRunner):
+        def build(self, request: BuildRun) -> BuildResult:
+            raise RuntimeError("worker lost")
+
+    with pytest.raises(RuntimeError):
+        rebuild_dataset("up", Exploding(tmp_path, []), DatasetSpec(tables=[]))  # type: ignore[arg-type]
+
+    assert list(tmp_path.iterdir()) == []

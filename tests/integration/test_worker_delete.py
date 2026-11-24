@@ -436,3 +436,64 @@ def test_a_build_dir_outside_its_root_is_never_removed(
     assert (outside / "data.bin").exists()
     assert full_dataset.roots.uploads.is_dir() and full_dataset.roots.datasets.is_dir()
     assert all(path.exists() for path in full_dataset.other.paths)
+
+
+def test_a_partial_rmtree_that_leaves_files_retries_and_keeps_the_rows(
+    conn: psycopg.Connection, full_dataset: Setup, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import shutil
+
+    from da_agent.worker import deletion
+    from da_agent.worker.worker import RetryableJobError
+
+    real = shutil.rmtree
+
+    def partial(path: Any, *args: Any, **kwargs: Any) -> None:
+        if Path(path).parent != full_dataset.roots.uploads:
+            return real(path, *args, **kwargs)
+        # Python 3.12 can raise this for an inner entry while the tree is still there.
+        raise FileNotFoundError(str(path))
+
+    monkeypatch.setattr(deletion.shutil, "rmtree", partial)
+
+    with pytest.raises(RetryableJobError) as caught:
+        handler(full_dataset)(claim_delete(conn), threading.Event())
+
+    assert str(full_dataset.roots.uploads) not in str(caught.value)
+    assert count(conn, "SELECT count(*) FROM datasets WHERE id = %s", full_dataset.doomed.id) == 1
+
+
+@pytest.mark.security
+@pytest.mark.parametrize(("column", "root"), [("build_dir", "datasets"), ("upload_dir", "uploads")])
+def test_a_version_row_naming_another_datasets_folder_is_skipped(
+    conn: psycopg.Connection, full_dataset: Setup, column: str, root: str
+) -> None:
+    victim = full_dataset.other.id
+    folder = getattr(full_dataset.roots, root) / str(victim)
+    assert folder.is_dir()
+    conn.execute(
+        f"UPDATE dataset_versions SET {column} = %s WHERE dataset_id = %s AND version = 2",  # noqa: S608
+        (str(victim), full_dataset.doomed.id),
+    )
+
+    handler(full_dataset)(claim_delete(conn), threading.Event())
+
+    assert (folder / "data.bin").exists()
+    assert all(path.exists() for path in full_dataset.other.paths)
+
+
+@pytest.mark.parametrize("step", ["_delete_checkpoints", "_delete_rows"])
+def test_a_database_outage_in_a_step_is_retried(
+    conn: psycopg.Connection, full_dataset: Setup, monkeypatch: pytest.MonkeyPatch, step: str
+) -> None:
+    from da_agent.worker.worker import RetryableJobError
+
+    delete = handler(full_dataset)
+
+    def outage(*args: Any) -> None:
+        raise psycopg.OperationalError("connection lost")
+
+    monkeypatch.setattr(delete, step, outage)
+
+    with pytest.raises(RetryableJobError):
+        delete(claim_delete(conn), threading.Event())

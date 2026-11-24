@@ -41,14 +41,18 @@ def direct_child(root: Path, name: str | None) -> Path | None:
 
 
 def _remove(path: Path) -> None:
-    """Remove a file, link, or folder tree. A link is removed, never followed; missing is fine."""
+    """Remove a file, link, or folder tree. A link is removed, never followed; missing is fine.
+    Anything still there afterwards raises OSError, so the job retries before it deletes rows."""
     try:
         if path.is_symlink() or not path.is_dir():
             path.unlink(missing_ok=True)
         else:
             shutil.rmtree(path)
     except FileNotFoundError:
+        # A partial rmtree can raise this for an inner entry; the check below tells.
         pass
+    if path.is_symlink() or path.exists():
+        raise OSError("a path was not removed")
 
 
 def _owned(name: str, dataset: str) -> bool:
@@ -104,8 +108,11 @@ class DeleteHandler:
             except OSError as error:
                 # The message is shown to the workspace, so it names no path.
                 raise RetryableJobError("could not remove the dataset's files") from error
-            self._delete_checkpoints(conn, workspace, dataset)
-            self._delete_rows(conn, job, dataset)
+            try:
+                self._delete_checkpoints(conn, workspace, dataset)
+                self._delete_rows(conn, job, dataset)
+            except psycopg.OperationalError as error:
+                raise RetryableJobError("the database was not reachable") from error
         return DELETED
 
     def _stop_jobs(self, conn: psycopg.Connection, job: Job, dataset: UUID) -> None:
@@ -135,9 +142,10 @@ class DeleteHandler:
         ).fetchall()
         for upload_dir, build_dir in versions:
             for root, name in ((self.uploads_root, upload_dir), (self.datasets_root, build_dir)):
-                # A name that is not a direct child of its root is skipped, never removed.
+                # A name that is not a direct child of its root, or not this dataset's, is
+                # skipped, never removed.
                 path = direct_child(root, name)
-                if path is not None:
+                if path is not None and _owned(path.name, str(dataset)):
                     _remove(path)
         # Folders whose row says nothing: a crash between making the folder and writing the row.
         for root in (self.uploads_root, self.datasets_root):

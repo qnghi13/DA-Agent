@@ -1,6 +1,6 @@
 import { AlertCircle, ArrowRight, Check, ChevronRight, Loader2, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { type Api, BUSY_STATUSES, type Dataset, type DatasetSpec } from "./api";
+import { type Api, ApiError, BUSY_STATUSES, type Dataset, type DatasetSpec } from "./api";
 import { errorMessage } from "@/i18n/errors";
 import { useT } from "@/i18n/context";
 import { Conversation } from "./Conversation";
@@ -39,6 +39,11 @@ export function DatasetView(
       await api.deleteDataset(datasetId);
       onDeleted();
     } catch (caught) {
+      // Another tab already deleted it: the dataset is gone, which is what was asked.
+      if (caught instanceof ApiError && caught.status === 404) {
+        onDeleted();
+        return;
+      }
       setDeleteError(errorMessage(caught, m));
       setDeleting(false);
     }

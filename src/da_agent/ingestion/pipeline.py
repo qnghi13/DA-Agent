@@ -10,6 +10,7 @@ from typing import Literal
 
 from da_agent.ingestion.build import BuildReport, ExcludedRule
 from da_agent.ingestion.propose import ProposalResult, propose_spec
+from da_agent.ingestion.report import IngestReport
 from da_agent.ingestion.spec import DatasetSpec, TableSpec, keep_source_names
 from da_agent.llm.client import LLMClient, RunBudget
 from da_agent.runner.runner import (
@@ -161,12 +162,42 @@ def prepare_dataset(
     ingested = runner.ingest(IngestRun(upload_id=upload_id))
     if ingested.status != "ok" or ingested.report is None or ingested.output_dir is None:
         return PreparedDataset(status="ingest_failed", ingest=ingested)
-    report, ingest_id = ingested.report, ingested.output_dir.name
+    builds: list[tuple[DatasetSpec, BuildResult]] = []
+    try:
+        return _prepare(
+            ingested, ingested.report, ingested.output_dir.name, builds, runner, llm, run_id=run_id,
+            description=description, max_attempts=max_attempts,
+            min_parse_rate=min_parse_rate, budget=budget,
+        )  # fmt: skip
+    except BaseException:
+        # Nothing was returned, so no handler knows these folders: remove them here.
+        _remove_outputs(ingested, [built for _, built in builds])
+        raise
+
+
+def _remove_outputs(ingested: IngestResult, builds: list[BuildResult]) -> None:
+    for output in [ingested.output_dir, *(built.output_dir for built in builds)]:
+        if output is not None:
+            shutil.rmtree(output, ignore_errors=True)
+
+
+def _prepare(
+    ingested: IngestResult,
+    report: IngestReport,
+    ingest_id: str,
+    builds: list[tuple[DatasetSpec, BuildResult]],
+    runner: SandboxRunner,
+    llm: LLMClient,
+    *,
+    run_id: str,
+    description: str,
+    max_attempts: int,
+    min_parse_rate: float,
+    budget: RunBudget | None,
+) -> PreparedDataset:
     documents = list(report.documents)
     if description:
         documents.append({"path": "user description", "text": description})
-
-    builds: list[tuple[DatasetSpec, BuildResult]] = []
 
     def validate(spec: DatasetSpec) -> list[str]:
         built = runner.build(BuildRun(ingest_id=ingest_id, spec=spec))
@@ -228,14 +259,31 @@ def rebuild_dataset(
     ingested = runner.ingest(IngestRun(upload_id=upload_id))
     if ingested.status != "ok" or ingested.report is None or ingested.output_dir is None:
         return PreparedDataset(status="ingest_failed", ingest=ingested)
-    ingest_id = ingested.output_dir.name
+    made: list[BuildResult] = []
+    try:
+        return _rebuild(ingested, ingested.output_dir.name, runner, spec, min_parse_rate, made)
+    except BaseException:
+        _remove_outputs(ingested, made)
+        raise
+
+
+def _rebuild(
+    ingested: IngestResult,
+    ingest_id: str,
+    runner: SandboxRunner,
+    spec: DatasetSpec,
+    min_parse_rate: float,
+    made: list[BuildResult],
+) -> PreparedDataset:
     built = runner.build(BuildRun(ingest_id=ingest_id, spec=spec))
+    made.append(built)
     if built.status != "ok" or built.report is None:
         return PreparedDataset(status="build_failed", ingest=ingested, build=built, spec=spec)
     report = built.report
     deduped, deduplicated = _with_dedupe(spec, report)
     if deduplicated:
         rebuilt = runner.build(BuildRun(ingest_id=ingest_id, spec=deduped))
+        made.append(rebuilt)
         if rebuilt.status == "ok" and rebuilt.report is not None:
             if built.output_dir is not None:
                 shutil.rmtree(built.output_dir, ignore_errors=True)
