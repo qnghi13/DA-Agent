@@ -1,5 +1,5 @@
 import { AlertCircle, ArrowRight, Check, ChevronRight, Loader2, Trash2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { type Api, BUSY_STATUSES, type Dataset, type DatasetSpec } from "./api";
 import { errorMessage } from "@/i18n/errors";
 import { useT } from "@/i18n/context";
@@ -19,12 +19,20 @@ export function DatasetView(
 ) {
   const m = useT();
   const { api, datasetId, onDeleted } = props;
-  const [name, setName] = useState(datasetId);
+  const [name, setName] = useState<string | null>(null);
+  const { onChange } = props;
+  const handleChange = useCallback(
+    (dataset: Dataset) => {
+      setName(dataset.name);
+      onChange(dataset);
+    },
+    [onChange],
+  );
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   async function remove() {
-    if (!window.confirm(m.dataset.confirmDelete(name))) return;
+    if (name === null || !window.confirm(m.dataset.confirmDelete(name))) return;
     setDeleting(true);
     setDeleteError(null);
     try {
@@ -44,7 +52,7 @@ export function DatasetView(
             {deleteError}
           </p>
         )}
-        <Button variant="ghost" size="sm" disabled={deleting} onClick={() => void remove()}>
+        <Button variant="ghost" size="sm" disabled={deleting || name === null} onClick={() => void remove()}>
           <Trash2 />
           {m.dataset.delete}
         </Button>
@@ -53,10 +61,7 @@ export function DatasetView(
         <DatasetViewBody
           api={api}
           datasetId={datasetId}
-          onChange={(dataset) => {
-            setName(dataset.name);
-            props.onChange(dataset);
-          }}
+          onChange={handleChange}
         />
       </div>
     </div>
