@@ -222,18 +222,23 @@ def agent_node(state: AgentState, runtime: Runtime[AgentContext]) -> dict[str, A
     update: dict[str, Any] = {"iterations": iteration}
     nudges = state.get("nudges", 0)
     try:
-        response = _complete(context, LLMRequest(messages=history, tools=tools))
+        try:
+            response = _complete(context, LLMRequest(messages=history, tools=tools))
+        except InvalidToolCallError:
+            # A garbled call says little about the question, so the turn is asked once more, told
+            # what went wrong, before it counts (ADR 0049).
+            notice = Message(role="user", content=invalid_tool_call_notice([t.name for t in tools]))
+            added.append(notice)
+            history.append(notice)
+            response = _complete(context, LLMRequest(messages=history, tools=tools))
     except BudgetExceededError:
         return {**update, "iterations": iteration - 1, **_stop("budget_exceeded")}
     except InvalidToolCallError as error:
-        # Each malformed call costs a turn, so the turn limit bounds them; the nudge limit is for
-        # a model that stops calling tools at all.
+        # Twice in one turn costs the turn, so the turn limit bounds them; the nudge limit is for
+        # a model that stops calling tools at all. The notice is already in the messages.
         if turns_left == 1:
             update["messages"] = [m.model_dump() for m in added]
             return {**update, **_stop("invalid_tool_call", str(error))}
-        added.append(
-            Message(role="user", content=invalid_tool_call_notice([t.name for t in tools]))
-        )
     else:
         added.append(
             Message(role="assistant", content=response.content, tool_calls=response.tool_calls)

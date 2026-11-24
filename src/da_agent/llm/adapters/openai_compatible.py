@@ -1,5 +1,6 @@
 """Adapter for OpenAI-compatible chat endpoints: Groq, vLLM, Ollama, DeepSeek."""
 
+import hashlib
 import json
 from typing import Any
 
@@ -56,14 +57,64 @@ def _retry_after(error: openai.APIStatusError) -> float | None:
         return None
 
 
+# What a rejected call's error keeps of the model's output, for cassettes and diagnosis.
+MAX_FAILED_GENERATION_CHARS = 2000
+
+
+def _error_details(error: openai.APIStatusError) -> dict[str, Any]:
+    body = error.body if isinstance(error.body, dict) else {}
+    details = body.get("error", body)
+    return details if isinstance(details, dict) else {}
+
+
 def _is_failed_tool_generation(error: openai.APIStatusError) -> bool:
     """Groq returns 400 when the model writes a malformed tool call, such as a bad tool name, or
     output it cannot parse, which it returns as failed_generation."""
-    body = error.body if isinstance(error.body, dict) else {}
-    details = body.get("error", body)
-    if not isinstance(details, dict):
-        return False
+    details = _error_details(error)
     return details.get("code") == "tool_use_failed" or "failed_generation" in details
+
+
+def _failed_generation(error: openai.APIStatusError) -> str | None:
+    generation = _error_details(error).get("failed_generation")
+    return generation if isinstance(generation, str) else None
+
+
+def _offered_name(name: str, offered: set[str]) -> str | None:
+    """The offered tool a garbled name stands for. gpt-oss leaks its own format into tool names,
+    as "submit_answer<|channel|>commentary" or "functions.submit_answer"; nothing else is
+    guessed, and a tool code did not offer on this turn is never returned."""
+    plain = name.split("<|", 1)[0].removeprefix("functions.")
+    return plain if plain != name and plain in offered else None
+
+
+def _repaired_calls(generation: str | None, offered: set[str]) -> list[ToolCall] | None:
+    """The calls in a rejected generation, when every one names an offered tool through a garbled
+    name and has a JSON object of arguments; otherwise None. The arguments still go through the
+    tool's own checks, as any call's do (ADR 0049)."""
+    if generation is None:
+        return None
+    try:
+        parsed = json.loads(generation)
+    except json.JSONDecodeError:
+        return None
+    items = parsed if isinstance(parsed, list) else [parsed]
+    # Deterministic ids, so a recorded run replays with the same messages.
+    digest = hashlib.sha256(generation.encode("utf-8", "surrogatepass")).hexdigest()[:12]
+    calls = []
+    for index, item in enumerate(items):
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str):
+            return None
+        name = _offered_name(item["name"], offered)
+        arguments = item.get("arguments", item.get("parameters"))
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                return None
+        if name is None or not isinstance(arguments, dict):
+            return None
+        calls.append(ToolCall(id=f"repaired_{digest}_{index}", name=name, arguments=arguments))
+    return calls or None
 
 
 def _cached_tokens(usage: Any) -> int:
@@ -131,7 +182,13 @@ class OpenAICompatibleAdapter:
             raise TransientLLMError(str(error)) from error
         except openai.APIStatusError as error:
             if _is_failed_tool_generation(error):
-                raise InvalidToolCallError(str(error)) from error
+                generation = _failed_generation(error)
+                calls = _repaired_calls(generation, {tool.name for tool in request.tools})
+                if calls:
+                    # The provider reports no usage for a rejected call, so it is recorded as 0.
+                    return LLMResponse(tool_calls=calls, repaired_tool_calls=len(calls))
+                kept = generation[:MAX_FAILED_GENERATION_CHARS] if generation else None
+                raise InvalidToolCallError(str(error), kept) from error
             if error.status_code >= 500:
                 raise TransientLLMError(str(error)) from error
             raise PermanentLLMError(str(error)) from error

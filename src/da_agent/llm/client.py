@@ -406,6 +406,8 @@ class LLMClient:
             span.set_attribute("llm.token_count.completion", response.usage.output_tokens)
             span.set_attribute("llm.token_count.total", response.usage.total_tokens)
             span.set_attribute("da_agent.cost_usd", cost)
+            if response.repaired_tool_calls:
+                span.set_attribute("da_agent.repaired_tool_calls", response.repaired_tool_calls)
             if self._metrics is not None:
                 self._metrics.call(
                     route.adapter.provider, route.model, "ok", latency,

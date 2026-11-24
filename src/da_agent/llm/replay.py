@@ -118,6 +118,9 @@ def _record(path: Path, provider: str, model: str, request: LLMRequest, outcome:
         kind = "invalid_tool_call" if isinstance(outcome, InvalidToolCallError) else "permanent"
         line["outcome"] = kind
         line["error"] = _scrub(str(outcome))
+        generation = getattr(outcome, "failed_generation", None)
+        if generation is not None:
+            line["failed_generation"] = _scrub(generation)
     _append(path, line)
 
 
@@ -248,6 +251,8 @@ class Cassette:
 def _replayed(line: dict[str, Any]) -> LLMResponse:
     if line["outcome"] == "response":
         return LLMResponse.model_validate({**line["response"], "replayed": True})
+    if line["outcome"] == "invalid_tool_call":
+        raise InvalidToolCallError(line.get("error", ""), line.get("failed_generation"))
     raise _RECORDED_ERRORS.get(line["outcome"], PermanentLLMError)(line.get("error", ""))
 
 

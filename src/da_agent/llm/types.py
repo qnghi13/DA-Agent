@@ -54,6 +54,9 @@ class LLMResponse(BaseModel):
     model: str = ""
     # Served from a recording (da_agent.llm.replay), so it cost nothing.
     replayed: bool = False
+    # Calls the provider rejected for a garbled tool name, which the adapter read back as calls
+    # to the offered tool the name stands for (ADR 0049).
+    repaired_tool_calls: int = 0
 
 
 class LLMError(Exception):
@@ -83,8 +86,13 @@ class InvalidToolCallError(LLMError):
     """The provider rejected the model's tool call, for example a malformed tool name.
 
     The model caused it, so retrying the same request or another route does not help. The caller
-    should tell the model what went wrong and let it try again.
+    should tell the model what went wrong and let it try again. failed_generation is what the
+    model wrote, when the provider returns it: for diagnosis, never shown to the model.
     """
+
+    def __init__(self, message: str, failed_generation: str | None = None) -> None:
+        super().__init__(message)
+        self.failed_generation = failed_generation
 
 
 class CallInterruptedError(LLMError):

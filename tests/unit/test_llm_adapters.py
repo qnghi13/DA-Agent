@@ -202,6 +202,104 @@ def test_openai_reports_unparsable_model_output_as_invalid_tool_call() -> None:
         openai_adapter(handler).complete(REQUEST, "m")
 
 
+SUBMIT = ToolSpec(
+    name="submit_answer",
+    description="Submit the answer",
+    parameters={"type": "object", "properties": {"kind": {"type": "string"}}},
+)
+
+
+def rejected_call(name: str, generation: object, *, request: LLMRequest = REQUEST):
+    """Groq's 400 for a tool call it cannot match to request.tools, with the model's output."""
+
+    def handler(_: httpx2.Request) -> httpx2.Response:
+        error: dict = {
+            "message": f"tool call validation failed: attempted to call tool '{name}' which was "
+            "not in request.tools",
+            "type": "invalid_request_error",
+            "code": "tool_use_failed",
+        }
+        if generation is not None:
+            error["failed_generation"] = (
+                generation if isinstance(generation, str) else json.dumps(generation)
+            )
+        return httpx2.Response(400, json={"error": error})
+
+    return openai_adapter(handler).complete(request, "m")
+
+
+BOTH = REQUEST.model_copy(update={"tools": [TOOL, SUBMIT]})
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("submit_answer<|channel|>commentary", "submit_answer"),
+        ("functions.submit_answer", "submit_answer"),
+        ("functions.run_sql<|channel|>commentary", "run_sql"),
+    ],
+)
+def test_openai_repairs_a_garbled_name_of_an_offered_tool(name: str, expected: str) -> None:
+    """gpt-oss leaks its own format tokens into the tool name. When what is left is exactly an
+    offered tool, the call is that tool's, and its arguments go on to the tool's own checks."""
+    generation = {"name": name, "arguments": {"kind": "number"}}
+
+    response = rejected_call(name, generation, request=BOTH)
+
+    assert [(c.name, c.arguments) for c in response.tool_calls] == [(expected, {"kind": "number"})]
+    assert response.repaired_tool_calls == 1
+
+
+@pytest.mark.parametrize(
+    "generation",
+    [
+        [{"name": "submit_answer<|channel|>commentary", "arguments": '{"kind": "number"}'}],
+        {"name": "submit_answer<|channel|>x", "parameters": {"kind": "number"}},
+    ],
+)
+def test_openai_repairs_the_shapes_a_failed_generation_takes(generation: object) -> None:
+    response = rejected_call("submit_answer<|channel|>x", generation, request=BOTH)
+
+    assert [(c.name, c.arguments) for c in response.tool_calls] == [
+        ("submit_answer", {"kind": "number"})
+    ]
+
+
+@pytest.mark.parametrize(
+    ("name", "generation"),
+    [
+        # Not offered on this turn: the model must not get a tool that code withheld.
+        ("submit_answer<|channel|>x", {"name": "submit_answer<|channel|>x", "arguments": {}}),
+        # Names that are not a garbled offered name are never guessed.
+        ("json", {"name": "json", "arguments": {"sql": "SELECT 1"}}),
+        ("answer", {"name": "answer", "arguments": {}}),
+        ("run_sqlx", {"name": "run_sqlx", "arguments": {"sql": "SELECT 1"}}),
+        # Arguments that are not a JSON object, or no generation at all.
+        ("run_sql<|channel|>x", {"name": "run_sql<|channel|>x", "arguments": "SELECT 1"}),
+        ("run_sql<|channel|>x", "<|channel|>analysis ..."),
+        ("run_sql<|channel|>x", None),
+    ],
+)
+def test_openai_leaves_other_rejected_calls_as_invalid(name: str, generation: object) -> None:
+    with pytest.raises(InvalidToolCallError) as caught:
+        rejected_call(name, generation)
+
+    # What the model wrote stays on the error, for the cassette and diagnosis.
+    raw = (
+        generation if generation is None or isinstance(generation, str) else json.dumps(generation)
+    )
+    assert caught.value.failed_generation == raw
+
+
+def test_openai_keeps_a_bounded_failed_generation_for_diagnosis() -> None:
+    with pytest.raises(InvalidToolCallError) as caught:
+        rejected_call("json", "x" * 10_000)
+
+    generation = caught.value.failed_generation
+    assert generation is not None and generation.startswith("xxx")
+    assert len(generation) <= 2000
+
+
 def test_openai_reads_cached_prompt_tokens() -> None:
     usage = {
         "prompt_tokens": 100,

@@ -674,3 +674,15 @@ def test_a_retry_after_the_cooldown_may_be_the_probe() -> None:
     holder["client"] = client
 
     assert client.complete(REQUEST, run_id="r").content == "probe"
+
+
+def test_a_repaired_tool_call_is_marked_on_its_span() -> None:
+    repaired = reply().model_copy(update={"repaired_tool_calls": 1})
+    client, exporter = make_traced(ScriptedAdapter("groq", [repaired, reply()]))
+
+    client.complete(REQUEST, run_id="r1")
+    client.complete(REQUEST, run_id="r1")
+
+    first, second = exporter.get_finished_spans()
+    assert first.attributes["da_agent.repaired_tool_calls"] == 1
+    assert "da_agent.repaired_tool_calls" not in second.attributes

@@ -53,3 +53,4 @@ decision, add a new ADR and mark the old one as superseded.
 | [0046](0046-vietnamese-ui.md) | The UI offers Vietnamese next to English, from typed dictionaries in the web | Accepted |
 | [0047](0047-answer-language.md) | Code picks the answer language from the question; the model is told it | Accepted |
 | [0048](0048-oneshot-baseline.md) | A one-shot text-to-SQL baseline measures what the agent adds | Accepted |
+| [0049](0049-garbled-tool-calls.md) | Garbled tool names are read back by code; a malformed call gets one retry in its turn | Accepted |

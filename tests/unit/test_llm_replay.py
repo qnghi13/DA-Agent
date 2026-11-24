@@ -284,3 +284,16 @@ def test_a_lone_surrogate_in_tool_arguments_records_and_replays(tmp_path: Path) 
     RecordingAdapter(ScriptedAdapter("groq", [odd]), path).complete(req, "m")
 
     assert replayer(path).complete(req, "m").tool_calls == odd.tool_calls
+
+
+def test_a_rejected_call_records_and_replays_what_the_model_wrote(tmp_path: Path) -> None:
+    path = tmp_path / "cassette.jsonl"
+    generation = '{"name": "json", "arguments": {}}'
+    error = InvalidToolCallError("attempted to call tool 'json'", failed_generation=generation)
+    with pytest.raises(InvalidToolCallError):
+        RecordingAdapter(ScriptedAdapter("groq", [error]), path).complete(request("q"), "m")
+
+    with pytest.raises(InvalidToolCallError) as replayed:
+        replayer(path).complete(request("q"), "m")
+
+    assert replayed.value.failed_generation == generation

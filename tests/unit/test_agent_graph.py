@@ -1096,3 +1096,40 @@ def test_a_user_stop_is_reported_even_when_a_node_stopped_the_run_too(
     result = run_stoppable(dataset, adapter, stop, limits=limits, on_event=on_event)
 
     assert result.stop_reason == "cancelled"
+
+
+def test_a_malformed_call_is_retried_once_within_its_turn(dataset: SqliteDataset) -> None:
+    """A malformed call does not cost a turn: the same turn is asked again, told what went wrong."""
+    script = [plan(), InvalidToolCallError("bad name"), sql(), submit("number", 350)]
+
+    result, adapter = run(dataset, script)
+
+    assert result.stop_reason == "answered"
+    assert result.iterations == 2
+    retried = adapter.requests[2].messages
+    assert retried[-1].role == "user" and "malformed" in (retried[-1].content or "")
+    assert len(retried) == len(adapter.requests[1].messages) + 1
+
+
+def test_a_malformed_call_on_the_last_turn_still_gets_its_answer(dataset: SqliteDataset) -> None:
+    script = [
+        plan(),
+        sql(),
+        InvalidToolCallError("submit_answer<|channel|>x"),
+        submit("number", 350),
+    ]
+
+    result, adapter = run(dataset, script, max_iterations=2)
+
+    assert result.stop_reason == "answered"
+    assert offered(adapter.requests[-1]) == ["submit_answer"]
+
+
+def test_a_turn_is_retried_only_once(dataset: SqliteDataset) -> None:
+    bad = [InvalidToolCallError("bad name")] * 2
+    script = [plan(), sql(), *bad, submit("number", 350)]
+
+    result, adapter = run(dataset, script, max_iterations=2)
+
+    assert result.stop_reason == "invalid_tool_call"
+    assert len(adapter.requests) == 4
