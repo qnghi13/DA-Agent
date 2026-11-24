@@ -74,6 +74,7 @@ from da_agent.storage.datasets import (
     DatasetStateError,
     DatasetStore,
     InvalidSpecError,
+    lock_live_dataset,
 )
 from da_agent.storage.db import connect
 from da_agent.storage.events import RunEvent, RunEvents
@@ -705,6 +706,17 @@ def get_dataset(dataset_id: str, conn: Db, caller: Caller) -> dict[str, Any]:
     }
 
 
+@router.delete("/datasets/{dataset_id}", status_code=202)
+def delete_dataset(dataset_id: str, conn: Db, caller: Caller) -> dict[str, str]:
+    """Hide the dataset now and queue the job that removes it and everything built on it. No
+    budget, rate, or slot check: a delete frees resources, so it is never refused for lack."""
+    key = _uuid(dataset_id)
+    if DatasetStore(conn).start_delete(caller.workspace_id, key) is None:
+        raise _not_found()
+    log(conn, caller, "dataset.delete", dataset_id)
+    return {"id": dataset_id, "status": "deleting"}
+
+
 # Adding files: each upload is a new version of the dataset (docs/design/2026-11-21-add-files.md)
 
 
@@ -865,6 +877,8 @@ def approve_version(
         raise HTTPException(status_code=422, detail=str(error)) from error
     try:
         with conn.transaction():
+            if not lock_live_dataset(conn, caller.workspace_id, key):
+                raise _not_found()
             status = store.approve(caller.workspace_id, key, version, choices, edits, repairs)
             log(conn, caller, "dataset.version_approve", dataset_id, version=version)
     except DatasetNotFoundError as error:
@@ -945,6 +959,8 @@ def create_run(body: RunRequest, conn: Db, caller: Caller, settings: Settings) -
     if conversation is not None:
         payload["conversation_id"] = conversation
     with conn.transaction():
+        if not lock_live_dataset(conn, caller.workspace_id, record.id):
+            raise _not_found()
         # The notes the run reads are fixed now, so a resume reads the same ones (ADR 0030).
         payload |= memory_snapshot(conn, caller.workspace_id, record.id)
         run_id = JobQueue(conn).enqueue(caller.workspace_id, "run", payload)
@@ -1319,6 +1335,8 @@ def create_export(
     _may_start_job(conn, caller, settings, calls_model=False)
     payload = {"run_id": str(job.id), "query_index": index, "dataset_id": str(dataset_id)}
     with conn.transaction():
+        if not lock_live_dataset(conn, caller.workspace_id, dataset_id):
+            raise _not_found()
         export_id = JobQueue(conn).enqueue(caller.workspace_id, "export", payload)
         log(conn, caller, "export.create", str(export_id), run_id=str(job.id), query_index=index)
     return {"id": str(export_id), "status": "queued"}
@@ -1407,6 +1425,8 @@ def create_query(
     _may_start_job(conn, caller, settings, calls_model=False)
     payload = {"run_id": str(job.id), "dataset_id": str(dataset_id), "sql": sql}
     with conn.transaction():
+        if not lock_live_dataset(conn, caller.workspace_id, dataset_id):
+            raise _not_found()
         query_id = JobQueue(conn).enqueue(caller.workspace_id, "query", payload)
         # The length, not the text: SQL can hold values from the data.
         log(conn, caller, "query.create", str(query_id), run_id=str(job.id), chars=len(sql))
@@ -1450,6 +1470,8 @@ def create_query_export(
     _may_start_job(conn, caller, settings, calls_model=False)
     payload = {"query_id": str(job.id), "dataset_id": str(dataset_id)}
     with conn.transaction():
+        if not lock_live_dataset(conn, caller.workspace_id, dataset_id):
+            raise _not_found()
         export_id = JobQueue(conn).enqueue(caller.workspace_id, "export", payload)
         log(conn, caller, "export.create", str(export_id), query_id=str(job.id))
     return {"id": str(export_id), "status": "queued"}
