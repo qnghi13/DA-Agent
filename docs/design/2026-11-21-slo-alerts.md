@@ -74,7 +74,7 @@ so it can reach the webhook. Their user interfaces listen on `127.0.0.1:9090` an
 | Metric | Labels | Meaning |
 |---|---|---|
 | `da_agent_runs_total` | `outcome` | the same groups as the ops panel: answered, abstained, stopped, model_error, failed, cancelled |
-| `da_agent_job_attempts_total` | `kind`, `result` | `result` is one of succeeded, retry, failed, cancelled, lost |
+| `da_agent_job_attempts_total` | `kind`, `result` | `result` is one of succeeded, retry, failed, cancelled, lost, wait (a delete job waiting for the dataset's other jobs; not a failure) |
 | `da_agent_run_duration_seconds` | | histogram with buckets 1, 2, 5, 10, 20, 30, 60, 120, 300 |
 | `da_agent_queue_wait_seconds` | | first attempts only; needs `created_at` from `claim` |
 | `da_agent_llm_calls_total` | `provider`, `model`, `result` | `result` is ok or an error kind |

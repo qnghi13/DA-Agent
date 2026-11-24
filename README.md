@@ -102,6 +102,14 @@ flowchart LR
     worker -- "one SQL query" --> runner["Runner"] --> sandbox["Sandbox<br/>DuckDB, no network,<br/>read-only dataset"]
 ```
 
+**Deleting a dataset.** `DELETE /v1/datasets/{id}` (the "Delete dataset" button) hides the dataset at
+once and queues a background job that removes its uploaded files, builds, export files, agent
+checkpoints, and every row about it: runs, answers, reports, queries, conversations, notes, and
+metrics. Deletion is final. It keeps the spend ledger (`llm_calls`) and the audit log, which hold
+no data values. It does not cover Phoenix traces, which expire with Phoenix's own retention, or
+golden rerun reports an operator wrote under `data_dir/goldens/`
+([ADR 0050](docs/adr/0050-dataset-deletion.md)).
+
 The same system drawn as one bench, with numbers that follow a question through it:
 
 <picture>

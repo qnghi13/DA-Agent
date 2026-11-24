@@ -9,7 +9,8 @@ stay apart, even if a query guard fails.
 
 **Consequences:**
 - A sandbox can mount exactly one file, so isolation does not rely on SQL filters.
-- Deleting a dataset means deleting a file.
+- Deleting a dataset means deleting a file. (Later: a dataset's data lives in many more places, so
+  deletion is a background job; see [ADR 0050](0050-dataset-deletion.md).)
 - No queries across datasets, which is not a goal.
 - Files live on a volume, so this does not scale across hosts without shared storage.
 

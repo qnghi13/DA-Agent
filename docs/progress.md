@@ -1,6 +1,6 @@
 # Progress
 
-Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-24 (baseline, garbled tool calls)
+Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-24 (dataset deletion)
 **Phase:** optimisation. Challenge rules: ≤15B params in total, offline Docker, 2×5090, 6 h,
 re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for the submission.
 
@@ -18,7 +18,10 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
   (Groq +55). Then status variants and line-vs-header revenue (~12, checked by hand SQL), debt
   4, budget abstains 8 (SQLite functions, made-up columns). Semantic layer: private folder.
 ## Next step
-- **Garbled tool calls** (ADR 0049, not committed): adapter reads back `X<|channel|>...`, one
+- **Dataset deletion** (ADR 0050, note 27, design doc): on `feat/dataset-deletion`, not merged;
+  real-app check pending (delete from the UI with a run in flight). Phoenix traces and golden
+  rerun reports are not deleted (threat model).
+- **Garbled tool calls** (ADR 0049): adapter reads back `X<|channel|>...`, one
   retry per turn. `regression` +61 -> **+67** (102/35/13, $0.280), stops 7 -> 2, 64 read back.
 - **One-shot baseline** (ADR 0048): +40, then +42 after 0049 (its rejects are real `run_sql`
   wishes); gap to the agent is mostly coverage. ADR 0047 no harm. Open: `LIMIT 1` ties.
@@ -37,7 +40,7 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
    guessed (run 97d7bc1f; a UI guardrail); `\uXXXX` escapes in SQL text (2 runs in all reports).
 ## Baselines (Groq `gpt-oss-20b`, before 559f88a): `regression` +53 (93/40/17), holdout +44.
 ## Done
-- ADRs 0001–0049, notes 01–26. Scorer 3000/3000; splits in `eval/splits/splits.json`.
+- ADRs 0001–0050, notes 01–27. Scorer 3000/3000; splits in `eval/splits/splits.json`.
 - Agent, sandbox (escape tests pass), backend over HTTP, reports; RAG cut (note 05).
   `datasets-dev/`: 24/24 ok, parse 99.98%+, exclusion precision and recall 100%.
 ## Not verified
@@ -47,10 +50,8 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
 ## Waiting on the user
 - No rows, questions, rulebook, or answers in any commit or image (organiser rules). When the
   challenge ends: delete `train/`, `eval/reports/`, and Docker volumes with eval data.
-
 ## Spend so far: about $4.02 (agent runs $3.38, spec proposals $0.57, demos and e2e $0.05).
-- Demo video (2026-11-22, not in the repo): re-record once the open items under Next step are fixed.
-
+- Demo video (2026-11-22, not in the repo): re-record once open items are fixed.
 ## Watch out
 - 30 questions on Groq cost about $0.05–0.10, and results vary run to run: compare totals.
   Scorer: a wrong `type` is wrong; table columns match by name only if all names match.

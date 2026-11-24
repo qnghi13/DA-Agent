@@ -1,7 +1,8 @@
 # Delete a dataset
 
-**Status:** draft 2026-11-24, revised after a builder check. The user chose a background delete
-job (approach A).
+**Status:** implemented on branch `feat/dataset-deletion` (2026-11-24); not merged; not yet checked
+in the running app. Recorded in [ADR 0050](../adr/0050-dataset-deletion.md). The user chose a
+background delete job (approach A).
 
 ## Why
 
