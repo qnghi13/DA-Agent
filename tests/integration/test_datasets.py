@@ -16,7 +16,12 @@ import pytest
 from da_agent.ingestion.build import BuildReport, ColumnBuild, TableBuild
 from da_agent.ingestion.spec import DatasetSpec
 from da_agent.runner.runner import BuildResult, BuildRun
-from da_agent.storage.datasets import DatasetStateError, DatasetStore
+from da_agent.storage.datasets import (
+    DatasetNotFoundError,
+    DatasetStateError,
+    DatasetStore,
+    lock_live_dataset,
+)
 from da_agent.storage.jobs import JobQueue
 from da_agent.storage.sandbox_dataset import BUILD_REPORT
 from da_agent.storage.workspaces import create_workspace
@@ -269,3 +274,86 @@ def test_run_in_flight_keeps_its_version(
     _, dataset, _ = handler._prepare(job)
 
     assert dataset.describe()[0].columns[0].name == "total"
+
+
+def _ready(conn: psycopg.Connection, workspace: UUID) -> UUID:
+    store = DatasetStore(conn)
+    dataset_id = store.create(workspace, "Shop", "")
+    store.mark_proposed(dataset_id, {"tables": []}, {}, [])
+    assert store.approve(workspace, dataset_id, None) == "ready"
+    return dataset_id
+
+
+def _status(conn: psycopg.Connection, dataset_id: UUID) -> str:
+    row = conn.execute("SELECT status FROM datasets WHERE id = %s", (dataset_id,)).fetchone()
+    assert row is not None
+    return row[0]
+
+
+def test_start_delete_hides_the_dataset_and_queues_one_delete_job(
+    conn: psycopg.Connection, workspace: UUID
+) -> None:
+    d = _ready(conn, workspace)
+    run = JobQueue(conn).enqueue(workspace, "run", {"dataset_id": str(d), "question": "q"})
+
+    job_id = DatasetStore(conn).start_delete(workspace, d)
+
+    assert job_id is not None
+    assert _status(conn, d) == "deleting"
+    assert DatasetStore(conn).get(d, workspace) is None
+    assert all(x["id"] != str(d) for x in DatasetStore(conn).in_workspace(workspace))
+    assert JobQueue(conn).get(run, workspace) is None
+    row = conn.execute("SELECT kind, payload FROM jobs WHERE id = %s", (job_id,)).fetchone()
+    assert row == ("delete", {"dataset_id": str(d)})
+    cancelled = conn.execute("SELECT status FROM jobs WHERE id = %s", (run,)).fetchone()
+    assert cancelled == ("cancelled",)
+    assert DatasetStore(conn).start_delete(workspace, d) == job_id
+    assert DatasetStore(conn).start_delete(create_workspace(conn, "other"), d) is None
+    assert DatasetStore(conn).start_delete(workspace, UUID(int=1)) is None
+
+
+def test_start_delete_queues_a_new_job_when_the_last_one_ended(
+    conn: psycopg.Connection, workspace: UUID
+) -> None:
+    d = _ready(conn, workspace)
+    first = DatasetStore(conn).start_delete(workspace, d)
+    conn.execute("UPDATE jobs SET status = 'failed' WHERE id = %s", (first,))
+
+    second = DatasetStore(conn).start_delete(workspace, d)
+
+    assert second is not None and second != first
+
+
+def test_finishing_jobs_cannot_bring_back_a_deleting_dataset(
+    conn: psycopg.Connection, workspace: UUID
+) -> None:
+    d = _ready(conn, workspace)
+    store = DatasetStore(conn)
+    store.start_delete(workspace, d)
+
+    store.mark_proposed(d, {"tables": []}, {}, [])
+    store.mark_ready(d, {})
+    store.mark_failed(d, "boom")
+
+    assert _status(conn, d) == "deleting"
+
+
+def test_lock_live_dataset_refuses_a_deleting_dataset(
+    conn: psycopg.Connection, workspace: UUID
+) -> None:
+    d = _ready(conn, workspace)
+    with conn.transaction():
+        assert lock_live_dataset(conn, workspace, d) is True
+        assert lock_live_dataset(conn, create_workspace(conn, "other"), d) is False
+    DatasetStore(conn).start_delete(workspace, d)
+    with conn.transaction():
+        assert lock_live_dataset(conn, workspace, d) is False
+
+
+def test_a_deleting_dataset_cannot_be_approved(conn: psycopg.Connection, workspace: UUID) -> None:
+    d = DatasetStore(conn).create(workspace, "Shop", "")
+    DatasetStore(conn).mark_proposed(d, {"tables": []}, {}, [])
+    DatasetStore(conn).start_delete(workspace, d)
+
+    with pytest.raises(DatasetNotFoundError):
+        DatasetStore(conn).approve(workspace, d, None)

@@ -109,7 +109,7 @@ class MemoryStore:
 
     def _require_dataset(self, workspace_id: UUID, dataset_id: UUID) -> None:
         row = self._conn.execute(
-            "SELECT 1 FROM datasets WHERE id = %s AND workspace_id = %s",
+            "SELECT 1 FROM datasets WHERE id = %s AND workspace_id = %s AND status <> 'deleting'",
             (dataset_id, workspace_id),
         ).fetchone()
         if row is None:
@@ -282,7 +282,10 @@ class MemoryStore:
     def _get(self, workspace_id: UUID, entry_id: UUID, *, lock: bool = False) -> MemoryEntry:
         with self._conn.cursor(row_factory=class_row(MemoryEntry)) as cursor:
             entry = cursor.execute(
-                _SELECT + "WHERE id = %s AND workspace_id = %s" + (" FOR UPDATE" if lock else ""),
+                _SELECT  # noqa: S608
+                + "WHERE id = %s AND workspace_id = %s AND NOT EXISTS (SELECT 1 FROM datasets d "
+                "WHERE d.id = dataset_memories.dataset_id AND d.status = 'deleting')"
+                + (" FOR UPDATE" if lock else ""),
                 (entry_id, workspace_id),
             ).fetchone()
         if entry is None:
@@ -331,7 +334,9 @@ class MemoryStore:
 
     def delete(self, workspace_id: UUID, entry_id: UUID) -> None:
         deleted = self._conn.execute(
-            "DELETE FROM dataset_memories WHERE id = %s AND workspace_id = %s RETURNING id",
+            "DELETE FROM dataset_memories WHERE id = %s AND workspace_id = %s AND NOT EXISTS "
+            "(SELECT 1 FROM datasets d WHERE d.id = dataset_memories.dataset_id "
+            "AND d.status = 'deleting') RETURNING id",
             (entry_id, workspace_id),
         ).fetchone()
         if deleted is None:
@@ -406,7 +411,8 @@ class ConversationStore:
     def get(self, workspace_id: UUID, conversation_id: UUID) -> dict[str, Any] | None:
         row = self._conn.execute(
             "SELECT id, dataset_id, created_at FROM conversations "
-            "WHERE id = %s AND workspace_id = %s",
+            "WHERE id = %s AND workspace_id = %s AND NOT EXISTS (SELECT 1 FROM datasets d "
+            "WHERE d.id = conversations.dataset_id AND d.status = 'deleting')",
             (conversation_id, workspace_id),
         ).fetchone()
         if row is None:

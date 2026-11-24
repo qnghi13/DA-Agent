@@ -67,6 +67,17 @@ def _ensure_first_version(conn: psycopg.Connection, dataset_id: UUID) -> None:
     ensure_first_version(conn, dataset_id)
 
 
+def lock_live_dataset(conn: psycopg.Connection, workspace_id: UUID, dataset_id: UUID) -> bool:
+    """Lock the dataset row against a delete (`FOR SHARE`) and say whether it is there and not
+    being deleted. Call it in the same transaction that enqueues a job for the dataset."""
+    row = conn.execute(
+        "SELECT 1 FROM datasets WHERE id = %s AND workspace_id = %s AND status <> 'deleting' "
+        "FOR SHARE",
+        (dataset_id, workspace_id),
+    ).fetchone()
+    return row is not None
+
+
 class DatasetStore:
     def __init__(self, conn: psycopg.Connection) -> None:
         self._conn = conn
@@ -91,6 +102,7 @@ class DatasetStore:
     def in_workspace(self, workspace_id: UUID) -> list[dict[str, Any]]:
         rows = self._conn.execute(
             "SELECT id, name, status, created_at FROM datasets WHERE workspace_id = %s "
+            "AND status <> 'deleting' "
             "ORDER BY created_at DESC LIMIT 200",
             (workspace_id,),
         ).fetchall()
@@ -103,7 +115,8 @@ class DatasetStore:
         with self._conn.cursor(row_factory=class_row(DatasetRecord)) as cursor:
             return cursor.execute(
                 "SELECT id, workspace_id, name, description, status, spec, summary, documents, "
-                "error, files FROM datasets WHERE id = %s AND workspace_id = %s",
+                "error, files FROM datasets "
+                "WHERE id = %s AND workspace_id = %s AND status <> 'deleting'",
                 (dataset_id, workspace_id),
             ).fetchone()
 
@@ -116,22 +129,24 @@ class DatasetStore:
     ) -> None:
         self._conn.execute(
             "UPDATE datasets SET status = 'proposed', spec = %s, summary = %s, documents = %s, "
-            "error = NULL, updated_at = now() WHERE id = %s",
+            "error = NULL, updated_at = now() WHERE id = %s AND status <> 'deleting'",
             (Jsonb(spec), Jsonb(summary), Jsonb(documents), dataset_id),
         )
 
     def mark_ready(self, dataset_id: UUID, summary: dict[str, Any]) -> None:
         with self._conn.transaction():
-            self._conn.execute(
+            changed = self._conn.execute(
                 "UPDATE datasets SET status = 'ready', summary = %s, error = NULL, "
-                "updated_at = now() WHERE id = %s",
+                "updated_at = now() WHERE id = %s AND status <> 'deleting'",
                 (Jsonb(summary), dataset_id),
-            )
-            _ensure_first_version(self._conn, dataset_id)
+            ).rowcount
+            if changed:
+                _ensure_first_version(self._conn, dataset_id)
 
     def mark_failed(self, dataset_id: UUID, error: str) -> None:
         self._conn.execute(
-            "UPDATE datasets SET status = 'failed', error = %s, updated_at = now() WHERE id = %s",
+            "UPDATE datasets SET status = 'failed', error = %s, updated_at = now() "
+            "WHERE id = %s AND status <> 'deleting'",
             (error, dataset_id),
         )
 
@@ -143,7 +158,7 @@ class DatasetStore:
                 "SELECT status, spec FROM datasets WHERE id = %s AND workspace_id = %s FOR UPDATE",
                 (dataset_id, workspace_id),
             ).fetchone()
-            if row is None:
+            if row is None or row[0] == "deleting":
                 raise DatasetNotFoundError("dataset not found")
             status, proposed = row
             if status != "proposed":
@@ -165,3 +180,31 @@ class DatasetStore:
             )
             JobQueue(self._conn).enqueue(workspace_id, "build", {"dataset_id": str(dataset_id)})
             return "building"
+
+    def start_delete(self, workspace_id: UUID, dataset_id: UUID) -> UUID | None:
+        """Begin deleting a dataset, in one transaction: hide it, cancel its jobs, and queue one
+        `delete` job unless one is open. Returns the open delete job's id, None if the dataset is
+        not in the workspace. Asking again after a failed delete queues a new job."""
+        with self._conn.transaction():
+            row = self._conn.execute(
+                "SELECT status FROM datasets WHERE id = %s AND workspace_id = %s FOR UPDATE",
+                (dataset_id, workspace_id),
+            ).fetchone()
+            if row is None:
+                return None
+            self._conn.execute(
+                "UPDATE datasets SET status = 'deleting', updated_at = now() "
+                "WHERE id = %s AND status <> 'deleting'",
+                (dataset_id,),
+            )
+            queue = JobQueue(self._conn)
+            queue.cancel_dataset_jobs(workspace_id, dataset_id)
+            open_job = self._conn.execute(
+                "SELECT id FROM jobs WHERE workspace_id = %s AND kind = 'delete' "
+                "AND payload ->> 'dataset_id' = %s AND status IN ('queued', 'running') "
+                "ORDER BY created_at, id LIMIT 1",
+                (workspace_id, str(dataset_id)),
+            ).fetchone()
+            if open_job is not None:
+                return open_job[0]
+            return queue.enqueue(workspace_id, "delete", {"dataset_id": str(dataset_id)})

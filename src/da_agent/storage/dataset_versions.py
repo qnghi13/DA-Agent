@@ -133,7 +133,7 @@ class DatasetVersionStore:
                     "WHERE id = %s AND workspace_id = %s FOR UPDATE",
                     (dataset_id, workspace_id),
                 ).fetchone()
-                if row is None:
+                if row is None or row[0] == "deleting":
                     raise DatasetNotFoundError("dataset not found")
                 if row[0] != "ready":
                     raise DatasetStateError(
@@ -172,7 +172,8 @@ class DatasetVersionStore:
     def get(self, workspace_id: UUID, dataset_id: UUID, version: int) -> VersionRecord | None:
         found = self._fetch(
             "v.dataset_id = %s AND v.version = %s AND EXISTS "
-            "(SELECT 1 FROM datasets d WHERE d.id = v.dataset_id AND d.workspace_id = %s)",
+            "(SELECT 1 FROM datasets d WHERE d.id = v.dataset_id AND d.workspace_id = %s "
+            "AND d.status <> 'deleting')",
             (dataset_id, version, workspace_id),
         )
         return found[0] if found else None
@@ -180,7 +181,8 @@ class DatasetVersionStore:
     def list(self, workspace_id: UUID, dataset_id: UUID) -> list[VersionRecord]:
         return self._fetch(
             "v.dataset_id = %s AND EXISTS "
-            "(SELECT 1 FROM datasets d WHERE d.id = v.dataset_id AND d.workspace_id = %s)",
+            "(SELECT 1 FROM datasets d WHERE d.id = v.dataset_id AND d.workspace_id = %s "
+            "AND d.status <> 'deleting')",
             (dataset_id, workspace_id),
         )
 
@@ -218,7 +220,10 @@ class DatasetVersionStore:
         for name, value in fields.items():  # names are checked against the whitelist above
             sets.append(f"{name} = %s")
             params.append(Jsonb(value) if name in _JSON_FIELDS and value is not None else value)
-        where = "dataset_id = %s AND version = %s"
+        where = (
+            "dataset_id = %s AND version = %s AND NOT EXISTS "
+            "(SELECT 1 FROM datasets d WHERE d.id = dataset_id AND d.status = 'deleting')"
+        )
         params += [dataset_id, version]
         if expected is not None:
             where += " AND status = ANY(%s)"
@@ -240,6 +245,11 @@ class DatasetVersionStore:
         late attempt never applies a version another attempt failed or the user discarded.
         Returns True when the version is applied, now or before."""
         with self._conn.transaction():
+            deleting = self._conn.execute(
+                "SELECT 1 FROM datasets WHERE id = %s AND status = 'deleting'", (dataset_id,)
+            ).fetchone()
+            if deleting is not None:
+                return False
             row = self._conn.execute(
                 "SELECT status FROM dataset_versions WHERE dataset_id = %s AND version = %s "
                 "FOR UPDATE",
@@ -284,7 +294,7 @@ class DatasetVersionStore:
             row = self._conn.execute(
                 "SELECT v.status FROM dataset_versions v JOIN datasets d ON d.id = v.dataset_id "
                 "WHERE v.dataset_id = %s AND v.version = %s AND d.workspace_id = %s "
-                "FOR UPDATE OF v",
+                "AND d.status <> 'deleting' FOR UPDATE OF v",
                 (dataset_id, version, workspace_id),
             ).fetchone()
             if row is None:
@@ -319,7 +329,7 @@ class DatasetVersionStore:
             row = self._conn.execute(
                 "SELECT v.status FROM dataset_versions v JOIN datasets d ON d.id = v.dataset_id "
                 "WHERE v.dataset_id = %s AND v.version = %s AND d.workspace_id = %s "
-                "FOR UPDATE OF v",
+                "AND d.status <> 'deleting' FOR UPDATE OF v",
                 (dataset_id, version, workspace_id),
             ).fetchone()
             if row is None:

@@ -259,7 +259,9 @@ class JobQueue:
         return self._one(
             "SELECT id, workspace_id, kind, payload, status, attempts, max_attempts, last_error, "
             "result, trace_ids, cancel_requested_at IS NOT NULL AS cancel_requested "
-            "FROM jobs WHERE id = %s AND workspace_id = %s",
+            "FROM jobs WHERE id = %s AND workspace_id = %s AND NOT EXISTS ("
+            "SELECT 1 FROM datasets d WHERE d.id::text = jobs.payload ->> 'dataset_id' "
+            "AND d.status = 'deleting')",
             (job_id, workspace_id),
         )
 

@@ -9,7 +9,7 @@ import psycopg
 import pytest
 
 from da_agent.storage.dataset_versions import DatasetVersionStore
-from da_agent.storage.datasets import DatasetStateError, DatasetStore
+from da_agent.storage.datasets import DatasetNotFoundError, DatasetStateError, DatasetStore
 from da_agent.storage.db import migrate
 from da_agent.storage.workspaces import create_workspace
 
@@ -379,3 +379,24 @@ def test_another_workspace_never_sees_a_version(conn: psycopg.Connection, worksp
         store.approve(other, dataset_id, version, {}, None, [])
     with pytest.raises(DatasetStateError):
         store.discard(other, dataset_id, version)
+
+
+def test_a_deleting_dataset_hides_and_refuses_its_versions(
+    conn: psycopg.Connection, workspace: UUID
+) -> None:
+    dataset_id = ready_dataset(conn, workspace)
+    store = DatasetVersionStore(conn)
+    version = store.open_version(workspace, dataset_id, NEW, "up", 9)
+    DatasetStore(conn).start_delete(workspace, dataset_id)
+
+    assert store.get(workspace, dataset_id, 1) is None
+    assert store.list(workspace, dataset_id) == []
+    assert store.mark(dataset_id, version, "checking", expected=("uploaded",)) is False
+    assert store.apply(dataset_id, version, "b", expected=("uploaded",)) is False
+    assert store.current(dataset_id).version == 1
+    with pytest.raises(DatasetNotFoundError):
+        store.approve(workspace, dataset_id, version, {}, None, [])
+    with pytest.raises(DatasetNotFoundError):
+        store.discard(workspace, dataset_id, version)
+    with pytest.raises(DatasetNotFoundError):
+        store.open_version(workspace, dataset_id, NEW, "up2", 9)

@@ -487,3 +487,24 @@ def test_stale_metric_is_left_out(
         documents = MemoryLoader(url=POSTGRES_URL, schema=schema)(job, {"orders": {"thanh_tien"}})
     assert documents == []
     assert "Doanh thu" in caplog.text
+
+
+def test_memory_and_conversations_of_a_deleting_dataset_are_not_found(
+    conn: psycopg.Connection, workspace: UUID, dataset: UUID
+) -> None:
+    memory = MemoryStore(conn)
+    conversations = ConversationStore(conn)
+    entry = memory.suggest(workspace, dataset, "correction", "x", author="agent")
+    other = memory.write(workspace, dataset, "correction", "y", author="key:a")
+    conversation = conversations.create(workspace, dataset)
+    DatasetStore(conn).start_delete(workspace, dataset)
+
+    with pytest.raises(MemoryNotFoundError):
+        memory.write(workspace, dataset, "correction", "z", author="key:a")
+    with pytest.raises(MemoryNotFoundError):
+        memory.approve(workspace, entry)
+    with pytest.raises(MemoryNotFoundError):
+        memory.delete(workspace, other)
+    with pytest.raises(MemoryNotFoundError):
+        conversations.create(workspace, dataset)
+    assert conversations.get(workspace, conversation) is None
