@@ -1,8 +1,8 @@
 """Run a worker: python -m da_agent.worker. Settings come from the environment (da_agent.config).
 
-The worker claims ingest, build, version, run, export, and query jobs, runs sandboxes through the
-Runner, and records every model call in Postgres. SIGTERM or Ctrl-C stops it after the current job;
-if it is killed instead, the job's lease runs out and another worker continues it.
+The worker claims ingest, build, version, run, export, query, and delete jobs, runs sandboxes
+through the Runner, and records every model call in Postgres. SIGTERM or Ctrl-C stops it after the
+current job; if it is killed instead, the job's lease runs out and another worker continues it.
 """
 
 import os
@@ -31,6 +31,7 @@ from da_agent.storage.versions import register_version
 from da_agent.telemetry.metrics import llm_metrics, serve, worker_metrics
 from da_agent.telemetry.tracing import configure_tracing
 from da_agent.worker.datasets import BuildHandler, DatasetOpener, IngestHandler
+from da_agent.worker.deletion import DeleteHandler
 from da_agent.worker.exports import ExportHandler
 from da_agent.worker.limits import WorkspaceBudgets
 from da_agent.worker.memory import MemoryLoader
@@ -122,6 +123,13 @@ def build_worker(
             datasets_root=settings.datasets_root,
         ),
         "query": QueryHandler(**database, runner=runner),
+        "delete": DeleteHandler(
+            **database,
+            uploads_root=settings.uploads_root,
+            datasets_root=settings.datasets_root,
+            exports_root=settings.exports_root,
+            staging_root=settings.staging_root,
+        ),
     }
     worker_config = WorkerConfig(
         url=settings.database_url, schema=settings.schema, agent_version=manifest.version

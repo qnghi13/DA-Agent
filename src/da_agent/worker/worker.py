@@ -146,7 +146,9 @@ class Worker:
         started = time.monotonic()
         # How the attempt ended, and the job's status and result when it ended for good.
         ending: dict[str, Any] = {"attempt": "failed", "status": "failed", "result": None}
-        if self._metrics is not None and job.attempts == 1 and job.queue_wait_seconds is not None:
+        # Not for a delete job: each claim after a wait is attempt 1 again, with a growing wait.
+        first = job.attempts == 1 and job.kind != "delete"
+        if self._metrics is not None and first and job.queue_wait_seconds is not None:
             self._metrics.queue_wait(job.queue_wait_seconds)
         try:
             handler = self.handlers.get(job.kind)

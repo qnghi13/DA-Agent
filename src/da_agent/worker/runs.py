@@ -15,18 +15,16 @@ from uuid import UUID
 import psycopg
 from langgraph.checkpoint.postgres import PostgresSaver
 from opentelemetry import trace
-from psycopg.conninfo import make_conninfo
-from psycopg.rows import DictRow, dict_row
 
 from da_agent.agent.answer import result_to_json
-from da_agent.agent.checkpoints import checkpoint_version
+from da_agent.agent.checkpoints import checkpoint_connection, checkpoint_version
 from da_agent.agent.graph import run_graph
 from da_agent.agent.loop_types import AgentLimits, Document
 from da_agent.agent.stop import CANCELLED, LEASE_LOST, StopToken
 from da_agent.agent.tools import Dataset
 from da_agent.llm.client import LLMClient
 from da_agent.storage.dataset_versions import payload_version
-from da_agent.storage.db import connect, search_path_option
+from da_agent.storage.db import connect
 from da_agent.storage.events import RunEvents
 from da_agent.storage.jobs import Job, JobQueue
 from da_agent.storage.versions import mark_resumed_from
@@ -67,13 +65,6 @@ class RunHandler:
         # How often a run asks the queue whether its user cancelled it (ADR 0042).
         self.cancel_poll_seconds = 1.0
 
-    def checkpoint_connection(self) -> psycopg.Connection[DictRow]:
-        conninfo = make_conninfo(self.checkpoint_url, options=search_path_option(self.schema))
-        # The settings PostgresSaver.from_conn_string uses.
-        return psycopg.Connection[DictRow].connect(
-            conninfo, autocommit=True, prepare_threshold=0, row_factory=dict_row
-        )
-
     def _prepare(
         self, job: Job, run_id: str | None = None
     ) -> tuple[AgentLimits, Dataset, list[Document]]:
@@ -95,7 +86,7 @@ class RunHandler:
         (ADR 0042). Same dataset, documents, and limits as the job; costs go under fork_id. The
         job and its own thread are not written."""
         limits, dataset, documents = self._prepare(job, fork_id)
-        with self.checkpoint_connection() as conn:
+        with checkpoint_connection(self.checkpoint_url, self.schema) as conn:
             result = run_graph(
                 job.payload["question"],
                 as_of=job.payload["as_of"],
@@ -133,7 +124,7 @@ class RunHandler:
         payload = job.payload
         limits, dataset, documents = self._prepare(job)
         with (
-            self.checkpoint_connection() as conn,
+            checkpoint_connection(self.checkpoint_url, self.schema) as conn,
             connect(self.checkpoint_url, schema=self.schema) as events_conn,
         ):
             events = RunEvents(events_conn)

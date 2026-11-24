@@ -589,6 +589,7 @@ def test_an_operator_forks_a_finished_run_from_one_of_its_steps(
 ) -> None:
     from langgraph.checkpoint.postgres import PostgresSaver
 
+    from da_agent.agent.checkpoints import checkpoint_connection
     from da_agent.timetravel import copy_checkpoint, list_checkpoints
 
     job_id = enqueue_run(conn, workspace)
@@ -598,7 +599,7 @@ def test_an_operator_forks_a_finished_run_from_one_of_its_steps(
     second = ScriptedAdapter([sql(), submit("number", 350)])
     handler = run_handler(second, dataset, schema)
 
-    with handler.checkpoint_connection() as saver_conn:
+    with checkpoint_connection(URL, schema) as saver_conn:
         saver = PostgresSaver(saver_conn)
         rows = list_checkpoints(saver, str(job_id))
         after_plan = next(row for row in rows if "plan" in row.ran)
@@ -712,6 +713,27 @@ def test_retries_count_as_attempts_and_wait_only_once(
     assert metric(registry, "da_agent_job_attempts_total", kind="run", result="succeeded") == 1
     assert metric(registry, "da_agent_runs_total", outcome="answered") == 1
     assert metric(registry, "da_agent_queue_wait_seconds_count") == 1
+
+
+def test_a_delete_job_adds_no_queue_wait_sample(
+    schema: str, conn: psycopg.Connection, workspace: UUID
+) -> None:
+    from prometheus_client import CollectorRegistry
+
+    from da_agent.telemetry.metrics import WorkerMetrics
+
+    # Each claim after a wait is attempt 1 again, with a queue wait that keeps growing.
+    JobQueue(conn).enqueue(workspace, "delete", {"dataset_id": str(UUID(int=7))})
+    registry = CollectorRegistry()
+
+    worker = Worker(
+        config(schema, "w1"), {"delete": lambda job, lost: {"status": "deleted"}},
+        tracer=trace.NoOpTracer(), metrics=WorkerMetrics(registry),
+    )  # fmt: skip
+    worker.run_once()
+
+    assert metric(registry, "da_agent_job_attempts_total", kind="delete", result="succeeded") == 1
+    assert metric(registry, "da_agent_queue_wait_seconds_count") == 0
 
 
 def test_a_lost_job_is_an_attempt_but_not_a_finished_run(
