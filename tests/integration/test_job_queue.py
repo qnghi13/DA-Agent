@@ -6,7 +6,7 @@ in its own schema, which is dropped afterwards.
 
 import os
 import threading
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import psycopg
 import pytest
@@ -307,3 +307,47 @@ def test_a_failure_after_a_cancel_request_ends_cancelled_not_queued(
     queue.fail(job_id, "w1", "provider down", retry_in_seconds=10)
 
     assert status_of(conn, job_id) == ("cancelled", True)
+
+
+def test_dataset_jobs_are_cancelled_except_the_named_one_and_deletes(
+    conn: psycopg.Connection, workspace: UUID
+) -> None:
+    queue = JobQueue(conn)
+    d, other = uuid4(), uuid4()
+    running = queue.enqueue(workspace, "query", {"dataset_id": str(d)})
+    claimed = queue.claim("w1", lease_seconds=30)
+    assert claimed is not None and claimed.id == running
+    queued = queue.enqueue(workspace, "run", {"dataset_id": str(d)})
+    elsewhere = queue.enqueue(workspace, "run", {"dataset_id": str(other)})
+    kept = queue.enqueue(workspace, "build", {"dataset_id": str(d)})
+    deleting = queue.enqueue(workspace, "delete", {"dataset_id": str(d)})
+
+    queue.cancel_dataset_jobs(workspace, d, except_id=kept)
+
+    assert status_of(conn, queued) == ("cancelled", True)
+    assert status_of(conn, running) == ("running", False)
+    assert queue.cancel_requested(running)
+    for untouched in (elsewhere, kept, deleting):
+        assert status_of(conn, untouched) == ("queued", False)
+        assert not queue.cancel_requested(untouched)
+    assert queue.running_jobs_of_dataset(d, except_id=kept) == 1
+    assert queue.running_jobs_of_dataset(d, except_id=running) == 0
+
+
+def test_a_wait_puts_the_job_back_without_spending_an_attempt(
+    conn: psycopg.Connection, workspace: UUID
+) -> None:
+    queue = JobQueue(conn)
+    queue.enqueue(workspace, "delete", {})
+    job = queue.claim("w1", lease_seconds=30)
+    assert job is not None and job.attempts == 1
+
+    assert queue.wait(job.id, "w1", seconds=30)
+
+    row = conn.execute(
+        "SELECT status, attempts, run_after > now(), lease_until IS NULL FROM jobs WHERE id = %s",
+        (job.id,),
+    ).fetchone()
+    assert row == ("queued", 0, True, True)
+    assert not queue.wait(job.id, "w1", seconds=30)
+    assert queue.claim("w2", lease_seconds=30) is None

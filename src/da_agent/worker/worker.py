@@ -6,6 +6,8 @@ another worker took it). The outcome is written only while this worker still own
 - A handler that returns a dict completes the job with it.
 - RetryableJobError queues the job again after the next delay in retry_delays, and
   PermanentJobError fails it with its message.
+- JobWaitError puts the job back for later and gives its attempt back, so waiting never uses up
+  max_attempts.
 - Any other exception fails the job. Only the exception type is stored, because the job row is
   shown to the workspace and a message can hold host paths; the trace keeps the full exception.
 - A BaseException that is not an Exception, such as the process being stopped, is not caught: the
@@ -39,6 +41,14 @@ MAX_ERROR_CHARS = 500
 
 class RetryableJobError(Exception):
     """A failure that may pass on a later attempt. The message is shown to the workspace."""
+
+
+class JobWaitError(Exception):
+    """The job cannot go on yet, and no retry is spent: it is queued again after `seconds`."""
+
+    def __init__(self, seconds: float) -> None:
+        super().__init__(f"wait {seconds} s")
+        self.seconds = seconds
 
 
 class PermanentJobError(Exception):
@@ -151,6 +161,10 @@ class Worker:
                 message = str(error)[:MAX_ERROR_CHARS]
                 status = queue.fail(job.id, self.worker_id, message, retry_in_seconds=None)
                 ending = _failure_ending(status)
+                return
+            except JobWaitError as wait:
+                held = queue.wait(job.id, self.worker_id, seconds=wait.seconds)
+                ending = {"attempt": "wait" if held else "lost", "status": None, "result": None}
                 return
             except RetryableJobError as error:
                 delays = self.config.retry_delays

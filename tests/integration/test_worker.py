@@ -31,7 +31,13 @@ from da_agent.storage.workspaces import set_daily_budget
 from da_agent.telemetry.tracing import configure_tracing
 from da_agent.worker.limits import WorkspaceBudgets
 from da_agent.worker.runs import RunHandler
-from da_agent.worker.worker import PermanentJobError, RetryableJobError, Worker, WorkerConfig
+from da_agent.worker.worker import (
+    JobWaitError,
+    PermanentJobError,
+    RetryableJobError,
+    Worker,
+    WorkerConfig,
+)
 from tests.unit.test_agent_graph import ScriptedAdapter, plan, sql, submit
 
 URL = os.environ.get("DA_AGENT_TEST_POSTGRES_URL")
@@ -217,6 +223,22 @@ def test_a_retryable_error_waits_with_backoff(
     waiting = job(conn, job_id, workspace)
     assert (waiting.status, waiting.last_error) == ("queued", "the sandbox is busy")
     delay = conn.execute("SELECT run_after - now() > interval '100 seconds' FROM jobs").fetchone()
+    assert delay == (True,)
+
+
+def test_a_waiting_handler_is_queued_again_with_its_attempt_given_back(
+    schema: str, conn: psycopg.Connection, workspace: UUID
+) -> None:
+    job_id = JobQueue(conn).enqueue(workspace, "run", {})
+
+    def waiting(job: Job, lost: Any) -> dict[str, Any]:
+        raise JobWaitError(5)
+
+    Worker(config(schema, "w1"), {"run": waiting}).run_once()
+
+    waited = job(conn, job_id, workspace)
+    assert (waited.status, waited.attempts, waited.last_error) == ("queued", 0, None)
+    delay = conn.execute("SELECT run_after - now() > interval '2 seconds' FROM jobs").fetchone()
     assert delay == (True,)
 
 

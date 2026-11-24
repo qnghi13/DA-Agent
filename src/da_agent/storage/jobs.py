@@ -21,7 +21,7 @@ from psycopg.types.json import Jsonb
 
 from da_agent.storage.db import returned_id
 
-JobKind = Literal["ingest", "build", "run", "export", "query", "version"]
+JobKind = Literal["ingest", "build", "run", "export", "query", "version", "delete"]
 CancelOutcome = Literal["cancelled", "cancelling", "finished"]
 
 
@@ -189,6 +189,46 @@ class JobQueue:
         if found is None:
             return None
         return "cancelled" if found[0] == "cancelled" else "finished"
+
+    def cancel_dataset_jobs(
+        self, workspace_id: UUID, dataset_id: UUID, *, except_id: UUID | None = None
+    ) -> None:
+        """Ask every queued or running job of the dataset to stop, as request_cancel does: a
+        queued one ends cancelled at once. Skips `except_id` and delete jobs."""
+        self._conn.execute(
+            """
+            UPDATE jobs SET
+                status = CASE WHEN status = 'queued' THEN 'cancelled' ELSE status END,
+                finished_at = CASE WHEN status = 'queued' THEN now() ELSE finished_at END,
+                lease_until = CASE WHEN status = 'queued' THEN NULL ELSE lease_until END,
+                cancel_requested_at = coalesce(cancel_requested_at, now()),
+                updated_at = now()
+            WHERE workspace_id = %s AND payload ->> 'dataset_id' = %s
+                AND status IN ('queued', 'running') AND kind <> 'delete'
+                AND (%s::uuid IS NULL OR id <> %s::uuid)
+            """,
+            (workspace_id, str(dataset_id), except_id, except_id),
+        )
+
+    def running_jobs_of_dataset(self, dataset_id: UUID, *, except_id: UUID) -> int:
+        """How many other jobs of the dataset are running now."""
+        row = self._conn.execute(
+            "SELECT count(*) FROM jobs WHERE payload ->> 'dataset_id' = %s "
+            "AND status = 'running' AND id <> %s",
+            (str(dataset_id), except_id),
+        ).fetchone()
+        return int(row[0]) if row else 0
+
+    def wait(self, job_id: UUID, worker_id: str, *, seconds: float) -> bool:
+        """Put a running job back in the queue for later, giving its attempt back. False means
+        this worker no longer holds it."""
+        cursor = self._conn.execute(
+            "UPDATE jobs SET status = 'queued', attempts = attempts - 1, lease_until = NULL, "
+            "run_after = now() + make_interval(secs => %s), updated_at = now() "
+            "WHERE id = %s AND worker_id = %s AND status = 'running'",
+            (seconds, job_id, worker_id),
+        )
+        return cursor.rowcount == 1
 
     def cancel_requested(self, job_id: UUID) -> bool:
         row = self._conn.execute(

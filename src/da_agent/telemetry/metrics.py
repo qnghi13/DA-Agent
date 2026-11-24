@@ -46,8 +46,8 @@ RUN_OUTCOMES = (
     "answered", "abstained", "unverified", "model_error", "budget_exceeded", "iteration_limit",
     "needs_clarification", "deadline_exceeded", "cancelled", "failed", "other",
 )  # fmt: skip
-JOB_KINDS = ("run", "ingest", "build", "export", "query")
-ATTEMPT_RESULTS = ("succeeded", "retry", "failed", "cancelled", "lost")
+JOB_KINDS = ("run", "ingest", "build", "export", "query", "version", "delete")
+ATTEMPT_RESULTS = ("succeeded", "retry", "failed", "cancelled", "lost", "wait")
 CALL_RESULTS = (
     "ok", "rate_limited", "transient", "permanent", "invalid_tool_call", "throttled"
 )  # fmt: skip
