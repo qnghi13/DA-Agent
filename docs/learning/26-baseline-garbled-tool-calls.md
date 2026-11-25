@@ -68,5 +68,10 @@ về baseline. Và nếu lỗi không được ghi lại (code cũ bỏ `failed_
 ## Đo cơ chế, không chỉ đo điểm
 
 Điểm +61 → +67 nằm trong nhiễu, nhưng **cơ chế** đo được trực tiếp: 64 lệnh gọi được sửa, số câu
-dừng vì lỗi 7 → 2, ít hơn 50 lần gọi model, rẻ hơn 15%, nhanh hơn 2,6 giây mỗi câu. Khi điểm không
-đủ nhạy, hãy đo thứ mà thay đổi tác động trực tiếp.
+dừng vì lỗi 7 → 2, ít hơn 50 lần gọi model (6%). Khi điểm không đủ nhạy, hãy đo thứ mà thay đổi tác
+động trực tiếp.
+
+**Một sai lầm suýt lọt vào CV:** lần chạy sau khi sửa cũng rẻ hơn 15% và nhanh hơn 22%. Nhưng
+baseline, thứ không bị bản sửa tác động, cùng ngày cũng rẻ hơn 7% và nhanh hơn 24%. Phần lớn là do
+tải của Groq lúc chạy. Bài học: **luôn có một lần chạy đối chứng cùng lúc** (ở đây là baseline) để
+tách tác động của thay đổi khỏi tác động của môi trường.

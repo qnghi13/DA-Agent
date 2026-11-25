@@ -49,8 +49,8 @@ few points are noise: the model varies from run to run.
 | Run | Change | Correct / wrong / abstained | Score |
 |---|---|---|---|
 | A | Tool loop on the original SQLite file | | −5 |
-| B | Same, on data ingested from the raw files, in the sandbox | | −11 |
-| B4 | Code removes proven double entries during ingestion | | +13 |
+| B | Same, on data ingested from the raw files, in the sandbox | 3 / 14 / 13 | −11 |
+| B4 | Code removes proven double entries during ingestion | 16 / 3 / 11 | +13 |
 | B5 | Row descriptions in `describe_dataset`, status guidance in the prompt | 18 / 4 / 8 | +14 |
 | S1 | B5 on `smoke` (30 questions, 19 shops), $0.06 | 13 / 6 / 11 | +7 |
 | B7 | LangGraph workflow with plan, verify, and repair | 18 / 7 / 5 | +11 |
@@ -58,8 +58,10 @@ few points are noise: the model varies from run to run.
 | B8 | B7 with every verification check | 17 / 7 / 6 | +10 |
 | Final | Final code; the `smoke` questions inside the `regression` run | 20 / 6 / 4 | +14 |
 
-The largest gain came from data preparation, not from the agent. Removing double entries that
-code can prove took B from −11 to +13. The graph matched the simpler loop's total across three
+On this shop, the largest change came from data preparation, not from the agent: removing double
+entries that code can prove took correct answers from 3 to 16 of 30 and wrong ones from 14 to 3.
+That is one shop with many double entries, so it shows what clean data can be worth, not an
+average. The graph matched the simpler loop's total across three
 sets (+31 each) for about 13% more tokens. It is kept for checkpoints, resumption, and
 verification routing, not for score.
 
@@ -110,15 +112,39 @@ otherwise, same day, `regression`, one run each, recorded.
 | One-shot baseline, before | 76 | 36 | 38 | +40 | 25 | 263 | $0.148 |
 | One-shot baseline, after | 75 | 33 | 42 | +42 | 24 | 263 | $0.137 |
 
-- **The mechanism works:** 64 calls were read back in the agent run, and runs stopped on a
-  malformed call fell from 7 to 2. The run used 50 fewer model calls, cost 15% less, and its mean
-  latency fell from 11.7 s to 9.1 s.
+- **The mechanism works:** 64 calls were read back in the agent run, runs stopped on a malformed
+  call fell from 7 to 2, and the run used 50 fewer model calls (6%).
+- **Not from this change:** the agent run also cost 15% less and its mean latency fell from 11.7 s
+  to 9.1 s, but the baseline, which this change did not touch, cost 7% less and ran 24% faster the
+  same day. Most of that is Groq's load at the time, not the fix.
 - **The score:** +6 is within run-to-run noise (about 10 points), so the gain is the stops and
   calls above, not a score claim.
 - **The baseline gains nothing:** its rejected calls are a real wish for another query, not a
   garbled name, and it does not get the retry, which is agent behaviour.
 - **Still rejected in the agent run (29):** `json` 8, arguments that are not JSON 7, unparsable
   output 6, `run_sql` not offered 4, `answer` 2, others 2. Most were saved by the retry.
+
+## Self-hosted model on one GPU (2026-11-13)
+
+The challenge allows no hosted model, so the agent also runs on an open-weight model served
+locally ([GPU runbook](gpu.md)): vLLM 0.33.0, `google/gemma-4-12B-it` in bf16 on one RTX 5090,
+with batch-invariant inference. A preflight checked the server first: tool calls parse, and one
+prompt gets the same answer alone and in a busy batch. Then `regression` on the same prepared
+datasets, 3 questions at a time, one run.
+
+| Run | Correct | Wrong | Abstained | Score | Model cost |
+|---|---|---|---|---|---|
+| Gemma 4 12B on one RTX 5090 | 99 (66%) | 43 (29%) | 8 (5%) | +56 | none (GPU time) |
+| Groq `gpt-oss-20b`, later the same day | 97 (65%) | 41 (27%) | 12 (8%) | +56 | $0.27 |
+| Groq `gpt-oss-20b`, `final-regression` (2026-11-09) | 93 (62%) | 40 (27%) | 17 (11%) | +53 | $0.378 |
+
+- **A 12B model matches the hosted 20B one** on this set: the same score as the Groq run of the
+  same day, which used about the same number of model calls per question (4.4). One run each,
+  so this is a match within noise, not a win.
+- **It abstains less and errs more:** 8 abstentions against 12, 43 wrong against 41.
+- **Time:** 150 questions took 27.5 minutes of wall time, about 11 seconds per question with 3
+  at a time.
+- **Not measured yet:** the second GPU, a 4-bit model, and the code changes since.
 
 ## Metric definitions (2026-11-15)
 

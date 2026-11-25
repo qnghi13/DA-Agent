@@ -53,9 +53,9 @@ questions in English and Vietnamese, and see the SQL behind each answer.*
 - **Decisions on record.** 50 [architecture decision records](docs/adr/README.md), a
   [threat model](docs/threat-model.md), and about 1,900 Python and 160 web tests in CI.
 
-What measuring taught: the largest gain came from data preparation, not from the agent. Removing
-double entries that code can prove took one shop's score from −11 to +13, while the LangGraph
-workflow scored the same as a plain tool loop. A one-shot text-to-SQL prompt on the same prepared
+What measuring taught: clean data mattered as much as the agent. On one shop with many double
+entries, removing the ones code can prove took correct answers from 3 to 16 of 30, while the
+LangGraph workflow scored the same as a plain tool loop. A one-shot text-to-SQL prompt on the same prepared
 data scores +42 against the agent's +67, at half the cost: the agent mostly answers more
 questions, not better ones. The workflow stays for checkpoints and verification, not for score.
 
@@ -182,12 +182,14 @@ rules; it is not in this repository and is not redistributed.
 | 150 holdout questions (6 unseen shops, run once) | 60% | 31% | 9% | +44 | $0.30 |
 | Same 150 dev questions, current agent (2026-11-24) | 68% | 23% | 9% | +67 | $0.28 |
 | Same 150 dev questions, one-shot text-to-SQL baseline | 50% | 22% | 28% | +42 | $0.14 |
+| Same 150 dev questions, Gemma 4 12B on one RTX 5090 (2026-11-13) | 66% | 29% | 5% | +56 | GPU only |
 
 Holdout is within noise of dev. The baseline reads the same prepared data and the whole
 rulebook, writes one query, and answers from it. The agent adds +25, mostly by answering more
 questions (137 against 108) rather than by answering them better (74% of answers right against
-69%): the baseline abstains when the model wants a second query. Details, the history of
-changes, and caveats are in [docs/eval](docs/eval/README.md).
+69%): the baseline abstains when the model wants a second query. Served locally with vLLM, a 12B
+open-weight model matched Groq `gpt-oss-20b` run the same day (+56 each, one run). Details, the
+history of changes, and caveats are in [docs/eval](docs/eval/README.md).
 
 ## Documentation
 

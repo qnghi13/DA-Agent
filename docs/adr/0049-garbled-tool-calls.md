@@ -42,6 +42,8 @@ dropped. A malformed call cost a turn, and on the last turn it ended the run.
 - A read-back call reports no tokens: Groq returns no usage with the 400.
 - Other providers do not return `failed_generation`, so nothing changes for them.
 - Measured on `regression` (2026-11-24, one run each, $0.417 with the baseline): 64 calls read
-  back, runs stopped on a malformed call 7 to 2, 50 fewer calls, cost $0.331 to $0.280, score +61
+  back, runs stopped on a malformed call 7 to 2, 50 fewer calls (6%), score +61
   to +67 (within noise). The baseline's rejected calls were `run_sql` on its answer turn, so it
   is unchanged (+40 to +42). Details in `docs/eval/README.md`.
+- Cost and latency also fell in that run (15% and 22%), but the untouched baseline fell 7% and
+  24% the same day: mostly Groq's load, not this change.
