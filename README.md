@@ -7,13 +7,16 @@
 
 An open-source agent that analyses uploaded CSV, Excel, and SQLite files. You upload data with a
 free-form description and ask questions. It answers with results you can trace back to the queries
-that produced them.
+that produced them. The UI is in English and Vietnamese.
+
+**Stack:** Python 3.12, LangGraph with a Postgres checkpointer, FastAPI, Pydantic, DuckDB, sqlglot,
+Vega-Lite, React with Vite and TypeScript, OpenTelemetry with Phoenix, Prometheus, Docker Compose.
 
 > **Status:** a learning and portfolio project, complete for its plan: agent, ingestion, sandbox,
 > HTTP API, web UI, operator dashboard, and Docker Compose packaging work and are tested. It has not
 > run in production.
 
-https://github.com/user-attachments/assets/dc2bf6b4-7ae1-4237-b2e6-f531cc7c8d34
+https://github.com/user-attachments/assets/778b628c-d963-4e9e-9d9c-96c050f006b6
 
 *A 2½-minute narrated walkthrough: upload a café's sales export, review the proposed spec, ask
 questions in English and Vietnamese, and see the SQL behind each answer.*
@@ -33,10 +36,10 @@ questions in English and Vietnamese, and see the SQL behind each answer.*
 
 ## Highlights
 
-- **Measured on unseen data.** On 150 questions from 6 shops held out from development and run
-  once, 60% correct and 9% abstained, at about $0.002 and 6 seconds (median) per question with
-  `gpt-oss-20b`. A wrong answer costs a point, so the agent abstains rather than guess
-  ([Evaluation](#evaluation)).
+- **Measured on unseen data.** Scores are +1 per correct answer, −1 per wrong one, and 0 per
+  abstention, so the agent abstains rather than guess. On 150 questions from 6 shops held out from
+  development and run once (v0.1.0), 60% correct and 9% abstained, at about $0.002 and 6 seconds
+  (median) per question with `gpt-oss-20b` ([Evaluation](#evaluation)).
 - **Generated code never runs on the host.** File parsing and every SQL query run in containers
   without network or secrets, behind a read-only SQL guard. Escape attempts are tests.
 - **Answers are checked by code, not by another model.** Numbers must come from query results,
@@ -47,8 +50,8 @@ questions in English and Vietnamese, and see the SQL behind each answer.*
   breaker for model providers, cancel, and deadlines.
 - **Operable.** OpenTelemetry traces, a cost ledger per model call, an audit log, an operator
   dashboard, and Prometheus SLO alerts.
-- **Decisions on record.** 49 [architecture decision records](docs/adr/README.md), a
-  [threat model](docs/threat-model.md), and about 1,800 Python and 160 web tests in CI.
+- **Decisions on record.** 50 [architecture decision records](docs/adr/README.md), a
+  [threat model](docs/threat-model.md), and about 1,900 Python and 160 web tests in CI.
 
 What measuring taught: the largest gain came from data preparation, not from the agent. Removing
 double entries that code can prove took one shop's score from −11 to +13, while the LangGraph
@@ -101,14 +104,6 @@ flowchart LR
     worker --> llm["LLMClient"] --> providers(("Model<br/>providers"))
     worker -- "one SQL query" --> runner["Runner"] --> sandbox["Sandbox<br/>DuckDB, no network,<br/>read-only dataset"]
 ```
-
-**Deleting a dataset.** `DELETE /v1/datasets/{id}` (the "Delete dataset" button) hides the dataset at
-once and queues a background job that removes its uploaded files, builds, export files, agent
-checkpoints, and every row about it: runs, answers, reports, queries, conversations, notes, and
-metrics. Deletion is final. It keeps the spend ledger (`llm_calls`) and the audit log, which hold
-no data values. It does not cover Phoenix traces, which expire with Phoenix's own retention, container
-logs, or golden rerun reports an operator wrote under `data_dir/goldens/`
-([ADR 0050](docs/adr/0050-dataset-deletion.md)).
 
 The same system drawn as one bench, with numbers that follow a question through it:
 
@@ -169,13 +164,9 @@ flowchart LR
 - **Results leave in full.** A query's whole result downloads as CSV (up to 1,000,000 rows),
   re-run in a sandbox from the stored query; charts download as PNG or SVG
   ([ADR 0032](docs/adr/0032-result-export.md)).
-- **Runs survive crashes and stay within budget.** Every model turn is a Postgres checkpoint, so a
-  killed worker's run continues without repeating finished steps. Token and money limits apply per
-  run and per workspace.
-- **Operable.** OpenTelemetry traces in Phoenix, a cost ledger per model call, an audit log, and an
-  operator dashboard for queue health, outcomes, latency, model errors, and cost.
-- **Measured.** An evaluation harness with a separate scorer process, fixed dev and holdout
-  splits, and a cost report for every run. See [Evaluation](#evaluation).
+- **Deleting a dataset removes it everywhere the app stores it**: files, builds, checkpoints, and
+  every row about it. Only the spend ledger and audit log stay
+  ([Operations](docs/operations.md#deleting-a-dataset)).
 
 ## Evaluation
 
