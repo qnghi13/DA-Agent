@@ -9,8 +9,10 @@ challenge ended 2026-11-25: its limits no longer apply; its data stays private.
 - **Analysis tools B** (ADR 0051, note 28, design + plan 2026-11-26) on branch
   `feat/analysis-tools`: `analyze` with explain_change, trend, forecast, correlation,
   outliers computed in the sandbox; card, "Vì sao thay đổi?" button, drill chip in the web.
-  Checked in the running app ($0.006). Next: the eval in `eval/analysis/` (16 questions, ask
-  before running; about $0.10-0.30 for 3 attempts), then `smoke` with `--analysis`.
+  Checked in the running app ($0.006). Eval ($0.042, 3 attempts): right kind 8/10 each,
+  correct 6/8/7 of 10, controls 6/6 without analysis. `smoke` graph +17 off vs +14 on ($0.13,
+  one run each: noise). Next: fix the eval's ambiguous drinks question, suggest dimensions to
+  the model (it misses branch), then project C (insight cards). Known gaps: the design doc.
 - **Dataset deletion** (ADR 0050, note 27, design doc): on `main`; checked in the
   running app (UI delete, a run stopped mid-call, rows and folders gone, spend and audit kept).
   Phoenix traces and golden rerun reports are not deleted (threat model).
@@ -43,7 +45,7 @@ challenge ended 2026-11-25: its limits no longer apply; its data stays private.
 ## Waiting on the user
 - No rows, questions, rulebook, or answers in any commit or image (organiser rules). When the
   challenge ends: delete `train/`, `eval/reports/`, and Docker volumes with eval data.
-## Spend so far: about $4.04 (agent runs $3.38, spec proposals $0.57, demos and e2e $0.08).
+## Spend so far: about $4.21 (agent runs $3.55, spec proposals $0.57, demos and e2e $0.08).
 - Demo video re-recorded 2026-11-25 (Kokoro narration, synced) and linked in the README.
 - Open: Vietnamese chart requests drew a chart in 1 of 3 Groq runs (`make_chart` text is English).
 ## Watch out

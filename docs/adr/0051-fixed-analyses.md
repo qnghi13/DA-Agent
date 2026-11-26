@@ -80,6 +80,25 @@ change analysis compute with fixed statistical methods and use a model only for 
 - **Not covered.** Changes in averages and rates (mix decomposition), what-if questions, and
   picking a chart point are not covered.
 
+**Measured** (2026-11-26, Groq `gpt-oss-20b`, $0.168 in all):
+- **The analysis eval** (`eval/analysis/`, 16 questions, 3 attempts, $0.042):
+  - the right kind on 8/10 every attempt;
+  - correct analysis answers 6, 8, and 7 of 10, so the bar of 7 was missed once;
+  - every control ran no analysis (6/6);
+  - 11/16 questions were right in all three attempts.
+- **What failed:**
+  - The Q1 drill-down was answered right with `run_sql` (no analysis) 3/3. The question reads as
+    a ranking.
+  - "Is drinks revenue rising?" is ambiguous in the generated data: the long trend rises, but the
+    last two months fall from the other planted effects. The eval needs a cleaner question.
+  - Twice the model passed too few dimensions and missed the branch.
+  - One run gave up after a correct analysis, with six malformed answers.
+- **The same-length check worked:** twice refused, the model fixed its ranges to 1-26 October
+  against 1-26 November.
+- **`smoke`** (30 DataMate questions, graph agent): +17 without analysis against +14 with it.
+  One run each, within the noise of a single run (note 19), and the changed questions moved both
+  ways. Measure with pass^k before calling it harm or help.
+
 **Rejected:**
 - **Free-form Python (`run_python`):** misused by the target model in the archive's trials;
   verification cannot read code; a person who does not read code cannot check it.

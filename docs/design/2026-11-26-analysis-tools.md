@@ -390,3 +390,26 @@ Analysis charts do not count against `make_chart`'s limit.
 - **Averages refused:** "why did the average order value drop" is refused in this version. The
   model falls back to SQL. Rate and mix decomposition is a later addition.
 - **Image size:** the sandbox image grows about 500 MB.
+
+## Known gaps after review (2026-11-26)
+
+Found by the whole-branch review, graded minor, not fixed yet:
+
+- **Coverage:**
+  - A monthly `x` with unknown coverage uses the start of the last period as the data's end, so
+    ranges over the last month are refused.
+  - The coverage fallback does not follow CTEs, subqueries, or `SELECT *`, and takes every date
+    column of every table read, so an unrelated date column can refuse valid ranges.
+- **Additivity:** `SUM(x) FILTER (WHERE ...)` and `ROUND(SUM(x), 2)` are refused with a confusing
+  message. `FILTER` and `ROUND` should be treated as wrappers.
+- **Segment names:** they are not capped in length, and a literal `(blank)` or `(other)` cell
+  merges with the markers.
+- **API:** the spec says a run read returns `analyses`; the API returns them inside
+  `queries[].analysis`.
+- **Cards:** small summary integers (`periods`, `horizon`, `threshold`) count in evidence
+  matching, so an analysis run along the way can attach a card.
+- **Grain:** a daily `x` whose dates are all the 1st of a month reads as monthly.
+- **Eval:**
+  - there is no question where the data ends before `as_of`;
+  - there is no question about a non-additive measure;
+  - the drinks trend question is ambiguous (see ADR 0051, Measured).
