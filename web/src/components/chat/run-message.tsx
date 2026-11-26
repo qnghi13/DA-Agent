@@ -9,6 +9,7 @@ import {
   Loader2,
   PanelRight,
   Sigma,
+  Sparkles,
   X,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useReducer, useRef, useState } from "react";
@@ -29,6 +30,7 @@ import {
   answerSummary,
   formatAnswer,
   initialTrail,
+  isLongText,
   isRunActive,
   reduceTrail,
   runCharts,
@@ -36,6 +38,8 @@ import {
   toolLabel,
 } from "@/run";
 import type { SseEvent } from "@/sse";
+import { type FollowUp, evidenceAnalyses, whyChangedFollowUp } from "@/analysis";
+import { AnalysisCard } from "@/components/chat/analysis-card";
 
 // Vega is large; load it only when a chart is on screen.
 const Chart = lazy(() => import("@/Chart"));
@@ -55,10 +59,13 @@ export function RunMessage({
   onOpenMemory,
   onStatus,
   onVersion,
+  onFollowUp,
 }: {
   api: Api;
   runId: string;
   active: boolean;
+  /** Asks a follow-up in the conversation, such as why a total changed (ADR 0051). */
+  onFollowUp?: (followUp: FollowUp) => void;
   /** Called with the run's status whenever it changes, so the composer can offer Stop. */
   onStatus?: (runId: string, status: RunStatus) => void;
   /** Called with the data version the run read, once it is loaded. */
@@ -134,6 +141,7 @@ export function RunMessage({
           active={active}
           onShowWork={(trigger) => onShowWork({ run, trail }, trigger)}
           onCorrect={onCorrect && ((trigger) => onCorrect(run, trigger))}
+          onFollowUp={onFollowUp}
         />
       ) : (
         <Progress
@@ -256,6 +264,7 @@ function Answer({
   active,
   onShowWork,
   onCorrect,
+  onFollowUp,
 }: {
   api: Api;
   onOpenMemory?: (trigger: HTMLElement) => void;
@@ -264,9 +273,12 @@ function Answer({
   active: boolean;
   onShowWork: (trigger: HTMLElement) => void;
   onCorrect?: (trigger: HTMLElement) => void;
+  onFollowUp?: (followUp: FollowUp) => void;
 }) {
   const m = useT();
   const result = run.result;
+  const analyses = evidenceAnalyses(run);
+  const whyChanged = onFollowUp ? whyChangedFollowUp(run, m) : null;
   const summary = answerSummary(run.status, result, m);
   const charts = runCharts(result?.steps ?? []);
   const text = answerText(run, m);
@@ -306,6 +318,9 @@ function Answer({
       ) : result?.answer ? (
         <>
           <AnswerValue run={run} />
+          {analyses.map(({ index, record, info }) => (
+            <AnalysisCard key={index} record={record} info={info} onFollowUp={onFollowUp} />
+          ))}
           {result.answer.kind !== "unanswerable" && (
             <HowCalculated api={api} run={run} onOpenMemory={onOpenMemory} />
           )}
@@ -338,6 +353,12 @@ function Answer({
           <PanelRight />
           {m.chat.showWork}
         </Button>
+        {whyChanged && (
+          <Button variant="outline" size="sm" onClick={() => onFollowUp?.(whyChanged)}>
+            <Sparkles />
+            {m.analysis.whyChanged}
+          </Button>
+        )}
         {text && (
           <Button variant="ghost" size="sm" onClick={copy}>
             {copied ? <Check /> : <Copy />}
@@ -372,7 +393,9 @@ function AnswerValue({ run }: { run: Run }) {
           className={
             answer.kind === "unanswerable"
               ? "text-muted-foreground text-lg"
-              : "text-3xl font-semibold tracking-tight tabular-nums"
+              : isLongText(answer, m)
+                ? "text-[15px] leading-relaxed"
+                : "text-3xl font-semibold tracking-tight tabular-nums"
           }
         >
           {formatted.text}

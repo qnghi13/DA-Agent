@@ -8,10 +8,11 @@ evaluate expressions (data URLs, transforms, signals). See docs/adr/0015.
 import datetime as dt
 import math
 import re
+from dataclasses import replace
 from decimal import Decimal
 from typing import Any
 
-from da_agent.agent.answer import DATE_PATTERN
+from da_agent.agent.answer import DATE_PATTERN, QueryRecord
 from da_agent.llm.types import ToolSpec
 from da_agent.storage.sqlite_dataset import QueryResult
 
@@ -179,3 +180,170 @@ def chart_spec(arguments: dict[str, Any], result: QueryResult) -> dict[str, Any]
         "mark": {"type": mark, "tooltip": True},
         "encoding": encoding,
     }
+
+
+# Charts of fixed analyses (ADR 0051). Code draws them from the analysis table, so they hold only
+# numbers the analysis returned, and no transform: a waterfall's bar ends are computed here.
+
+WATERFALL_COLORS = {"total": "#64748b", "up": "#16a34a", "down": "#dc2626"}
+
+
+def analysis_chart(record: QueryRecord) -> dict[str, Any] | None:
+    """A Vega-Lite spec for an analysis record, or None for kinds drawn as tables."""
+    analysis = record.analysis or {}
+    kind = analysis.get("kind")
+    if kind == "explain_change":
+        return _waterfall(record, analysis)
+    if kind not in ("trend", "forecast") or not record.rows:
+        return None
+    values = [
+        {column: _plain(cell) for column, cell in zip(record.columns, row, strict=True)}
+        for row in record.rows
+    ]
+    x, y = record.columns[0], record.columns[1]
+    unit = _time_unit([v[x] for v in values])
+    x_encoding: dict[str, Any] = {"field": _field(x), "type": "temporal", "title": x}
+    if unit:
+        x_encoding["timeUnit"] = unit
+
+    def line(field: str, dashed: bool) -> dict[str, Any]:
+        mark: dict[str, Any] = {"type": "line", "point": not dashed, "tooltip": True}
+        if dashed:
+            mark["strokeDash"] = [6, 4]
+        y_encoding = {"field": _field(field), "type": "quantitative", "title": y}
+        return {"mark": mark, "encoding": {"x": x_encoding, "y": y_encoding}}
+
+    if kind == "trend":
+        layers = [line(y, False), line("fitted", True)]
+    else:
+        band = {
+            "mark": {"type": "area", "opacity": 0.2, "tooltip": True},
+            "encoding": {
+                "x": x_encoding,
+                "y": {"field": "low_95", "type": "quantitative", "title": y},
+                "y2": {"field": "high_95"},
+            },
+        }
+        layers = [band, line(y, False), line("forecast", True)]
+    return {
+        "$schema": VEGA_LITE_SCHEMA,
+        "title": y[:MAX_TITLE_CHARS],
+        "data": {"values": values},
+        "layer": layers,
+    }
+
+
+def _span_label(span: Any) -> str:
+    """A range as people say it: a whole month as 2026-10, one day as that day."""
+    if not isinstance(span, dict):
+        return ""
+    start, end = str(span.get("start", "")), str(span.get("end", ""))
+    if start == end:
+        return start
+    try:
+        first, last = dt.date.fromisoformat(start), dt.date.fromisoformat(end)
+    except ValueError:
+        return f"{start} to {end}"
+    following = last + dt.timedelta(days=1)
+    whole_month = first.day == 1 and (first.year, first.month) == (last.year, last.month)
+    if whole_month and following.day == 1:
+        return start[:7]
+    return f"{start} to {end}"
+
+
+def _waterfall(record: QueryRecord, analysis: dict[str, Any]) -> dict[str, Any] | None:
+    summary = analysis.get("summary") or {}
+    ranked = summary.get("dimensions") or []
+    before, after = summary.get("before") or {}, summary.get("after") or {}
+    if not ranked or "total" not in before or "total" not in after:
+        return None
+    dimension = ranked[0]
+    first, last = float(before["total"]), float(after["total"])
+    steps: list[dict[str, Any]] = [
+        {"step": _span_label(before), "start": first, "end": first, "kind": "total", "total": first}
+    ]
+    level = first
+    for row in record.rows:
+        if row[0] != dimension:
+            continue
+        moved = float(row[4] or 0)
+        steps.append(
+            {
+                "step": str(row[1]),
+                "start": level,
+                "end": round(level + moved, 2),
+                "kind": "up" if moved >= 0 else "down",
+                "total": None,
+            }
+        )
+        level = round(level + moved, 2)
+    steps.append(
+        {"step": _span_label(after), "start": last, "end": last, "kind": "total", "total": last}
+    )
+    # Changes are small next to the totals, so the axis zooms to the levels. A total is then a
+    # tick with its value written, never a bar: a bar on a cut axis makes a drop look larger
+    # than it is. A row without a total is left out of the tick and text layers.
+    levels = [float(step["end"]) for step in steps] + [float(step["start"]) for step in steps]
+    low, high = min(levels), max(levels)
+    pad = (high - low) * 0.5 if high > low else abs(high) * 0.05 or 1.0
+    floor = round(low - pad, 2)
+    top = round(high + (high - floor) * 0.08, 2)
+    y = str((analysis.get("arguments") or {}).get("y") or "")
+    total = {"field": "total", "type": "quantitative"}
+    return {
+        "$schema": VEGA_LITE_SCHEMA,
+        "title": y[:MAX_TITLE_CHARS],
+        "data": {"values": steps},
+        "encoding": {
+            "x": {
+                "field": "step",
+                "type": "ordinal",
+                "sort": None,
+                "title": dimension,
+                # Tilted, so segment names stay apart on a phone as well as a wide screen.
+                "axis": {"labelAngle": -40},
+            }
+        },
+        "layer": [
+            {
+                "mark": {"type": "bar", "tooltip": True},
+                "encoding": {
+                    "y": {
+                        "field": "start",
+                        "type": "quantitative",
+                        "title": y,
+                        "scale": {"zero": False, "nice": False, "domain": [floor, top]},
+                    },
+                    "y2": {"field": "end"},
+                    "color": {
+                        "field": "kind",
+                        "type": "nominal",
+                        "legend": None,
+                        "scale": {
+                            "domain": list(WATERFALL_COLORS),
+                            "range": list(WATERFALL_COLORS.values()),
+                        },
+                    },
+                },
+            },
+            {
+                "mark": {"type": "tick", "thickness": 3, "color": WATERFALL_COLORS["total"]},
+                "encoding": {"y": total},
+            },
+            {
+                "mark": {"type": "text", "dy": -10},
+                "encoding": {"y": total, "text": {**total, "format": ",.0f"}},
+            },
+        ],
+    }
+
+
+def with_analysis_charts(records: list[QueryRecord]) -> list[QueryRecord]:
+    """The records, with each analysis's chart in its analysis."""
+    attached = []
+    for record in records:
+        chart = analysis_chart(record) if record.analysis is not None else None
+        if chart is not None and record.analysis is not None:
+            record = replace(record, analysis={**record.analysis, "chart": chart})
+        attached.append(record)
+    return attached

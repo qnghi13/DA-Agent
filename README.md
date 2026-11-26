@@ -50,7 +50,7 @@ questions in English and Vietnamese, and see the SQL behind each answer.*
   breaker for model providers, cancel, and deadlines.
 - **Operable.** OpenTelemetry traces, a cost ledger per model call, an audit log, an operator
   dashboard, and Prometheus SLO alerts.
-- **Decisions on record.** 50 [architecture decision records](docs/adr/README.md), a
+- **Decisions on record.** 51 [architecture decision records](docs/adr/README.md), a
   [threat model](docs/threat-model.md), and about 1,900 Python and 160 web tests in CI.
 
 What measuring taught: clean data mattered as much as the agent. On one shop with many double
@@ -161,6 +161,10 @@ flowchart LR
     verify -- "fail, none left" --> abstain
 ```
 
+- **Deeper questions, computed by code.** "Why did revenue drop?", trends, forecasts, outliers,
+  and correlations run as fixed analyses: the model picks one, code computes it in the sandbox,
+  and the answer shows where a change happened, never a guessed cause. A button asks "why did it
+  change?" under any answer over time ([ADR 0051](docs/adr/0051-fixed-analyses.md)).
 - **Results leave in full.** A query's whole result downloads as CSV (up to 1,000,000 rows),
   re-run in a sandbox from the stored query; charts download as PNG or SVG
   ([ADR 0032](docs/adr/0032-result-export.md)).

@@ -244,9 +244,17 @@ reducers.
 ### Tools
 
 `describe_dataset`, `search_rules`, `run_sql`, `make_chart` (only when a run asks for charts),
-`submit_answer`. Questions to the user go through the `clarify` node, not a tool. Not built:
-`profile_column` and `run_python`; SQL covered every question so far, and Python would widen what
-the sandbox must contain.
+`analyze` (only when a run asks for analysis), `submit_answer`. Questions to the user go through
+the `clarify` node, not a tool. Not built: `profile_column` and `run_python`; free-form Python was
+tried and misused by the target model ([ADR 0051](adr/0051-fixed-analyses.md)).
+
+`analyze` runs a fixed analysis on one query's result:
+- **Kinds:** `explain_change`, `trend`, `forecast`, `correlation`, and `outliers`.
+- **Code, not the model, does the rest.** It reads every row, picks the method, and refuses what
+  would mislead: an average to split, or a range past the data.
+- **Where it runs:** in the sandbox (`StatsRun`, `POST /v1/stats` on the Runner).
+- **How it is chosen:** the plan names the kind in a required field when analysis is offered, and
+  a run can force a kind.
 
 Tools have Pydantic input and output schemas and bounded output. Errors come back as structured
 results the model can act on, and do not crash the graph.
@@ -271,6 +279,10 @@ Mostly code, not LLM self-assessment ([ADR 0007](adr/0007-code-first-verificatio
 - No row the queries read has a value the build could not parse. Clean rows keep `_source` and
   `_row`, and `_quarantine` lists failed values by the same keys, so a probe counts them inside
   the query's rows. A hit withholds the answer without a repair ([ADR 0014](adr/0014-probe-checks-in-verify.md)).
+
+- A fixed analysis is a query record too ([ADR 0051](adr/0051-fixed-analyses.md)). Its table
+  and summary are query results for tracing, and its SQL goes through the period, fan-out, and
+  unreadable-value checks like any evidence query.
 
 Not built: recomputing important answers a second way, which was planned for the reliability
 phase and cut for time.
@@ -299,6 +311,9 @@ its successful queries are the evidence behind the answer. The `eval/datamate` a
 the core does not know that format. Charts are Vega-Lite specs that code builds from a query: the model names a mark and result
 columns, never writes the spec, and gets back no rows ([ADR 0015](adr/0015-charts-built-by-code.md)).
 `make_chart` is offered only when a run asks for charts, and `AgentResult.charts` returns the specs.
+A fixed analysis is a `QueryRecord` whose `analysis` field holds its kind, arguments, summary,
+notes, and a chart code built from its table. `AgentResult.analyses` lists them, and the web shows
+each evidence analysis as a card ([ADR 0051](adr/0051-fixed-analyses.md)).
 Reports are standalone HTML, and every number links to the query cell that produced it
 ([ADR 0016](adr/0016-html-reports.md)). `AgentResult.queries` holds the rows the model saw.
 A query's whole result downloads as CSV through an `export` job: the worker re-runs the stored SQL

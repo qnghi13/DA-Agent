@@ -18,7 +18,8 @@ PROGRESS_EVERY_OPERATIONS = 1000
 
 
 # Which layer stopped a query: the SQL guard, the time limit, a resource limit, or the engine.
-QueryErrorKind = Literal["rejected", "timeout", "limit", "engine"]
+# "analysis": a fixed analysis does not fit the query result (ADR 0051).
+QueryErrorKind = Literal["rejected", "timeout", "limit", "engine", "analysis"]
 
 
 class QueryError(ValueError):

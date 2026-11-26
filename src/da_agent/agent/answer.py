@@ -32,7 +32,8 @@ class ToolStep:
     error: str | None = None
     # A fixed word for why the step failed, safe to count in traces and dashboards: "rejected"
     # (SQL guard), "timeout", "limit", "engine", "arguments", "crash", "chart", "no_match",
-    # "unknown_tool", or "answer_format".
+    # "unknown_tool", "answer_format", "analysis" (an analysis that does not fit, ADR 0051), or
+    # "repeat" (an analyze call that already returned its result).
     error_kind: str | None = None
     # The Vega-Lite spec a successful make_chart built from its query.
     chart: dict[str, Any] | None = None
@@ -40,12 +41,16 @@ class ToolStep:
 
 @dataclass(frozen=True)
 class QueryRecord:
-    """A successful query and the bounded result the model saw, for reports and provenance."""
+    """A successful query and the bounded result the model saw, for reports and provenance.
+
+    A fixed analysis (ADR 0051) is a record too: its SQL, its table as columns and rows, and in
+    analysis its kind, arguments, summary, notes, and the chart code built from it."""
 
     sql: str
     columns: list[str]
     rows: list[list[Any]]
     truncated: bool = False
+    analysis: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -66,6 +71,11 @@ class AgentResult:
     def charts(self) -> list[dict[str, Any]]:
         """The Vega-Lite specs drawn during the run, in order."""
         return [step.chart for step in self.steps if step.chart is not None]
+
+    @property
+    def analyses(self) -> list[QueryRecord]:
+        """The successful fixed analyses of the run, in order."""
+        return [query for query in self.queries if query.analysis is not None]
 
 
 def _is_number(value: Any) -> bool:

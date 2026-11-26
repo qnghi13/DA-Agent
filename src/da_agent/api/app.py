@@ -40,7 +40,7 @@ from fastapi.responses import (
     Response,
     StreamingResponse,
 )
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator, model_validator
 
 from da_agent.agent.answer import AgentResult, result_from_json
 from da_agent.agent.verify import evidence_indices
@@ -60,7 +60,7 @@ from da_agent.reports.metric import (
     metric_candidates,
     uses_metric,
 )
-from da_agent.runner.runner import MAX_SQL_CHARS
+from da_agent.runner.runner import MAX_SQL_CHARS, StatsKind
 from da_agent.security.sql_guard import SqlRejectedError, validate_select
 from da_agent.storage import audit, feedback, ops
 from da_agent.storage.dataset_versions import (
@@ -173,6 +173,19 @@ class RunRequest(BaseModel):
         default=None,
         description="A conversation of the same dataset; the run reads its earlier turns.",
     )
+    analysis: bool = Field(
+        default=True, description="Offer fixed analyses: why it changed, trend, forecast, and more."
+    )
+    analysis_kind: StatsKind | None = Field(
+        default=None,
+        description="Run this analysis whatever the plan names, as the web's buttons do.",
+    )
+
+    @model_validator(mode="after")
+    def _kind_needs_analysis(self) -> "RunRequest":
+        if self.analysis_kind is not None and not self.analysis:
+            raise ValueError("analysis_kind needs analysis")
+        return self
 
 
 class QueryRequest(BaseModel):
@@ -953,11 +966,14 @@ def create_run(body: RunRequest, conn: Db, caller: Caller, settings: Settings) -
         "question": body.question,
         "as_of": as_of,
         "charts": True,
+        "analysis": body.analysis,
         # The data version the run reads, fixed now so a newer upload never changes its answer.
         "dataset_version": DatasetVersionStore(conn).current(record.id).version,
     }
     if conversation is not None:
         payload["conversation_id"] = conversation
+    if body.analysis_kind is not None:
+        payload["analysis_kind"] = body.analysis_kind
     with conn.transaction():
         if not lock_live_dataset(conn, caller.workspace_id, record.id):
             raise _not_found()

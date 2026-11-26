@@ -1,23 +1,16 @@
 # Progress
 
-Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-25 (README, screenshots, demo video)
-**Phase:** optimisation. Challenge rules: ≤15B params in total, offline Docker, 2×5090, 6 h,
-re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for the submission.
-
-## Optimisation (2026-11-11)
-- `final-regression` failures (57): rules 19, periods 7, shorthand 7, harness 17, other 7.
-- Done (559f88a): code-computed periods, Vietnamese shorthand and Telex expansion, `vllm:` route.
-  Test shops are new and rulebooks differ per split: ingestion runs in the container; the
-  semantic layer holds data facts only, never rules.
-- Public test (`public_test/`, 14 shops): 14/14 built; spec repairs in code; ADR 0029.
-- GPU kit (a24a501): runbook, `serve.sh`, preflight, `--workers`.
-- GPU run 1 (2026-11-13, 1x5090, vLLM 0.33.0, `gemma-4-12B-it` bf16, batch-invariant): preflight
-  ok (tool calls, identical alone vs busy). `regression` on `datasets-dev`, 3 workers: **+56**
-  (99/43/8) vs Groq +53; ~12.7 s/question wall. Failure analysis ($0): 14 right values with the
-  wrong kind (percent as number, date as string): offline kind coercion gives +84, hurts none
-  (Groq +55). Then status variants and line-vs-header revenue (~12, checked by hand SQL), debt
-  4, budget abstains 8 (SQLite functions, made-up columns). Semantic layer: private folder.
+Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-26 (analysis tools)
+**Phase:** product, deeper analysis for non-technical users, in order B -> C -> D (user,
+2026-11-26): B fixed analyses (done), C insight cards, D multi-step deep analysis. The Zalo
+challenge ended 2026-11-25: its limits no longer apply; its data stays private.
+- GPU run 1 (2026-11-13, `gemma-4-12B-it` on vLLM): `regression` +56 vs Groq +53 (docs/eval/gpu.md).
 ## Next step
+- **Analysis tools B** (ADR 0051, note 28, design + plan 2026-11-26) on branch
+  `feat/analysis-tools`: `analyze` with explain_change, trend, forecast, correlation,
+  outliers computed in the sandbox; card, "Vì sao thay đổi?" button, drill chip in the web.
+  Checked in the running app ($0.006). Next: the eval in `eval/analysis/` (16 questions, ask
+  before running; about $0.10-0.30 for 3 attempts), then `smoke` with `--analysis`.
 - **Dataset deletion** (ADR 0050, note 27, design doc): on `main`; checked in the
   running app (UI delete, a run stopped mid-call, rows and folders gone, spend and audit kept).
   Phoenix traces and golden rerun reports are not deleted (threat model).
@@ -50,7 +43,7 @@ re-run must match ±0.03 PA; Groq `gpt-oss-20b` (21B, API) is not allowed for th
 ## Waiting on the user
 - No rows, questions, rulebook, or answers in any commit or image (organiser rules). When the
   challenge ends: delete `train/`, `eval/reports/`, and Docker volumes with eval data.
-## Spend so far: about $4.03 (agent runs $3.38, spec proposals $0.57, demos and e2e $0.07).
+## Spend so far: about $4.04 (agent runs $3.38, spec proposals $0.57, demos and e2e $0.08).
 - Demo video re-recorded 2026-11-25 (Kokoro narration, synced) and linked in the README.
 - Open: Vietnamese chart requests drew a chart in 1 of 3 Groq runs (`make_chart` text is English).
 ## Watch out

@@ -1,0 +1,21 @@
+{
+ "tables": [
+  {
+   "source": "orders",
+   "name": "orders",
+   "description": "one order",
+   "columns": [
+    {"source": "order_id", "name": "order_id", "type": "text"},
+    {"source": "order_date", "name": "order_date", "type": "date", "date_formats": ["ymd"]},
+    {"source": "branch", "name": "branch", "type": "text"},
+    {"source": "category", "name": "category", "type": "text"},
+    {"source": "channel", "name": "channel", "type": "text"},
+    {"source": "quantity", "name": "quantity", "type": "integer"},
+    {"source": "unit_price", "name": "unit_price", "type": "money"},
+    {"source": "discount_percent", "name": "discount_percent", "type": "integer"},
+    {"source": "status", "name": "status", "type": "text"},
+    {"source": "amount", "name": "amount", "type": "money"}
+   ]
+  }
+ ]
+}

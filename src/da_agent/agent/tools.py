@@ -1,10 +1,21 @@
 """Tools the minimal agent can call. Failures return as data the model can act on."""
 
 import json
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from opentelemetry import trace
 
+from da_agent.agent.analysis import (
+    ANALYZE,
+    ANALYZE_SPEC,
+    CHANGE_GUIDANCE,
+    MAX_ANALYSES,
+    AnalyzeArgumentError,
+    StatsDataset,
+    additive_problem,
+    parse_analyze,
+    request_json,
+)
 from da_agent.agent.answer import ANSWER_KINDS, ToolStep
 from da_agent.agent.charts import MAKE_CHART, MAKE_CHART_SPEC, MAX_CHARTS, ChartError, chart_spec
 from da_agent.agent.rules import RuleIndex
@@ -84,11 +95,11 @@ DIALECT_HINTS = {
 
 
 def tool_specs(
-    rules: RuleIndex | None, dialect: str = "SQLite", charts: bool = False
+    rules: RuleIndex | None, dialect: str = "SQLite", charts: bool = False, analysis: bool = False
 ) -> list[ToolSpec]:
-    """search_rules is offered only when there are sections to search, and make_chart only when
-    the run asks for charts. run_sql names the SQL dialect of the dataset, so the model writes
-    functions that exist."""
+    """search_rules is offered only when there are sections to search, make_chart only when the
+    run asks for charts, and analyze only when it asks for analysis on a dataset that can run it.
+    run_sql names the SQL dialect of the dataset, so the model writes functions that exist."""
     hint = DIALECT_HINTS.get(dialect, "")
     specs = [
         spec.model_copy(update={"description": spec.description.replace("SQLite", dialect) + hint})
@@ -100,6 +111,8 @@ def tool_specs(
         specs.append(SEARCH_RULES_SPEC)
     if charts:
         specs.append(MAKE_CHART_SPEC)
+    if analysis:
+        specs.append(ANALYZE_SPEC)
     return specs
 
 
@@ -153,27 +166,32 @@ def execute_tool(
     rules: RuleIndex | None = None,
     *,
     charts_left: int | None = None,
+    analyses_left: int | None = None,
 ) -> tuple[str, ToolStep]:
     """Run a read-only tool. Returns the text for the model and a record of the step.
 
     charts_left is None when the run does not offer make_chart, and otherwise how many more
-    charts the run may draw.
+    charts the run may draw. analyses_left is the same for analyze.
 
     A crash in a tool, such as a lost sandbox, becomes an error result the model can act on
     within its turn limit. The model sees only the error type: the message may hold host paths.
     The trace keeps the full exception.
     """
     try:
-        return _execute(call, dataset, rules, charts_left)
+        return _execute(call, dataset, rules, charts_left, analyses_left)
     except Exception as error:  # Any crash becomes a tool error, by design.
         trace.get_current_span().record_exception(error)
         message = f"the tool failed unexpectedly ({type(error).__name__}); try again once"
-        sql = call.arguments.get("sql") if call.name in ("run_sql", MAKE_CHART) else None
+        sql = call.arguments.get("sql") if call.name in ("run_sql", MAKE_CHART, ANALYZE) else None
         return _error(call.name, "crash", message, sql=sql if isinstance(sql, str) else None)
 
 
 def _execute(
-    call: ToolCall, dataset: Dataset, rules: RuleIndex | None, charts_left: int | None
+    call: ToolCall,
+    dataset: Dataset,
+    rules: RuleIndex | None,
+    charts_left: int | None,
+    analyses_left: int | None = None,
 ) -> tuple[str, ToolStep]:
     if call.arguments_error:
         return _error(
@@ -188,7 +206,10 @@ def _execute(
         return _search_rules(rules, call.arguments)
     if call.name == MAKE_CHART and charts_left is not None:
         return _make_chart(dataset, call.arguments, charts_left)
-    known = [spec.name for spec in tool_specs(rules, charts=charts_left is not None)]
+    if call.name == ANALYZE and analyses_left is not None:
+        return _analyze(dataset, call.arguments, analyses_left)
+    offered = tool_specs(rules, charts=charts_left is not None, analysis=analyses_left is not None)
+    known = [spec.name for spec in offered]
     return _error(
         call.name, "unknown_tool", f"unknown tool {call.name!r}, available tools: {known}"
     )
@@ -241,4 +262,53 @@ def _make_chart(
     payload = {"status": "drawn", "mark": spec["mark"]["type"], "rows": rows}
     return json.dumps(payload), ToolStep(
         tool=MAKE_CHART, ok=True, sql=sql, row_count=rows, chart=spec
+    )
+
+
+def _analyze(
+    dataset: Dataset, arguments: dict[str, Any], analyses_left: int
+) -> tuple[str, ToolStep]:
+    """A fixed analysis (ADR 0051): arguments and additivity are checked here, the method runs in
+    the sandbox. The result goes back whole, because its numbers are what the answer cites."""
+    sql = arguments.get("sql") if isinstance(arguments.get("sql"), str) else None
+    span = trace.get_current_span()
+    try:
+        request = parse_analyze(arguments)
+    except AnalyzeArgumentError as error:
+        return _error(ANALYZE, "arguments", str(error), sql=sql)
+    span.set_attribute("da_agent.analysis.kind", request.kind)
+    if analyses_left <= 0:
+        message = f"a run runs at most {MAX_ANALYSES} analyses; answer with the ones above"
+        return _error(ANALYZE, "analysis", message, sql=request.sql)
+    if request.kind == "explain_change":
+        problem = additive_problem(request.sql, request.y, dataset.dialect.lower())
+        if problem is not None:
+            return _error(ANALYZE, "analysis", problem, sql=request.sql)
+    try:
+        result = cast(StatsDataset, dataset).stats(
+            request.kind,
+            request.sql,
+            request.x,
+            request.y,
+            dimensions=request.dimensions,
+            before=request.before,
+            after=request.after,
+            periods=request.periods,
+        )
+    except QueryError as error:
+        return _error(ANALYZE, error.kind, str(error), sql=request.sql)
+    payload: dict[str, Any] = {
+        "kind": request.kind,
+        "arguments": request_json(request),
+        "summary": result.summary,
+        "table": result.table,
+        "notes": result.notes,
+    }
+    if request.kind == "explain_change":
+        payload["guidance"] = CHANGE_GUIDANCE
+    rows = len(result.table["rows"]) if result.table else 1
+    span.set_attribute("da_agent.analysis.rows", rows)
+    span.set_attribute("da_agent.analysis.seconds", result.duration_seconds)
+    return json.dumps(payload, ensure_ascii=False, default=str), ToolStep(
+        tool=ANALYZE, ok=True, sql=request.sql, row_count=rows
     )

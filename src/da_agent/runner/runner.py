@@ -4,6 +4,7 @@ Callers send typed requests. The Runner alone decides image, mounts, flags, and 
 cannot widen what a sandbox may do. Code travels on stdin and never becomes part of the command.
 """
 
+import datetime as dt
 import json
 import os
 import re
@@ -18,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, Annotated, Any, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from da_agent.ingestion.build import BuildReport
 from da_agent.ingestion.report import IngestReport
@@ -72,6 +73,61 @@ class SqlResult(BaseModel):
     truncated: bool = False
     # A message for the model. Sandbox stderr is never passed on.
     error: str | None = None
+    duration_seconds: float = 0.0
+
+
+StatsKind = Literal["explain_change", "trend", "forecast", "correlation", "outliers"]
+
+
+class DateSpan(BaseModel):
+    """A date range, both ends included."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    start: dt.date
+    end: dt.date
+
+    @model_validator(mode="after")
+    def _ordered(self) -> "DateSpan":
+        if self.start > self.end:
+            raise ValueError("a range must start on or before its end")
+        return self
+
+
+class StatsRun(BaseModel):
+    """Run one fixed analysis on a query over one clean dataset (ADR 0051). The SQL has passed
+    the guard; the method is code in da_agent.storage.stats, not the model's."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    kind: Literal["stats"] = "stats"
+    dataset_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+    analysis: StatsKind
+    sql: str = Field(max_length=MAX_SQL_CHARS)
+    x: str = Field(max_length=200)
+    y: str = Field(max_length=200)
+    dimensions: list[Annotated[str, Field(max_length=200)]] = Field(
+        default_factory=list, max_length=4
+    )
+    before: DateSpan | None = None
+    after: DateSpan | None = None
+    periods: int = Field(default=1, ge=1, le=12)
+    # The dates the data covers, so code can leave out unfinished periods.
+    data_start: dt.date | None = None
+    data_end: dt.date | None = None
+    timeout_seconds: int = Field(default=30, ge=1, le=60)
+
+
+class StatsResult(BaseModel):
+    status: RunStatus
+    kind: str = ""
+    summary: dict[str, Any] = Field(default_factory=dict)
+    table: dict[str, Any] | None = None
+    notes: list[dict[str, Any]] = Field(default_factory=list)
+    # A message for the model. Sandbox stderr is never passed on.
+    error: str | None = None
+    # "analysis" when the result does not fit the analysis, "engine" when the query failed.
+    error_kind: Literal["analysis", "engine"] | None = None
     duration_seconds: float = 0.0
 
 
@@ -142,6 +198,7 @@ class SandboxRunner(Protocol):
     """What callers need from a Runner: the in-process one, or RunnerClient (ADR 0024)."""
 
     def query(self, request: SqlRun) -> SqlResult: ...
+    def stats(self, request: StatsRun) -> StatsResult: ...
     def ingest(self, request: IngestRun) -> IngestResult: ...
     def build(self, request: BuildRun) -> BuildResult: ...
     def export(self, request: ExportRun) -> ExportResult: ...
@@ -251,7 +308,7 @@ class Runner:
 
     def build_command(
         self,
-        request: PythonRun | SqlRun | IngestRun | BuildRun | ExportRun,
+        request: PythonRun | SqlRun | StatsRun | IngestRun | BuildRun | ExportRun,
         name: str,
         output_dir: Path | None = None,
     ) -> list[str]:
@@ -337,10 +394,47 @@ class Runner:
                 duration_seconds=run.duration_seconds,
             )
 
-    def run(self, request: PythonRun | SqlRun) -> RunResult:
+    def stats(self, request: StatsRun) -> StatsResult:
+        """Run one fixed analysis in a fresh sandbox and return its result or an error message."""
+        run = self.run(request)
+        took = run.duration_seconds
+        if run.status == "timeout":
+            message = f"analysis stopped: over the {request.timeout_seconds} s time limit"
+            return StatsResult(status="timeout", error=message, duration_seconds=took)
+        if run.status == "killed":
+            message = "analysis stopped: over the memory limit; aggregate the query more"
+            return StatsResult(status="killed", error=message, duration_seconds=took)
+        if run.status == "error" and run.exit_code is None:
+            return StatsResult(status="error", error=run.stderr, duration_seconds=took)
+        try:
+            payload = json.loads(run.stdout) if run.status == "ok" else None
+        except json.JSONDecodeError:
+            payload = None
+        no_result = StatsResult(
+            status="error", error="the analysis sandbox returned no result", duration_seconds=took
+        )
+        if not isinstance(payload, dict):
+            return no_result
+        if "error" in payload:
+            kind = payload.get("error_kind")
+            return StatsResult(
+                status="error",
+                error=str(payload["error"])[:500],
+                error_kind=kind if kind in ("analysis", "engine") else "engine",
+                duration_seconds=took,
+            )
+        try:
+            return StatsResult.model_validate(
+                {**payload, "status": "ok", "error": None, "duration_seconds": took}
+            )
+        except ValidationError:
+            return no_result
+
+    def run(self, request: PythonRun | SqlRun | StatsRun) -> RunResult:
         name = f"da-sbx-{uuid.uuid4().hex[:12]}"
         command = self.build_command(request, name)
-        payload = json.dumps(request.model_dump()).encode()
+        # JSON from the model, so dates in a StatsRun travel as ISO text.
+        payload = request.model_dump_json().encode()
         limit = self.config.max_output_bytes
         started = _now()
         try:

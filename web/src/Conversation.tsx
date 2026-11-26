@@ -19,7 +19,8 @@ import {
   useRef,
   useState,
 } from "react";
-import { type Api, ApiError, type Dataset, type RunStatus } from "./api";
+import { type AnalysisKind, type Api, ApiError, type Dataset, type RunStatus } from "./api";
+import type { FollowUp } from "./analysis";
 import { errorMessage } from "@/i18n/errors";
 import { useT } from "@/i18n/context";
 import { AddFilesDialog } from "./components/chat/add-files-dialog";
@@ -200,7 +201,22 @@ export function Conversation({
     saveConversation(datasetId, id);
   }
 
-  async function askInConversation(text: string): Promise<RunRef> {
+  /** A follow-up a button asks, such as why a total changed, with the analysis it needs. */
+  async function followUp({ question: text, kind }: FollowUp) {
+    if (sending || running) return;
+    setSending(true);
+    setError(null);
+    try {
+      const { id, conversation_id } = await askInConversation(text, kind);
+      setRuns((current) => [...(current ?? []), { id, conversation_id }]);
+    } catch (caught) {
+      setError(errorMessage(caught, m));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function askInConversation(text: string, kind?: AnalysisKind): Promise<RunRef> {
     let current = conversation;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       if (!current) {
@@ -208,7 +224,7 @@ export function Conversation({
         rememberConversation(current);
       }
       try {
-        const { id } = await api.createRun(datasetId, text, asOf, current);
+        const { id } = await api.createRun(datasetId, text, asOf, current, kind);
         return { id, conversation_id: current };
       } catch (caught) {
         // A remembered conversation that is gone (or from another sign-in): start a new one.
@@ -332,6 +348,7 @@ export function Conversation({
                           : setPanel({ kind: "run", evidence, trigger })
                       }
                       onOpenMemory={(trigger) => setPanel({ kind: "memory", trigger })}
+                      onFollowUp={(asked) => void followUp(asked)}
                       onStatus={onStatus}
                       onVersion={onVersion}
                       onCorrect={(run, trigger) =>

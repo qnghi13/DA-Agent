@@ -78,6 +78,9 @@ class RunConfig:
     # Offer make_chart and write an HTML report per question to output_dir/reports. Changes the
     # tools the model sees, so a run with reports is not comparable with the baselines.
     reports: bool = False
+    # Offer analyze (ADR 0051) to the graph agent; needs prepared datasets, which run it. Changes
+    # the tools and the plan, so a run with it is not comparable with the baselines.
+    analysis: bool = False
     # Questions that run at the same time. Above one needs prepared datasets.
     workers: int = 1
     # Metric definitions by shop, read as approved memory (ADR 0036). Empty for the standard
@@ -153,6 +156,8 @@ def eval_manifest(args: argparse.Namespace, routes: list[Route]) -> dict[str, An
         "max_total_tokens": args.max_total_tokens,
         "agent_kind": args.agent,
         "reports": bool(args.report),
+        # Offers analyze and adds a field to the plan (ADR 0051), so it changes what the model sees.
+        "analysis": bool(getattr(args, "analysis", False)),
         # The definitions themselves: the file is private and outside git, and editing it changes
         # what the model reads while its name stays.
         "metric_definitions": (
@@ -444,6 +449,7 @@ class _Run:
                     thread_id=thread_id(config.output_dir, id_),
                     charts=config.reports,
                     agent_version=config.manifest["version"] if config.manifest else None,
+                    analysis=config.analysis,
                 )
             elif config.agent == "oneshot":
                 result = run_oneshot(
@@ -609,6 +615,11 @@ def main() -> int:
         help="graph agent: offer charts, write reports/<id>.html; not comparable with baselines",
     )
     parser.add_argument(
+        "--analysis",
+        action="store_true",
+        help="graph agent: offer analyze on prepared datasets; not comparable with baselines",
+    )
+    parser.add_argument(
         "--record", action="store_true", help="write every model outcome to cassette.jsonl"
     )
     parser.add_argument(
@@ -624,6 +635,8 @@ def main() -> int:
         help="a request not in the cassette: stop the question, or call the model (costs money)",
     )
     args = parser.parse_args()
+    if args.analysis and args.agent != "graph":
+        parser.error("--analysis needs --agent graph")
 
     provider = None
     if args.otlp_endpoint:
@@ -657,6 +670,7 @@ def main() -> int:
             delay_seconds=args.delay,
             agent=args.agent,
             reports=args.report,
+            analysis=args.analysis,
             workers=args.workers,
             metrics=(
                 load_metrics(json.loads(args.metrics_file.read_text(encoding="utf-8")))

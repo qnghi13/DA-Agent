@@ -16,6 +16,8 @@ from da_agent.runner.runner import (
     IngestRun,
     SqlResult,
     SqlRun,
+    StatsResult,
+    StatsRun,
 )
 from da_agent.runner.service import create_runner_app
 from da_agent.storage.csv_export import ExportReport
@@ -48,6 +50,10 @@ class FakeRunner:
             output_dir=out,
             duration_seconds=1.0,
         )
+
+    def stats(self, request: StatsRun) -> StatsResult:
+        self.requests.append(request)
+        return StatsResult(status="ok", kind=request.analysis, summary={"change": -5})
 
     def build(self, request: BuildRun):  # pragma: no cover - same path as ingest
         raise NotImplementedError
@@ -202,3 +208,30 @@ def test_an_export_output_outside_staging_is_refused(
 
     assert result.status == "error"
     assert result.output_dir is None and result.report is None
+
+
+STATS = {"dataset_id": "shop_1", "analysis": "trend", "sql": "SELECT 1", "x": "m", "y": "v"}
+
+
+@pytest.mark.security
+def test_stats_needs_the_token(http: TestClient) -> None:
+    assert http.post("/v1/stats", json=STATS).status_code == 401
+
+
+def test_stats_passes_through(http: TestClient, runner: FakeRunner, tmp_path: Path) -> None:
+    result = client(http, tmp_path).stats(StatsRun(**STATS))
+
+    assert (result.status, result.kind, result.summary) == ("ok", "trend", {"change": -5})
+    assert isinstance(runner.requests[-1], StatsRun)
+
+
+def test_the_client_reports_an_unavailable_service_for_stats(tmp_path: Path) -> None:
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    http = httpx.Client(transport=httpx.MockTransport(refuse), base_url="http://runner")
+
+    result = client(http, tmp_path).stats(StatsRun(**STATS))
+
+    assert result.status == "error" and result.error is not None
+    assert "unavailable" in result.error

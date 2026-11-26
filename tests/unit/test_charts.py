@@ -5,12 +5,14 @@ no query produced.
 """
 
 import datetime as dt
+import json
 from decimal import Decimal
 from typing import Any
 
 import pytest
 
-from da_agent.agent.charts import ChartError, chart_spec
+from da_agent.agent.answer import QueryRecord
+from da_agent.agent.charts import ChartError, analysis_chart, chart_spec, with_analysis_charts
 from da_agent.storage.sqlite_dataset import QueryResult
 
 MONTHLY = QueryResult(
@@ -215,3 +217,148 @@ def test_labels_keep_the_order_of_the_query_rows() -> None:
 
     assert built["encoding"]["x"]["sort"] is None
     assert "sort" not in spec({"mark": "line", "x": "month", "y": "revenue"})["encoding"]["x"]
+
+
+# Charts from fixed analyses (ADR 0051)
+
+CHANGE = QueryRecord(
+    sql="SELECT day, branch, SUM(amount) AS revenue FROM orders GROUP BY ALL",
+    columns=["dimension", "segment", "before", "after", "change", "share_percent", "status"],
+    rows=[
+        ["(total)", "(all)", 6000.0, 4650.0, -1350.0, 100.0, "both"],
+        ["branch", "Q1", 3000.0, 1550.0, -1450.0, 107.4, "both"],
+        ["branch", "Q3", 3000.0, 3100.0, 100.0, -7.4, "both"],
+        ["category", "Đồ uống", 4000.0, 2500.0, -1500.0, 111.1, "both"],
+    ],
+    analysis={
+        "kind": "explain_change",
+        "arguments": {"x": "day", "y": "revenue", "dimensions": ["category", "branch"]},
+        "summary": {
+            "before": {"start": "2026-09-01", "end": "2026-09-30", "total": 6000.0},
+            "after": {"start": "2026-10-01", "end": "2026-10-31", "total": 4650.0},
+            "change": -1350.0,
+            "dimensions": ["branch", "category"],
+        },
+        "notes": [],
+    },
+)
+
+
+def analysis_record(kind: str, columns: list[str], rows: list[list[Any]]) -> QueryRecord:
+    return QueryRecord(
+        sql="SELECT m, v FROM t",
+        columns=columns,
+        rows=rows,
+        analysis={"kind": kind, "arguments": {"x": "m", "y": "v"}, "summary": {}, "notes": []},
+    )
+
+
+def test_explain_change_waterfall_starts_and_ends_at_the_totals() -> None:
+    chart = analysis_chart(CHANGE)
+
+    assert chart is not None
+    values = chart["data"]["values"]
+    # Whole months read as the month.
+    assert [v["step"] for v in values] == ["2026-09", "Q1", "Q3", "2026-10"]
+    assert values[0]["end"] == 6000.0 and values[-1]["end"] == 4650.0
+    assert (values[1]["start"], values[1]["end"]) == (6000.0, 4550.0)
+    assert (values[2]["start"], values[2]["end"]) == (4550.0, 4650.0)
+    assert [v["kind"] for v in values] == ["total", "down", "up", "total"]
+    assert chart["title"] == "revenue"
+
+
+def test_a_waterfall_zooms_so_small_changes_show() -> None:
+    chart = analysis_chart(CHANGE)
+
+    assert chart is not None
+    scale = chart["layer"][0]["encoding"]["y"]["scale"]
+    floor, top = scale["domain"]
+    # The axis sits around the levels, not at 0, so a change of 100 on 6000 is visible.
+    assert scale["zero"] is False and 0 < floor < 4550.0 and top >= 6000.0
+
+
+def test_a_range_that_is_not_a_whole_month_keeps_its_dates() -> None:
+    record = QueryRecord(
+        sql=CHANGE.sql,
+        columns=CHANGE.columns,
+        rows=CHANGE.rows,
+        analysis={
+            **(CHANGE.analysis or {}),
+            "summary": {
+                **(CHANGE.analysis or {})["summary"],
+                "before": {"start": "2026-10-01", "end": "2026-10-26", "total": 6000.0},
+                "after": {"start": "2026-11-01", "end": "2026-11-26", "total": 4650.0},
+            },
+        },
+    )
+
+    chart = analysis_chart(record)
+
+    assert chart is not None
+    assert chart["data"]["values"][0]["step"] == "2026-10-01 to 2026-10-26"
+
+
+def test_trend_chart_has_the_series_and_the_fitted_line() -> None:
+    record = analysis_record("trend", ["m", "v", "fitted"],
+                             [["2026-01-01", 10.0, 9.5], ["2026-02-01", 12.0, 12.5]])  # fmt: skip
+
+    chart = analysis_chart(record)
+
+    assert chart is not None
+    fields = [layer["encoding"]["y"]["field"] for layer in chart["layer"]]
+    assert fields == ["v", "fitted"]
+    assert chart["data"]["values"][1] == {"m": "2026-02-01", "v": 12.0, "fitted": 12.5}
+
+
+def test_forecast_chart_has_history_forecast_and_band() -> None:
+    columns = ["m", "v", "forecast", "low_95", "high_95"]
+    rows = [["2026-09-01", 10.0, None, None, None], ["2026-10-01", None, 11.0, 9.0, 13.0]]
+
+    chart = analysis_chart(analysis_record("forecast", columns, rows))
+
+    assert chart is not None
+    marks = [layer["mark"]["type"] for layer in chart["layer"]]
+    assert marks == ["area", "line", "line"]
+    assert chart["layer"][0]["encoding"]["y2"]["field"] == "high_95"
+
+
+@pytest.mark.parametrize("kind", ["correlation", "outliers"])
+def test_no_chart_for_correlation_or_outliers(kind: str) -> None:
+    assert analysis_chart(analysis_record(kind, ["m", "v"], [["a", 1]])) is None
+
+
+def test_analysis_charts_hold_no_model_text() -> None:
+    sneaky = QueryRecord(
+        sql=CHANGE.sql,
+        columns=CHANGE.columns,
+        rows=CHANGE.rows,
+        analysis={
+            **(CHANGE.analysis or {}),
+            "arguments": {"y": "revenue", "title": "<script>", "transform": "x"},
+        },
+    )
+
+    chart = analysis_chart(sneaky)
+
+    text = json.dumps(chart)
+    assert "<script>" not in text and "transform" not in text and "url" not in text
+
+
+def test_charts_are_attached_to_analysis_records_only() -> None:
+    plain = QueryRecord(sql="SELECT 1", columns=["n"], rows=[[1]])
+
+    attached = with_analysis_charts([plain, CHANGE])
+
+    assert attached[0] == plain
+    assert attached[1].analysis is not None and attached[1].analysis["chart"]["layer"]
+
+
+def test_waterfall_totals_are_marks_not_bars_from_a_cut_axis() -> None:
+    chart = analysis_chart(CHANGE)
+
+    assert chart is not None
+    totals = [v for v in chart["data"]["values"] if v["kind"] == "total"]
+    # A total has no bar length to misread: it is a mark at its value, with the value written.
+    assert all(v["start"] == v["end"] for v in totals)
+    marks = [layer["mark"]["type"] for layer in chart["layer"]]
+    assert marks == ["bar", "tick", "text"]

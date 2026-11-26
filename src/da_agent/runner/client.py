@@ -16,6 +16,8 @@ from da_agent.runner.runner import (
     JobResult,
     SqlResult,
     SqlRun,
+    StatsResult,
+    StatsRun,
 )
 
 UNAVAILABLE = "the sandbox service is unavailable; try again later"
@@ -39,6 +41,15 @@ class RunnerClient:
             return SqlResult.model_validate_json(body)
         except ValidationError:
             return SqlResult(status="error", error="the sandbox service returned no result")
+
+    def stats(self, request: StatsRun) -> StatsResult:
+        body = self._post("/v1/stats", request, request.timeout_seconds)
+        if body is None:
+            return StatsResult(status="error", error=UNAVAILABLE)
+        try:
+            return StatsResult.model_validate_json(body)
+        except ValidationError:
+            return StatsResult(status="error", error="the sandbox service returned no result")
 
     def ingest(self, request: IngestRun) -> IngestResult:
         return self._job("/v1/ingest", request, IngestResult)

@@ -1,7 +1,8 @@
 """The Runner over HTTP, for deployments where it is the only holder of the Docker socket.
 
 See docs/adr/0024. The service accepts the same typed requests as the in-process Runner, so a
-caller still cannot choose an image, a mount, or a flag. Python runs are not exposed.
+caller still cannot choose an image, a mount, or a flag. Python runs are not exposed; fixed
+analyses are (ADR 0051): code computes them, and the model's SQL passed the guard first.
 """
 
 import hmac
@@ -19,6 +20,8 @@ from da_agent.runner.runner import (
     SandboxRunner,
     SqlResult,
     SqlRun,
+    StatsResult,
+    StatsRun,
 )
 
 
@@ -45,6 +48,10 @@ def create_runner_app(runner: SandboxRunner, token: str) -> FastAPI:
     @app.post("/v1/query", dependencies=auth)
     def query(request: SqlRun) -> SqlResult:
         return runner.query(request)
+
+    @app.post("/v1/stats", dependencies=auth)
+    def stats(request: StatsRun) -> StatsResult:
+        return runner.stats(request)
 
     @app.post("/v1/ingest", dependencies=auth)
     def ingest(request: IngestRun) -> IngestResult:

@@ -77,7 +77,10 @@ markers = [
 
 [dependency-groups]
 dev = [
+    "numpy==2.5.4",
+    "pandas==3.1.1",
     "pyright>=1.1.414",
     "pytest>=9.2.0",
     "ruff>=0.17.3",
+    "statsmodels==0.15.0",
 ]

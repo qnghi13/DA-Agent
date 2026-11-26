@@ -38,6 +38,16 @@ DatasetResolver = Callable[[UUID, str, int], tuple[Dataset, list[Document]]]
 MemoryResolver = Callable[[Job, dict[str, set[str]]], list[Document]]
 
 
+def graph_options(payload: dict[str, Any]) -> dict[str, Any]:
+    """The agent options a run job asks for. A job queued before analysis existed (ADR 0051) has
+    no analysis key and runs as it was queued, so a resumed run keeps its tools."""
+    return {
+        "charts": bool(payload.get("charts", True)),
+        "analysis": bool(payload.get("analysis", False)),
+        "analysis_kind": payload.get("analysis_kind"),
+    }
+
+
 class RunHandler:
     def __init__(
         self,
@@ -97,7 +107,7 @@ class RunHandler:
                 thread_id=fork_id,
                 limits=limits,
                 checkpointer=PostgresSaver(conn),
-                charts=bool(job.payload.get("charts", True)),
+                **graph_options(job.payload),
                 agent_version=self.agent_version,
             )
         return result_to_json(result)
@@ -115,7 +125,7 @@ class RunHandler:
             llm=self.llm,
             run_id=run_id,
             limits=limits,
-            charts=bool(job.payload.get("charts", True)),
+            **graph_options(job.payload),
             agent_version=self.agent_version,
         )
         return result_to_json(result)
@@ -154,7 +164,7 @@ class RunHandler:
                 run_id=str(job.id),
                 limits=limits,
                 checkpointer=saver,
-                charts=bool(payload.get("charts", True)),
+                **graph_options(payload),
                 on_event=lambda event: events.append(job.id, job.workspace_id, event),
                 agent_version=self.agent_version,
                 stop=stop,

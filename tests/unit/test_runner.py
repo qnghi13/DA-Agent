@@ -1,12 +1,22 @@
 """Runner command building and result handling, without Docker. Containers are in tests/security."""
 
+import datetime as dt
+import json
 import subprocess
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from da_agent.runner.runner import Captured, PythonRun, Runner, RunnerConfig, SqlRun
+from da_agent.runner.runner import (
+    Captured,
+    DateSpan,
+    PythonRun,
+    Runner,
+    RunnerConfig,
+    SqlRun,
+    StatsRun,
+)
 
 ROOT_FLAGS = {
     "--network=none",
@@ -515,3 +525,101 @@ def test_export_timeouts_are_bounded() -> None:
     assert ExportRun(dataset_id="a", sql="SELECT 1").timeout_seconds == 120
     with pytest.raises(ValidationError):
         ExportRun(dataset_id="a", sql="SELECT 1", timeout_seconds=121)
+
+
+# Fixed analyses (ADR 0051)
+
+SEP = DateSpan(start=dt.date(2026, 9, 1), end=dt.date(2026, 9, 30))
+OCT = DateSpan(start=dt.date(2026, 10, 1), end=dt.date(2026, 10, 31))
+
+
+def change_run(**fields) -> StatsRun:
+    defaults = {
+        "dataset_id": "shop_1",
+        "analysis": "explain_change",
+        "sql": "SELECT day, branch, SUM(amount) AS revenue FROM orders GROUP BY ALL",
+        "x": "day",
+        "y": "revenue",
+        "dimensions": ["branch"],
+        "before": SEP,
+        "after": OCT,
+    }
+    return StatsRun(**(defaults | fields))
+
+
+def test_stats_runs_in_a_fresh_sandbox_with_the_dataset_read_only(config: RunnerConfig) -> None:
+    calls: list = []
+    output = b'{"kind": "explain_change", "summary": {"change": -5}, "table": null, "notes": []}'
+    runner = sql_runner(config, Captured(0, output, b"", truncated=False), calls)
+
+    result = runner.stats(change_run())
+
+    command = calls[0]["command"]
+    mounts = [arg for arg in command if arg.startswith("--mount=")]
+    dataset = (config.datasets_root / "shop_1").resolve()
+    assert mounts == [f"--mount=type=bind,source={dataset},target=/data,readonly"]
+    assert set(command) >= ROOT_FLAGS
+    assert f"--memory={config.memory_mb}m" in command
+    assert all("SUM(amount)" not in arg for arg in command)
+    assert (result.status, result.kind, result.summary) == ("ok", "explain_change", {"change": -5})
+
+
+def test_stats_sends_dates_as_json(config: RunnerConfig) -> None:
+    calls: list = []
+    runner = sql_runner(config, Captured(0, b'{"kind": "trend"}', b"", truncated=False), calls)
+
+    runner.stats(change_run(data_end=dt.date(2026, 10, 31)))
+
+    sent = json.loads(calls[0]["input"])
+    assert sent["kind"] == "stats" and sent["analysis"] == "explain_change"
+    assert sent["before"] == {"start": "2026-09-01", "end": "2026-09-30"}
+    assert sent["data_end"] == "2026-10-31"
+
+
+def test_a_stats_error_keeps_its_kind(config: RunnerConfig) -> None:
+    output = b'{"error": "no rows between 2026-10-01 and 2026-10-31", "error_kind": "analysis"}'
+    runner = sql_runner(config, Captured(0, output, b"", truncated=False))
+
+    result = runner.stats(change_run())
+
+    assert result.status == "error"
+    assert result.error_kind == "analysis"
+    assert result.error == "no rows between 2026-10-01 and 2026-10-31"
+
+
+@pytest.mark.parametrize(
+    ("captured", "status", "words"),
+    [
+        (Captured(142, b"", b"", truncated=False), "timeout", "time limit"),
+        (Captured(137, b"", b"", truncated=False), "killed", "memory"),
+        (Captured(0, b"not json", b"", truncated=False), "error", "no result"),
+    ],
+)
+def test_stats_timeout_and_kill_have_messages(
+    config: RunnerConfig, captured: Captured, status: str, words: str
+) -> None:
+    result = sql_runner(config, captured).stats(change_run())
+
+    assert result.status == status
+    assert result.error is not None and words in result.error
+    assert result.error.startswith("analysis") or words == "no result"
+
+
+def test_date_span_must_not_end_before_it_starts() -> None:
+    with pytest.raises(ValidationError):
+        DateSpan(start=dt.date(2026, 10, 2), end=dt.date(2026, 10, 1))
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"analysis": "regression"},
+        {"dimensions": ["a", "b", "c", "d", "e"]},
+        {"periods": 13},
+        {"timeout_seconds": 61},
+        {"x": "x" * 201},
+    ],
+)
+def test_stats_requests_are_bounded(fields: dict) -> None:
+    with pytest.raises(ValidationError):
+        change_run(**fields)

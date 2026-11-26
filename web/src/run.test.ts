@@ -5,6 +5,7 @@ import {
   formatAnswer,
   initialTrail,
   reduceTrail,
+  isLongText,
   runCharts,
   toolLabel,
   stopReasonText,
@@ -196,5 +197,14 @@ describe("in Vietnamese", () => {
   it("formats numbers the Vietnamese way", () => {
     expect(formatAnswer({ kind: "number", value: 1234.5 }, vi)).toEqual({ text: "1.234,5" });
     expect(formatAnswer({ kind: "boolean", value: true }, vi)).toEqual({ text: "Có" });
+  });
+});
+
+describe("isLongText", () => {
+  it("keeps short values as a headline and long text as reading text", () => {
+    expect(isLongText({ kind: "number", value: 8714000 }, en)).toBe(false);
+    expect(isLongText({ kind: "text", value: "GrabFood" }, en)).toBe(false);
+    const sentence = "Revenue rose from 7,998,000 in May to 8,714,000 in June, mostly in GrabFood.";
+    expect(isLongText({ kind: "text", value: sentence }, en)).toBe(true);
   });
 });

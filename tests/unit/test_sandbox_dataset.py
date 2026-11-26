@@ -1,9 +1,11 @@
 """SandboxDataset: the agent's Dataset over a clean DuckDB file, queried through the Runner."""
 
+import datetime as dt
+
 import pytest
 
 from da_agent.ingestion.build import BuildReport, ColumnBuild, TableBuild
-from da_agent.runner.runner import SqlResult, SqlRun
+from da_agent.runner.runner import DateSpan, SqlResult, SqlRun, StatsResult, StatsRun
 from da_agent.storage.sandbox_dataset import SandboxDataset
 from da_agent.storage.sqlite_dataset import QueryError
 
@@ -132,3 +134,113 @@ def test_query_errors_say_which_layer_stopped_the_query() -> None:
     assert kind("timeout") == "timeout"
     assert kind("killed") == "limit"
     assert kind("error") == "engine"
+
+
+# Fixed analyses (ADR 0051)
+
+TWO_TABLES = BuildReport(
+    tables=[
+        *REPORT.tables[:1],
+        TableBuild(
+            name="calendar",
+            source="lich",
+            rows=90,
+            columns=[
+                ColumnBuild(
+                    name="cal_day",
+                    source="cal_day",
+                    type="date",
+                    min_value="2026-01-01",
+                    max_value="2026-03-31",
+                ),
+            ],
+        ),
+    ]
+)
+SEP = DateSpan(start=dt.date(2026, 9, 1), end=dt.date(2026, 9, 30))
+OCT = DateSpan(start=dt.date(2026, 10, 1), end=dt.date(2026, 10, 31))
+
+
+class FakeStatsRunner(FakeRunner):
+    def __init__(self, result: StatsResult) -> None:
+        super().__init__(SqlResult(status="ok"))
+        self.stats_result = result
+        self.stats_requests: list[StatsRun] = []
+
+    def stats(self, request: StatsRun) -> StatsResult:
+        self.stats_requests.append(request)
+        return self.stats_result
+
+
+def stats_dataset(result: StatsResult | None = None) -> tuple[SandboxDataset, FakeStatsRunner]:
+    runner = FakeStatsRunner(result or StatsResult(status="ok", kind="trend"))
+    return SandboxDataset(runner, "shop_1", TWO_TABLES), runner
+
+
+def test_stats_guards_the_sql() -> None:
+    dataset, runner = stats_dataset()
+
+    with pytest.raises(QueryError) as error:
+        dataset.stats("trend", "DELETE FROM orders", "d", "t")
+
+    assert error.value.kind == "rejected"
+    assert runner.stats_requests == []
+
+
+def test_stats_sends_the_request_with_its_ranges() -> None:
+    dataset, runner = stats_dataset()
+
+    dataset.stats("explain_change", "SELECT day, status, SUM(total) AS t FROM orders GROUP BY ALL",
+                  "day", "t", dimensions=["status"], before=SEP, after=OCT)  # fmt: skip
+
+    [request] = runner.stats_requests
+    assert (request.analysis, request.dataset_id, request.x, request.y) == (
+        "explain_change", "shop_1", "day", "t",
+    )  # fmt: skip
+    assert request.dimensions == ["status"] and (request.before, request.after) == (SEP, OCT)
+
+
+def test_coverage_comes_from_the_column_x_is_made_from() -> None:
+    dataset, runner = stats_dataset()
+    sql = (
+        "SELECT CAST(o.day AS DATE) AS d, SUM(o.total) AS t FROM orders o "
+        "JOIN calendar c ON c.cal_day = o.day GROUP BY 1"
+    )
+
+    dataset.stats("trend", sql, "d", "t")
+
+    request = runner.stats_requests[0]
+    assert (request.data_start, request.data_end) == (dt.date(2025, 1, 1), dt.date(2026, 6, 28))
+
+
+def test_coverage_falls_back_to_the_tables_read() -> None:
+    dataset, runner = stats_dataset()
+    sql = "SELECT 1 AS d, SUM(total) AS t FROM orders JOIN calendar ON cal_day = day"
+
+    dataset.stats("trend", sql, "d", "t")
+
+    request = runner.stats_requests[0]
+    # The overlap of the tables' date columns: a calendar cannot stretch the data's range.
+    assert (request.data_start, request.data_end) == (dt.date(2026, 1, 1), dt.date(2026, 3, 31))
+
+
+def test_an_analysis_error_has_kind_analysis() -> None:
+    failed = StatsResult(status="error", error="no rows between a and b", error_kind="analysis")
+    dataset, _ = stats_dataset(failed)
+
+    with pytest.raises(QueryError, match="no rows between") as error:
+        dataset.stats("trend", "SELECT day AS d, total AS t FROM orders", "d", "t")
+
+    assert error.value.kind == "analysis"
+
+
+@pytest.mark.parametrize(
+    ("status", "kind"), [("timeout", "timeout"), ("killed", "limit"), ("error", "engine")]
+)
+def test_stats_failures_keep_their_kind(status: str, kind: str) -> None:
+    dataset, _ = stats_dataset(StatsResult(status=status, error="stopped"))  # type: ignore[arg-type]
+
+    with pytest.raises(QueryError) as error:
+        dataset.stats("trend", "SELECT day AS d, total AS t FROM orders", "d", "t")
+
+    assert error.value.kind == kind

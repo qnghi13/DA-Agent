@@ -25,6 +25,7 @@ import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
+from da_agent.agent.analysis import ANALYZE
 from da_agent.agent.answer import AgentAnswer, QueryRecord
 from da_agent.llm.types import Message
 
@@ -64,17 +65,15 @@ def _walk_numbers(value: Any) -> list[float]:
 
 
 def result_numbers(messages: list[Message]) -> list[float]:
-    """Every number in a successful query result the model has seen."""
-    numbers: list[float] = []
-    for message in messages:
-        if message.role != "tool" or message.tool_name != RUN_SQL or not message.content:
-            continue
-        try:
-            payload = json.loads(message.content)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(payload, dict) and "rows" in payload:
-            numbers += _walk_numbers(payload["rows"])
+    """Every number in a successful query or analysis result the model has seen."""
+    return [number for record in query_records(messages) for number in record_numbers(record)]
+
+
+def record_numbers(record: QueryRecord) -> list[float]:
+    """The numbers of one record: its rows, and an analysis's summary (ADR 0051)."""
+    numbers = _walk_numbers(record.rows)
+    if record.analysis is not None:
+        numbers += _walk_numbers(record.analysis.get("summary") or {})
     return numbers
 
 
@@ -241,22 +240,27 @@ def _overlaps(period: Period, known: list[tuple[str, str]]) -> bool:
 
 
 def query_records(messages: list[Message]) -> list[QueryRecord]:
-    """Each successful query with the result the model saw, in order."""
-    sql_by_call = {
-        call.id: call.arguments.get("sql")
+    """Each successful query or fixed analysis with the result the model saw, in order."""
+    calls = {
+        call.id: (call.name, call.arguments.get("sql"))
         for message in messages
         if message.role == "assistant"
         for call in message.tool_calls
-        if call.name == RUN_SQL
+        if call.name in (RUN_SQL, ANALYZE)
     }
     found = []
     for message in messages:
-        sql = sql_by_call.get(message.tool_call_id or "")
+        tool, sql = calls.get(message.tool_call_id or "", (None, None))
         if message.role != "tool" or not isinstance(sql, str) or not message.content:
             continue
         try:
             payload = json.loads(message.content)
         except json.JSONDecodeError:
+            continue
+        if tool == ANALYZE:
+            record = _analysis_record(sql, payload)
+            if record is not None:
+                found.append(record)
             continue
         if isinstance(payload, dict) and isinstance(payload.get("rows"), list):
             columns = payload.get("columns")
@@ -271,9 +275,30 @@ def query_records(messages: list[Message]) -> list[QueryRecord]:
     return found
 
 
+def _analysis_record(sql: str, payload: Any) -> QueryRecord | None:
+    """A successful analysis as a record: its table as rows, the rest in analysis."""
+    if not isinstance(payload, dict) or "error" in payload or "summary" not in payload:
+        return None
+    found = payload.get("table")
+    table: dict[str, Any] = found if isinstance(found, dict) else {}
+    columns, rows = table.get("columns"), table.get("rows")
+    return QueryRecord(
+        sql=sql,
+        columns=columns if isinstance(columns, list) else [],
+        rows=rows if isinstance(rows, list) else [],
+        truncated=bool(table.get("truncated")),
+        analysis={
+            "kind": payload.get("kind"),
+            "arguments": payload.get("arguments") or {},
+            "summary": payload.get("summary") or {},
+            "notes": payload.get("notes") or [],
+        },
+    )
+
+
 def _query_results(messages: list[Message]) -> list[tuple[str, list[float], list[Any]]]:
     """Each successful query with the numbers it returned, in order."""
-    return [(q.sql, _walk_numbers(q.rows), q.rows) for q in query_records(messages)]
+    return [(q.sql, record_numbers(q), q.rows) for q in query_records(messages)]
 
 
 def evidence_indices(answer: AgentAnswer, queries: list[QueryRecord]) -> list[int]:
@@ -288,7 +313,7 @@ def evidence_indices(answer: AgentAnswer, queries: list[QueryRecord]) -> list[in
     return [
         index
         for index, query in enumerate(queries)
-        if any(traces(v, _walk_numbers(query.rows), percent) for v in values)
+        if any(traces(v, record_numbers(query), percent) for v in values)
     ]
 
 

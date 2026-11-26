@@ -3,6 +3,7 @@
 A scripted model drives every test, and the dataset is a real read-only SQLite file.
 """
 
+import hashlib
 import json
 import sqlite3
 from dataclasses import replace
@@ -12,6 +13,7 @@ from typing import Any
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
+from da_agent.agent.analysis import ANALYSIS_GUIDE, CHANGE_DIRECTIVE, analysis_directive
 from da_agent.agent.checkpoints import checkpoint_version
 from da_agent.agent.graph import run_graph
 from da_agent.agent.loop_types import AgentLimits, Document
@@ -26,7 +28,8 @@ from da_agent.llm.types import (
     TransientLLMError,
     Usage,
 )
-from da_agent.storage.sqlite_dataset import SqliteDataset
+from da_agent.runner.runner import StatsResult
+from da_agent.storage.sqlite_dataset import QueryError, SqliteDataset
 
 TOTAL_SQL = "SELECT SUM(total) AS t FROM orders"
 
@@ -60,16 +63,19 @@ def call(name: str, arguments: dict | None = None) -> LLMResponse:
 
 
 def plan(
-    steps: list[str] | None = None, ambiguous: bool = False, clarify_question: str = ""
+    steps: list[str] | None = None,
+    ambiguous: bool = False,
+    clarify_question: str = "",
+    analysis: str | None = None,
 ) -> LLMResponse:
-    return call(
-        "submit_plan",
-        {
-            "steps": steps or ["sum order totals"],
-            "ambiguous": ambiguous,
-            "clarify_question": clarify_question,
-        },
-    )
+    arguments: dict[str, Any] = {
+        "steps": steps or ["sum order totals"],
+        "ambiguous": ambiguous,
+        "clarify_question": clarify_question,
+    }
+    if analysis is not None:
+        arguments["analysis"] = analysis
+    return call("submit_plan", arguments)
 
 
 def sql(query: str = TOTAL_SQL) -> LLMResponse:
@@ -112,6 +118,8 @@ def run(
     client: LLMClient | None = None,
     charts: bool = False,
     agent_version: str | None = None,
+    analysis: bool = False,
+    analysis_kind: str | None = None,
     **limits: Any,
 ):
     adapter = adapter or ScriptedAdapter(script)
@@ -131,6 +139,7 @@ def run(
         reply=reply,
         charts=charts,
         agent_version=agent_version,
+        **({"analysis": analysis, "analysis_kind": analysis_kind} if analysis else {}),
     )
     return result, adapter
 
@@ -141,6 +150,87 @@ def user_texts(request: LLMRequest) -> list[str]:
 
 def offered(request: LLMRequest) -> list[str]:
     return [tool.name for tool in request.tools]
+
+
+class StatsDataset(SqliteDataset):
+    """A dataset that can run fixed analyses: it records each call and returns self.result."""
+
+    def __init__(self, path: Path) -> None:
+        super().__init__(path)
+        self.calls: list[dict[str, Any]] = []
+        self.result: Any = CHANGE_RESULT
+
+    def stats(
+        self,
+        kind: str,
+        sql: str,
+        x: str,
+        y: str,
+        *,
+        dimensions: Any = (),
+        before: Any = None,
+        after: Any = None,
+        periods: int = 1,
+    ) -> Any:
+        self.calls.append(
+            {"kind": kind, "sql": sql, "x": x, "y": y, "dimensions": list(dimensions),
+             "before": before, "after": after, "periods": periods}
+        )  # fmt: skip
+        if isinstance(self.result, BaseException):
+            raise self.result
+        return self.result
+
+
+# A change of -100 in total, all of it from one note value; columns exist in the orders table, so
+# the probes verify runs on the analysis SQL can read it.
+CHANGE_SQL = "SELECT total AS day, note AS branch, SUM(total) AS revenue FROM orders GROUP BY 1, 2"
+CHANGE_ARGUMENTS = {
+    "kind": "explain_change",
+    "sql": CHANGE_SQL,
+    "x": "day",
+    "y": "revenue",
+    "dimensions": ["branch"],
+    "before": {"start": "2026-05-01", "end": "2026-05-31"},
+    "after": {"start": "2026-06-01", "end": "2026-06-28"},
+}
+CHANGE_RESULT = StatsResult(
+    status="ok",
+    kind="explain_change",
+    summary={"change": -100.0, "change_percent": -28.6, "top": {"segment": "normal"}},
+    table={
+        "columns": ["dimension", "segment", "before", "after", "change"],
+        "rows": [["(total)", "(all)", 350.0, 250.0, -100.0]],
+        "truncated": False,
+    },
+)
+
+
+def analyze_call(call_id: str = "a1", arguments: dict[str, Any] | None = None) -> LLMResponse:
+    tool_call = ToolCall(id=call_id, name="analyze", arguments=arguments or CHANGE_ARGUMENTS)
+    return LLMResponse(tool_calls=[tool_call], usage=Usage(input_tokens=10, output_tokens=5))
+
+
+@pytest.fixture
+def stats_dataset(dataset: SqliteDataset, tmp_path: Path) -> StatsDataset:
+    """The same tables as the dataset fixture, which wrote them to this file."""
+    return StatsDataset(tmp_path / "shop.sqlite")
+
+
+def request_hash(requests: list[LLMRequest]) -> str:
+    dumped = [request.model_dump(mode="json") for request in requests]
+    text = json.dumps(dumped, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+# Taken on main before analysis existed (2026-11-26). Change it only for a deliberate change to
+# what every run sends, never for analysis: eval baselines rely on these bytes.
+REQUESTS_WITHOUT_ANALYSIS = "7c6c1b0faa7e49e493c6d99a8380ac433c0cf8503a52b455157112b533e18568"
+
+
+def test_requests_without_analysis_are_unchanged(stats_dataset: StatsDataset) -> None:
+    result, adapter = run(stats_dataset, [plan(), sql(), submit("number", 350)])
+    assert result.stop_reason == "answered"
+    assert request_hash(adapter.requests) == REQUESTS_WITHOUT_ANALYSIS
 
 
 # Planning
@@ -1133,3 +1223,110 @@ def test_a_turn_is_retried_only_once(dataset: SqliteDataset) -> None:
 
     assert result.stop_reason == "invalid_tool_call"
     assert len(adapter.requests) == 4
+
+
+# Analysis (ADR 0051)
+
+
+def first_turn_user_text(adapter: ScriptedAdapter) -> str:
+    return user_texts(adapter.requests[1])[0]
+
+
+def test_with_analysis_the_plan_must_name_one(stats_dataset: StatsDataset) -> None:
+    script = [plan(analysis="none"), sql(), submit("number", 350)]
+    result, adapter = run(stats_dataset, script, analysis=True)
+
+    assert result.stop_reason == "answered"
+    plan_tool = adapter.requests[0].tools[0]
+    assert "analysis" in plan_tool.parameters["required"]
+    assert "analyze" in offered(adapter.requests[1])
+    assert ANALYSIS_GUIDE in (adapter.requests[1].messages[0].content or "")
+    assert request_hash(adapter.requests) != REQUESTS_WITHOUT_ANALYSIS
+
+
+def test_the_named_analysis_becomes_a_directive(stats_dataset: StatsDataset) -> None:
+    _, adapter = run(stats_dataset, [plan(analysis="trend"), sql(), submit("number", 350)],
+                     analysis=True)  # fmt: skip
+
+    assert analysis_directive("trend") in first_turn_user_text(adapter)
+
+
+def test_a_forced_kind_overrides_the_plan(stats_dataset: StatsDataset) -> None:
+    script = [plan(analysis="none"), sql(), submit("number", 350)]
+    _, adapter = run(stats_dataset, script, analysis=True, analysis_kind="explain_change")
+
+    assert CHANGE_DIRECTIVE in first_turn_user_text(adapter)
+
+
+def test_a_garbled_plan_still_follows_a_forced_kind(stats_dataset: StatsDataset) -> None:
+    script = [text("no plan"), sql(), submit("number", 350)]
+    _, adapter = run(stats_dataset, script, analysis=True, analysis_kind="explain_change")
+
+    assert CHANGE_DIRECTIVE in first_turn_user_text(adapter)
+
+
+def test_an_analysis_answer_is_verified_and_recorded(stats_dataset: StatsDataset) -> None:
+    script = [plan(analysis="explain_change"), analyze_call(), submit("number", -100.0)]
+    result, _ = run(stats_dataset, script, analysis=True)
+
+    assert result.stop_reason == "answered", result.error
+    [record] = result.analyses
+    assert record.sql == CHANGE_SQL and record.analysis is not None
+    assert record.analysis["kind"] == "explain_change"
+    assert not [step for step in result.steps if step.tool == "run_sql"]
+    assert stats_dataset.calls[0]["dimensions"] == ["branch"]
+
+
+def test_a_refused_explain_change_still_lets_the_run_answer_from_sql(
+    stats_dataset: StatsDataset,
+) -> None:
+    stats_dataset.result = QueryError("explain_change splits sums and counts", "analysis")
+    script = [plan(analysis="explain_change"), analyze_call(), sql(), submit("number", 350)]
+
+    result, _ = run(stats_dataset, script, analysis=True)
+
+    assert result.stop_reason == "answered"
+    assert result.steps[0].error_kind == "analysis"
+    assert result.analyses == []
+
+
+def test_a_repeated_analysis_is_answered_from_the_conversation(
+    stats_dataset: StatsDataset,
+) -> None:
+    script = [plan(), analyze_call("a1"), analyze_call("a2"), submit("number", -100.0)]
+
+    result, _ = run(stats_dataset, script, analysis=True)
+
+    assert len(stats_dataset.calls) == 1
+    assert [step.error_kind for step in result.steps if step.tool == "analyze"] == [None, "repeat"]
+    assert result.stop_reason == "answered"
+
+
+def test_a_fifth_analysis_is_refused(stats_dataset: StatsDataset) -> None:
+    calls = [
+        analyze_call(f"a{n}", CHANGE_ARGUMENTS | {"y": "revenue", "x": f"day{n}"}) for n in range(5)
+    ]
+    result, _ = run(stats_dataset, [plan(), *calls, submit("number", -100.0)], analysis=True,
+                    max_iterations=8)  # fmt: skip
+
+    kinds = [step.error_kind for step in result.steps if step.tool == "analyze"]
+    assert kinds == [None, None, None, None, "analysis"]
+
+
+def test_analysis_on_a_dataset_without_stats_is_not_offered(dataset: SqliteDataset) -> None:
+    _, adapter = run(dataset, [plan(), sql(), submit("number", 350)], analysis=True)
+
+    assert "analyze" not in offered(adapter.requests[1])
+    assert "analysis" not in adapter.requests[0].tools[0].parameters["properties"]
+
+
+def test_a_checkpoint_without_plan_analysis_resumes(stats_dataset: StatsDataset) -> None:
+    saver = InMemorySaver()
+    adapter = ScriptedAdapter([plan(), sql(), WorkerKilled(), submit("number", 350)])
+    with pytest.raises(WorkerKilled):
+        run(stats_dataset, [], adapter=adapter, checkpointer=saver)
+
+    # The run was saved by a worker without analysis; one with it continues the same thread.
+    result, _ = run(stats_dataset, [], adapter=adapter, checkpointer=saver, analysis=True)
+
+    assert result.stop_reason == "answered"

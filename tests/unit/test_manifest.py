@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from da_agent.agent import prompts
+from da_agent.agent import analysis, prompts
 from da_agent.llm.adapters.openai_compatible import OpenAICompatibleAdapter
 from da_agent.llm.client import Route
 from da_agent.manifest import (
@@ -167,6 +167,14 @@ def test_a_prompt_constant_changes_its_fingerprint(monkeypatch: pytest.MonkeyPat
 
     assert prompt_fingerprint(AGENT_PROMPT_MODULES, agent_prompt_samples()) != before
     assert re.fullmatch(r"[0-9a-f]{16}", before)
+
+
+def test_the_analysis_copy_is_in_the_fingerprint(monkeypatch: pytest.MonkeyPatch) -> None:
+    before = prompt_fingerprint(AGENT_PROMPT_MODULES, agent_prompt_samples())
+
+    monkeypatch.setattr(analysis, "ANALYSIS_GUIDE", analysis.ANALYSIS_GUIDE + " ")
+
+    assert prompt_fingerprint(AGENT_PROMPT_MODULES, agent_prompt_samples()) != before
 
 
 def test_lowercase_names_and_unplain_values_do_not_count(monkeypatch: pytest.MonkeyPatch) -> None:

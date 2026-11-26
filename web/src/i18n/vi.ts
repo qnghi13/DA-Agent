@@ -1,4 +1,7 @@
-import type { Messages, Params } from "./en";
+import type { ChangeWords, CorrelationWords, DrillWords, ForecastWords, Messages, Params, TrendWords } from "./en";
+
+const STRENGTHS: Record<string, string> = { weak: "yếu", moderate: "vừa", strong: "mạnh" };
+type NoteParams = Record<string, unknown>;
 
 /** Tiếng Việt. Typed against `en`, so a missing or extra key fails the type check. */
 export const vi: Messages = {
@@ -483,6 +486,7 @@ export const vi: Messages = {
       make_chart: "Vẽ biểu đồ",
       search_rules: "Tra quy tắc nghiệp vụ",
       submit_answer: "Đưa ra câu trả lời",
+      analyze: "Chạy một phân tích",
     },
     stopReasons: {
       answered: "Đã trả lời",
@@ -573,6 +577,61 @@ export const vi: Messages = {
       "limit.requests": (_: Params) => "Quá nhiều yêu cầu.",
       "limit.jobs": (_: Params) => "Quá nhiều tác vụ mới trong không gian làm việc này.",
       "limit.budget": (p: Params) => `Không gian làm việc đã dùng hết ngân sách model hôm nay ($${p.limit}).`,
+    },
+  },
+  analysis: {
+    whyChanged: "Vì sao thay đổi?",
+    whyQuestion: (measure: string, from: string, to: string) =>
+      `Vì sao ${measure} thay đổi từ ${from} sang ${to}?`,
+    drill: (segment: string, dimension: string) => `Xem ${segment} theo ${dimension}`,
+    drillQuestion: (p: DrillWords) =>
+      `Từ ${p.before} sang ${p.after}, ${p.measure} của ${p.dimension} ${p.segment} thay đổi ở ${p.next} nào?`,
+    whereChanged: "Phần thay đổi tập trung ở",
+    otherColumns: "Theo các cột khác",
+    notCause: "Đây là chỗ thay đổi, không phải lý do. Dữ liệu không cho biết lý do.",
+    flat: "Tổng gần như không đổi; các nhóm bù trừ nhau.",
+    method: "Cách tính",
+    methods: {
+      explain_change:
+        "Cộng chỉ số trong từng kỳ rồi tách theo từng giá trị của mỗi cột; các phần cộng lại đúng bằng mức thay đổi.",
+      trend: "Một đường thẳng đi qua từng kỳ trọn vẹn; chỉ nói tăng hay giảm khi khó là do ngẫu nhiên.",
+      forecast: "Làm trơn hàm mũ trên các kỳ trọn vẹn, kèm khoảng 95%.",
+      correlation: "Tương quan Pearson và Spearman trên mọi dòng.",
+      outliers: "Điểm số tính từ trung vị; giá trị cách xa trung vị là bất thường.",
+    },
+    other: "Khác",
+    blank: "(trống)",
+    status: { new: "mới", gone: "không còn" },
+    share: (value: string) => `${value}% mức thay đổi`,
+    range: (start: string, end: string) => `${start} đến ${end}`,
+    grains: { day: "ngày", week: "tuần", month: "tháng", quarter: "quý", year: "năm" },
+    changeHeadline: (p: ChangeWords) =>
+      p.direction === "flat"
+        ? `${p.measure}, ${p.after}: ${p.total}, gần như bằng ${p.before}.`
+        : `${p.measure}, ${p.after}: ${p.total}, ${p.direction === "down" ? "giảm" : "tăng"} ${p.amount}${p.percent ? ` (${p.percent})` : ""} so với ${p.before}.`,
+    trendHeadline: (p: TrendWords) =>
+      p.direction === "increasing"
+        ? `${p.measure} đang tăng, khoảng ${p.slope} mỗi ${p.grain}.`
+        : p.direction === "decreasing"
+          ? `${p.measure} đang giảm, khoảng ${p.slope} mỗi ${p.grain}.`
+          : `${p.measure} không có xu hướng rõ ràng.`,
+    forecastHeadline: (p: ForecastWords) => `${p.measure} trong ${p.horizon} ${p.grain} tới, kèm khoảng 95%.`,
+    correlationHeadline: (p: CorrelationWords) =>
+      p.strength === "none"
+        ? `${p.x} và ${p.y} không đi cùng nhau (r = ${p.r}).`
+        : `${p.x} và ${p.y}: tương quan ${p.positive ? "thuận" : "nghịch"}, mức ${STRENGTHS[p.strength] ?? p.strength} (r = ${p.r}).`,
+    outliersHeadline: (p: { count: string; measure: string }) => `${p.count} giá trị ${p.measure} bất thường.`,
+    notes: {
+      unfinished_first: (p: NoteParams) => `Bỏ ${p.period}: dữ liệu bắt đầu từ ${p.data_start}.`,
+      unfinished_last: (p: NoteParams) => `Bỏ ${p.period}: dữ liệu chỉ đến ${p.data_end}.`,
+      missing_periods: (p: NoteParams) => `${p.count} kỳ ở giữa không có dòng nào.`,
+      missing_values: (p: NoteParams) => `${p.count} giá trị ${p.column} bị thiếu và được tính là không có.`,
+      interpolated: (_: NoteParams) => "Các kỳ thiếu được nối bằng đường thẳng giữa hai kỳ bên cạnh.",
+      rows_without_value: (p: NoteParams) => `${p.count} dòng thiếu giá trị.`,
+      coverage_unknown: (p: NoteParams) => `Không rõ khoảng ngày của dữ liệu, nên dùng ${p.start} đến ${p.end}.`,
+      flat_total: (_: NoteParams) => "Tổng gần như không đổi, nên không hiện tỷ lệ đóng góp.",
+      before_zero: (_: NoteParams) => "Tổng kỳ trước bằng 0, nên không có phần trăm thay đổi.",
+      missing_dates: (p: NoteParams) => `${p.count} dòng không có ${p.column}; đã bỏ qua.`,
     },
   },
 };

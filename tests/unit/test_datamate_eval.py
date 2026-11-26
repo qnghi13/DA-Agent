@@ -1092,3 +1092,20 @@ def test_the_oneshot_baseline_runs_through_the_same_harness(data_dir: Path, tmp_
         ["run_sql"],
         ["submit_answer"],
     ]
+
+
+def test_analysis_flag_needs_the_graph_agent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from eval.datamate import run as eval_run
+
+    argv = ["run", "--data-dir", str(tmp_path), "--set", "smoke", "--routes", "groq:m",
+            "--output-dir", str(tmp_path / "out"), "--max-total-tokens", "1",
+            "--analysis"]  # fmt: skip
+    monkeypatch.setattr("sys.argv", argv)
+
+    with pytest.raises(SystemExit) as stop:
+        eval_run.main()
+
+    assert stop.value.code == 2
+    assert "--agent graph" in capsys.readouterr().err

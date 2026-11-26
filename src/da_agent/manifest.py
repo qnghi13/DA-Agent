@@ -23,7 +23,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from da_agent.agent import answer, charts, graph, memory, planning, prompts, tools
+from da_agent.agent import analysis, answer, charts, graph, memory, planning, prompts, tools
 from da_agent.ingestion import pipeline, propose
 from da_agent.llm.client import Route
 
@@ -33,7 +33,7 @@ FINGERPRINT_CHARS = 16
 GIT_TIMEOUT_SECONDS = 5
 
 AGENT_PROMPT_MODULES: tuple[ModuleType, ...] = (
-    prompts, planning, tools, charts, graph, memory, answer,
+    prompts, planning, tools, charts, graph, memory, answer, analysis,
 )  # fmt: skip
 INGESTION_PROMPT_MODULES: tuple[ModuleType, ...] = (propose, pipeline)
 
@@ -102,6 +102,9 @@ def agent_prompt_samples() -> list[str]:
         planning.plan_system_prompt([], False),
         prompts.build_system_prompt([]),
         prompts.build_system_prompt([], schema_given=True),
+        planning.plan_system_prompt([], True, analysis=True),
+        prompts.build_system_prompt([], schema_given=True, analysis=True),
+        *(analysis.analysis_directive(kind) for kind in analysis.ANALYZE_KINDS),
     ]
     return [sample for sample in samples if sample is not None]
 

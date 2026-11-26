@@ -244,9 +244,50 @@ def test_a_question_about_a_ready_dataset_queues_a_run(
         "question": "Total revenue?",
         "as_of": "2026-06-28",
         "charts": True,
+        "analysis": True,
         "dataset_version": 1,
     }
     assert "run.create" in audit_actions(conn)
+
+
+def test_a_forced_analysis_kind_is_stored(
+    client: TestClient, conn: psycopg.Connection, key: str
+) -> None:
+    dataset_id = ready_dataset(client, conn, key)
+    JobQueue(conn).claim("w", lease_seconds=30)  # the ingest job
+
+    response = client.post(
+        "/v1/runs",
+        headers=auth(key),
+        json={
+            "dataset_id": dataset_id,
+            "question": "Vì sao giảm?",
+            "analysis_kind": "explain_change",
+        },
+    )
+
+    assert response.status_code == 202
+    run = JobQueue(conn).claim("w", lease_seconds=30)
+    assert run is not None
+    assert (run.payload["analysis"], run.payload["analysis_kind"]) == (True, "explain_change")
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [{"analysis": False, "analysis_kind": "trend"}, {"analysis_kind": "regression"}],
+)
+def test_a_bad_analysis_request_is_422(
+    client: TestClient, conn: psycopg.Connection, key: str, extra: dict
+) -> None:
+    dataset_id = ready_dataset(client, conn, key)
+
+    response = client.post(
+        "/v1/runs",
+        headers=auth(key),
+        json={"dataset_id": dataset_id, "question": "Why?", **extra},
+    )
+
+    assert response.status_code == 422
 
 
 def test_new_run_uses_current_version(

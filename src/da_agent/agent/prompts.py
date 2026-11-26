@@ -3,6 +3,7 @@
 import html
 import re
 
+from da_agent.agent.analysis import ANALYSIS_GUIDE
 from da_agent.agent.loop_types import Document
 from da_agent.agent.periods import periods_note
 from da_agent.agent.rules import split_sections
@@ -86,10 +87,15 @@ SCHEMA_GIVEN = (
 )
 
 
-def build_system_prompt(documents: list[Document], *, schema_given: bool = False) -> str:
-    """schema_given: the user prompt already lists the tables, so describing them wastes a turn."""
+def build_system_prompt(
+    documents: list[Document], *, schema_given: bool = False, analysis: bool = False
+) -> str:
+    """schema_given: the user prompt already lists the tables, so describing them wastes a turn.
+    analysis: analyze is offered, so the prompt says when to use it (ADR 0051)."""
     first_step = SCHEMA_GIVEN if schema_given else DESCRIBE_FIRST
     parts = [SYSTEM_PROMPT.replace("{first_step}", first_step)]
+    if analysis:
+        parts.append(ANALYSIS_GUIDE)
     if any(document.on_demand for document in documents):
         parts.append(ON_DEMAND_GUIDE)
     parts.extend(render_document(document) for document in documents)

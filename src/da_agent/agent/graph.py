@@ -26,6 +26,7 @@ from langgraph.types import Command, interrupt
 from opentelemetry import trace
 from opentelemetry.trace import Tracer
 
+from da_agent.agent.analysis import ANALYZE, MAX_ANALYSES, can_stats
 from da_agent.agent.answer import (
     AgentAnswer,
     AgentResult,
@@ -33,14 +34,14 @@ from da_agent.agent.answer import (
     ToolStep,
     parse_answer,
 )
-from da_agent.agent.charts import MAX_CHARTS
+from da_agent.agent.charts import MAX_CHARTS, with_analysis_charts
 from da_agent.agent.data_checks import fanout_problems, unreadable_problems
 from da_agent.agent.loop_types import AgentLimits, Document
 from da_agent.agent.planning import (
-    PLAN_SPEC,
     SUBMIT_PLAN,
     parse_plan,
     plan_notes,
+    plan_spec,
     plan_system_prompt,
     plan_user_prompt,
 )
@@ -70,6 +71,7 @@ from da_agent.llm.types import (
     LLMRequest,
     LLMResponse,
     Message,
+    ToolCall,
     ToolSpec,
 )
 
@@ -88,6 +90,9 @@ class AgentState(TypedDict, total=False):
     clarifications: Annotated[list[str], operator.add]
     plan_steps: list[str]
     clarify_question: str
+    # The fixed analysis the plan named or the run forced (ADR 0051), or "none". Written only
+    # when analyze is offered, so plain runs keep the state they had.
+    plan_analysis: str
     messages: Annotated[list[dict[str, Any]], operator.add]
     steps: Annotated[list[dict[str, Any]], operator.add]
     iterations: int
@@ -121,6 +126,9 @@ class AgentContext:
     dialect: str
     # Whether make_chart is offered.
     charts: bool = False
+    # Whether analyze is offered, and the kind a run forces whatever the plan names (ADR 0051).
+    analysis: bool = False
+    analysis_kind: str | None = None
     # Checked before every model call and between nodes (ADR 0042).
     stop: StopToken = field(default_factory=StopToken)
 
@@ -156,14 +164,22 @@ def _stop(reason: str, error: str | None = None) -> dict[str, Any]:
 # Nodes
 
 
+def _plan_analysis(context: AgentContext, named: str) -> dict[str, Any]:
+    """The analysis the loop is told to run: a forced kind wins over the plan's."""
+    if not context.analysis:
+        return {}
+    chosen = context.analysis_kind or named
+    trace.get_current_span().set_attribute("da_agent.plan.analysis", chosen)
+    return {"plan_analysis": chosen}
+
+
 def plan_node(state: AgentState, runtime: Runtime[AgentContext]) -> dict[str, Any]:
     context = runtime.context
     clarifications = state.get("clarifications", [])
+    system = plan_system_prompt(context.documents, context.interactive, analysis=context.analysis)
     request = LLMRequest(
         messages=[
-            Message(
-                role="system", content=plan_system_prompt(context.documents, context.interactive)
-            ),
+            Message(role="system", content=system),
             Message(
                 role="user",
                 content=plan_user_prompt(
@@ -172,21 +188,25 @@ def plan_node(state: AgentState, runtime: Runtime[AgentContext]) -> dict[str, An
                 ),
             ),
         ],
-        tools=[PLAN_SPEC],
+        tools=[plan_spec(context.analysis)],
     )  # fmt: skip
     try:
         response = _complete(context, request)
     except BudgetExceededError:
         return _stop("budget_exceeded")
     except InvalidToolCallError:
-        return {"plan_steps": [], "clarify_question": ""}
+        return {"plan_steps": [], "clarify_question": "", **_plan_analysis(context, "none")}
     call = next((c for c in response.tool_calls if c.name == SUBMIT_PLAN), None)
     plan = parse_plan(call.arguments) if call is not None and not call.arguments_error else None
     if plan is None:
-        return {"plan_steps": [], "clarify_question": ""}
+        return {"plan_steps": [], "clarify_question": "", **_plan_analysis(context, "none")}
     asked = len(clarifications) >= MAX_CLARIFICATIONS
     question = plan.clarify_question if plan.ambiguous and not asked else ""
-    return {"plan_steps": plan.steps, "clarify_question": question}
+    return {
+        "plan_steps": plan.steps,
+        "clarify_question": question,
+        **_plan_analysis(context, plan.analysis),
+    }
 
 
 def clarify_node(state: AgentState, runtime: Runtime[AgentContext]) -> dict[str, Any]:
@@ -196,11 +216,16 @@ def clarify_node(state: AgentState, runtime: Runtime[AgentContext]) -> dict[str,
 
 def _first_messages(state: AgentState, context: AgentContext) -> list[Message]:
     question = build_user_prompt(state["question"], state["as_of"])
-    notes = plan_notes(state.get("plan_steps", []), state.get("clarifications", []))
+    notes = plan_notes(
+        state.get("plan_steps", []),
+        state.get("clarifications", []),
+        state.get("plan_analysis", "none"),
+    )
     tables = json.dumps(describe_tables(context.dataset), ensure_ascii=False)
     user = "\n\n".join(part for part in (question, notes, f"Dataset tables:\n{tables}") if part)
+    system = build_system_prompt(context.documents, schema_given=True, analysis=context.analysis)
     return [
-        Message(role="system", content=build_system_prompt(context.documents, schema_given=True)),
+        Message(role="system", content=system),
         Message(role="user", content=user),
     ]
 
@@ -262,10 +287,14 @@ def tools_node(state: AgentState, runtime: Runtime[AgentContext]) -> dict[str, A
     replies: list[dict[str, Any]] = []
     steps: list[dict[str, Any]] = []
     proposed: dict[str, Any] | None = None
+    done = _finished_analyses(state.get("messages", []))
     for call in last.tool_calls:
         with context.tracer.start_as_current_span(f"tool.{call.name}") as span:
             span.set_attribute("openinference.span.kind", "TOOL")
-            if call.name == SUBMIT_ANSWER and not call.arguments_error:
+            key = _call_key(call)
+            if call.name == ANALYZE and key in done:
+                content, step = _repeat(call)
+            elif call.name == SUBMIT_ANSWER and not call.arguments_error:
                 try:
                     answer = parse_answer(call.arguments)
                     proposed = proposed or asdict(answer)
@@ -281,7 +310,10 @@ def tools_node(state: AgentState, runtime: Runtime[AgentContext]) -> dict[str, A
                     context.dataset,
                     context.rules,
                     charts_left=_charts_left(context, state, steps),
+                    analyses_left=_analyses_left(context, state, steps),
                 )
+                if call.name == ANALYZE and step.ok:
+                    done.add(key)
             if step.sql:
                 span.set_attribute("da_agent.sql", step.sql)
             span.set_attribute("da_agent.tool_ok", step.ok)
@@ -308,11 +340,66 @@ def _charts_left(
     return MAX_CHARTS - drawn
 
 
+def _analyses_left(
+    context: AgentContext, state: AgentState, this_turn: list[dict[str, Any]]
+) -> int | None:
+    if not context.analysis:
+        return None
+    done = [*state.get("steps", []), *this_turn]
+    return MAX_ANALYSES - sum(1 for step in done if step["tool"] == ANALYZE and step["ok"])
+
+
+REPEAT_NOTICE = (
+    "this exact call already ran and its result is above; do not run it again. Use that "
+    "result: answer with submit_answer, or make a different call"
+)
+
+
+def _call_key(call: ToolCall) -> str:
+    return call.name + json.dumps(call.arguments, sort_keys=True, ensure_ascii=False)
+
+
+def _finished_analyses(messages: list[dict[str, Any]]) -> set[str]:
+    """analyze calls that already returned a result without an error, by their arguments."""
+    calls: dict[str, str] = {}
+    done: set[str] = set()
+    for raw in messages:
+        message = Message.model_validate(raw)
+        for call in message.tool_calls:
+            if call.name == ANALYZE:
+                calls[call.id] = _call_key(call)
+        if message.role == "tool" and message.tool_call_id in calls:
+            try:
+                payload = json.loads(message.content or "")
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict) and "error" not in payload:
+                done.add(calls[message.tool_call_id])
+    return done
+
+
+def _repeat(call: ToolCall) -> tuple[str, ToolStep]:
+    """A repeated analysis is answered from the conversation, so it costs no sandbox and the
+    model is told to move on. Small models otherwise rerun a finished analysis until the turns
+    run out (archive branch, 2026-11-13)."""
+    sql = call.arguments.get("sql")
+    step = ToolStep(
+        tool=call.name,
+        ok=False,
+        sql=sql if isinstance(sql, str) else None,
+        error=REPEAT_NOTICE,
+        error_kind="repeat",
+    )
+    return json.dumps({"error": REPEAT_NOTICE}), step
+
+
 def verify_node(state: AgentState, runtime: Runtime[AgentContext]) -> dict[str, Any]:
     limits = runtime.context.limits
     answer = AgentAnswer(**(state.get("proposed") or {}))
     messages = [Message.model_validate(m) for m in state.get("messages", [])]
-    queries_ok = sum(1 for s in state.get("steps", []) if s["tool"] == "run_sql" and s["ok"])
+    queries_ok = sum(
+        1 for s in state.get("steps", []) if s["tool"] in ("run_sql", ANALYZE) and s["ok"]
+    )
     context = runtime.context
     found = answer_problems(answer, messages, queries_ok, context.ranges, context.dialect)
     span = trace.get_current_span()
@@ -433,7 +520,10 @@ def node_events(node: str, update: dict[str, Any]) -> list[dict[str, Any]]:
     """Small progress events for one node's state update. They name tools, queries, and verdicts,
     and never carry query rows or message text."""
     if node == "plan":
-        return [{"type": "plan", "steps": update.get("plan_steps", [])}]
+        event: dict[str, Any] = {"type": "plan", "steps": update.get("plan_steps", [])}
+        if update.get("plan_analysis", "none") != "none":
+            event["analysis"] = update["plan_analysis"]
+        return [event]
     if node == "agent":
         calls = [
             call["name"]
@@ -490,7 +580,9 @@ def _result(values: dict[str, Any], question_for_user: str | None = None) -> Age
         iterations=values.get("iterations", 0),
         error=values.get("error"),
         question_for_user=question_for_user,
-        queries=query_records([Message.model_validate(m) for m in values.get("messages", [])]),
+        queries=with_analysis_charts(
+            query_records([Message.model_validate(m) for m in values.get("messages", [])])
+        ),
         verify_log=list(values.get("verify_log", [])),
     )
 
@@ -546,6 +638,8 @@ def run_graph(
     on_event: EventSink | None = None,
     agent_version: str | None = None,
     stop: StopToken | None = None,
+    analysis: bool = False,
+    analysis_kind: str | None = None,
 ) -> AgentResult:
     """Answer one question, or continue the run saved under run_id.
 
@@ -557,13 +651,15 @@ def run_graph(
     run goes; a resumed run may repeat the events of the step that was running. agent_version
     goes into every checkpoint's metadata and onto the run's span (ADR 0038). stop ends the run
     early with its reason, cancelled or deadline_exceeded; without one, limits.max_seconds sets
-    the deadline (ADR 0042).
+    the deadline (ADR 0042). analysis offers analyze on a dataset that can run it, and
+    analysis_kind makes the loop run that analysis whatever the plan names (ADR 0051).
     """
     limits = limits or AgentLimits()
     stop = stop or StopToken(limits.max_seconds)
     tracer = tracer or trace.get_tracer("da_agent.agent")
     rules = RuleIndex(documents)
     dialect = getattr(dataset, "dialect", "SQLite")
+    offers = analysis and can_stats(dataset)
     context = AgentContext(
         run_id=run_id,
         dataset=dataset,
@@ -573,12 +669,14 @@ def run_graph(
         interactive=interactive,
         tracer=tracer,
         rules=rules,
-        tools=tool_specs(rules, dialect, charts),
+        tools=tool_specs(rules, dialect, charts, analysis=offers),
         ranges=date_ranges(
             [(c.name, c.value_range) for table in dataset.describe() for c in table.columns]
         ),
         dialect=dialect.lower(),
         charts=charts,
+        analysis=offers,
+        analysis_kind=analysis_kind if offers else None,
         stop=stop,
     )
     app = build_graph(checkpointer)

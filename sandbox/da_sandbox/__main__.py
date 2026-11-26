@@ -61,6 +61,44 @@ def run_sql(request: dict) -> int:
     return 0
 
 
+def run_stats(request: dict) -> int:
+    """One fixed analysis (ADR 0051). A problem with the analysis comes back as a message for
+    the model, with its kind; anything else is a crash the Runner reports without detail."""
+    sys.path.insert(0, APP)
+    import datetime as dt
+
+    from da_agent.storage.stats import StatsError
+    from da_agent.storage.stats import run_stats as compute
+
+    def day(value: object) -> dt.date | None:
+        return dt.date.fromisoformat(str(value)) if value else None
+
+    def span(value: object) -> tuple[dt.date, dt.date] | None:
+        if not isinstance(value, dict):
+            return None
+        start, end = day(value.get("start")), day(value.get("end"))
+        return (start, end) if start and end else None
+
+    try:
+        result = compute(
+            Path("/data/dataset.duckdb"),
+            str(request["analysis"]),
+            str(request["sql"]),
+            str(request["x"]),
+            str(request["y"]),
+            data_start=day(request.get("data_start")),
+            data_end=day(request.get("data_end")),
+            periods=int(request.get("periods", 1)),
+            dimensions=[str(name) for name in request.get("dimensions", [])],
+            before=span(request.get("before")),
+            after=span(request.get("after")),
+        )
+    except StatsError as error:
+        result = {"error": str(error), "error_kind": error.kind}
+    print(json.dumps(result, ensure_ascii=False, default=str))
+    return 0
+
+
 def run_export(request: dict) -> int:
     """Write the whole result to /out/result.csv. A cap or query error goes into the report, in
     words for the user, and leaves no CSV."""
@@ -92,6 +130,8 @@ def main() -> int:
         return run_ingest()
     if kind == "build":
         return run_build(request)
+    if kind == "stats":
+        return run_stats(request)
     if kind == "export":
         return run_export(request)
     print(f"unknown request kind {kind!r}", file=sys.stderr)

@@ -4,6 +4,44 @@
 
 export type Params = Record<string, string>;
 
+/** The values of an analysis headline (web/src/analysis.ts); numbers are already formatted. */
+export interface ChangeWords {
+  measure: string;
+  after: string;
+  before: string;
+  total: string;
+  direction: "up" | "down" | "flat";
+  amount: string;
+  percent: string | null;
+}
+export interface TrendWords {
+  measure: string;
+  direction: string;
+  slope: string;
+  grain: string;
+}
+export interface ForecastWords {
+  measure: string;
+  horizon: string;
+  grain: string;
+}
+export interface CorrelationWords {
+  x: string;
+  y: string;
+  strength: string;
+  positive: boolean;
+  r: string;
+}
+export interface DrillWords {
+  measure: string;
+  segment: string;
+  dimension: string;
+  before: string;
+  after: string;
+  next: string;
+}
+type NoteParams = Record<string, unknown>;
+
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 const AGGREGATES: Record<string, string> = {
@@ -482,6 +520,7 @@ export const en = {
       make_chart: "Drew a chart",
       search_rules: "Looked up the business rules",
       submit_answer: "Proposed an answer",
+      analyze: "Ran an analysis",
     } as Record<string, string>,
     stopReasons: {
       answered: "Answered",
@@ -575,6 +614,69 @@ export const en = {
       "limit.jobs": (_: Params) => "Too many new tasks for this workspace.",
       "limit.budget": (p: Params) => `This workspace has spent today's model budget ($${p.limit}).`,
     },
+  },
+  analysis: {
+    whyChanged: "Why did it change?",
+    whyQuestion: (measure: string, from: string, to: string) =>
+      `Why did ${measure} change from ${from} to ${to}?`,
+    drill: (segment: string, dimension: string) => `See ${segment} by ${dimension}`,
+    drillQuestion: (p: DrillWords) =>
+      `From ${p.before} to ${p.after}, where did ${p.measure} of ${p.dimension} ${p.segment} change, by ${p.next}?`,
+    whereChanged: "Where it changed",
+    otherColumns: "By other columns",
+    notCause: "This is where it changed, not why. The data does not say why.",
+    flat: "The total barely moved; segments offset each other.",
+    method: "How it was computed",
+    methods: {
+      explain_change:
+        "The measure summed in each period and split by every value of each column; the parts add up to the change.",
+      trend:
+        "A straight line fitted through each whole period; a direction only when it is unlikely to be chance.",
+      forecast: "Exponential smoothing over the whole periods, with a 95% range.",
+      correlation: "Pearson and Spearman correlation over every row.",
+      outliers: "A score from the median; values far from it stand out.",
+    } as Record<string, string>,
+    other: "Other",
+    blank: "(blank)",
+    status: { new: "new", gone: "gone" } as Record<string, string>,
+    share: (value: string) => `${value}% of the change`,
+    range: (start: string, end: string) => `${start} to ${end}`,
+    grains: {
+      day: "day",
+      week: "week",
+      month: "month",
+      quarter: "quarter",
+      year: "year",
+    } as Record<string, string>,
+    changeHeadline: (p: ChangeWords) =>
+      p.direction === "flat"
+        ? `${p.measure}, ${p.after}: ${p.total}, about the same as ${p.before}.`
+        : `${p.measure}, ${p.after}: ${p.total}, ${p.direction} ${p.amount}${p.percent ? ` (${p.percent})` : ""} from ${p.before}.`,
+    trendHeadline: (p: TrendWords) =>
+      p.direction === "increasing"
+        ? `${p.measure} is rising, by about ${p.slope} a ${p.grain}.`
+        : p.direction === "decreasing"
+          ? `${p.measure} is falling, by about ${p.slope} a ${p.grain}.`
+          : `${p.measure} shows no clear trend.`,
+    forecastHeadline: (p: ForecastWords) =>
+      `${p.measure} for the next ${p.horizon} ${p.grain}(s), with a 95% range.`,
+    correlationHeadline: (p: CorrelationWords) =>
+      p.strength === "none"
+        ? `${p.x} and ${p.y} do not move together (r = ${p.r}).`
+        : `${p.x} and ${p.y}: a ${p.strength} ${p.positive ? "positive" : "negative"} correlation (r = ${p.r}).`,
+    outliersHeadline: (p: { count: string; measure: string }) => `${p.count} unusual values of ${p.measure}.`,
+    notes: {
+      unfinished_first: (p: NoteParams) => `${p.period} is left out: the data starts on ${p.data_start}.`,
+      unfinished_last: (p: NoteParams) => `${p.period} is left out: the data ends on ${p.data_end}.`,
+      missing_periods: (p: NoteParams) => `${p.count} periods in between have no rows.`,
+      missing_values: (p: NoteParams) => `${p.count} values of ${p.column} are missing and count as none.`,
+      interpolated: (_: NoteParams) => "Missing periods were filled with straight lines between neighbours.",
+      rows_without_value: (p: NoteParams) => `${p.count} rows lack a value.`,
+      coverage_unknown: (p: NoteParams) => `The data's dates are unknown, so ${p.start} to ${p.end} was used.`,
+      flat_total: (_: NoteParams) => "The total barely moved, so no shares are shown.",
+      before_zero: (_: NoteParams) => "The earlier total is 0, so there is no percent change.",
+      missing_dates: (p: NoteParams) => `${p.count} rows have no ${p.column}; they are left out.`,
+    } as Record<string, (p: NoteParams) => string>,
   },
 };
 

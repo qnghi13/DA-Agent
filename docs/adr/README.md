@@ -55,3 +55,4 @@ decision, add a new ADR and mark the old one as superseded.
 | [0048](0048-oneshot-baseline.md) | A one-shot text-to-SQL baseline measures what the agent adds | Accepted |
 | [0049](0049-garbled-tool-calls.md) | Garbled tool names are read back by code; a malformed call gets one retry in its turn | Accepted |
 | [0050](0050-dataset-deletion.md) | A dataset is deleted by a background job; the API only hides it first | Accepted |
+| [0051](0051-fixed-analyses.md) | Fixed analyses: the model names one, code computes it in the sandbox | Accepted |

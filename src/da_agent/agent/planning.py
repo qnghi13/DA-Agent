@@ -8,6 +8,7 @@ import json
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from da_agent.agent.analysis import ANALYSIS_GUIDE, PLAN_ANALYSES, analysis_directive
 from da_agent.agent.loop_types import Document
 from da_agent.agent.periods import periods_note
 from da_agent.agent.prompts import clarify_language_note, render_document
@@ -53,17 +54,44 @@ PLAN_SPEC = ToolSpec(
 )
 
 
+ANALYSIS_FIELD = (
+    "The analysis the question needs: explain_change (where a total changed between two "
+    "periods, or why it rose or fell), trend (rising or falling over time), forecast (future "
+    "periods), correlation (two measures moving together), outliers (unusual rows), or none "
+    "(totals, counts, rankings, lookups)."
+)
+ANALYSIS_STEP = " Name the analyze step in the plan."
+
+
+def plan_spec(analysis: bool) -> ToolSpec:
+    """submit_plan, with a required analysis field when analyze is offered (ADR 0051). Small
+    models skip prose guidance but fill a required enum; without analysis, the spec is as before."""
+    if not analysis:
+        return PLAN_SPEC
+    parameters = json.loads(json.dumps(PLAN_SPEC.parameters))
+    parameters["properties"]["analysis"] = {
+        "type": "string",
+        "enum": list(PLAN_ANALYSES),
+        "description": ANALYSIS_FIELD,
+    }
+    parameters["required"] = [*parameters["required"], "analysis"]
+    return PLAN_SPEC.model_copy(update={"parameters": parameters})
+
+
 @dataclass(frozen=True)
 class Plan:
     steps: list[str] = field(default_factory=list)
     ambiguous: bool = False
     clarify_question: str = ""
+    analysis: str = "none"
 
 
-def plan_system_prompt(documents: list[Document], interactive: bool) -> str:
+def plan_system_prompt(documents: list[Document], interactive: bool, analysis: bool = False) -> str:
     """Every document in full, on-demand ones included: the plan fixes the definitions the whole
     run uses, and it is one call, so reading everything costs tokens once, not on every turn."""
     prompt = PLAN_PROMPT.format(ambiguity=ASK_USER if interactive else USE_DEFAULTS)
+    if analysis:
+        prompt += "\n" + ANALYSIS_GUIDE + ANALYSIS_STEP + "\n"
     full = [replace(document, on_demand=False) for document in documents]
     return "\n\n".join([prompt, *(render_document(d) for d in full)])
 
@@ -92,12 +120,22 @@ def parse_plan(arguments: dict[str, Any]) -> Plan | None:
     question = arguments.get("clarify_question")
     question = question.strip()[:MAX_QUESTION_CHARS] if isinstance(question, str) else ""
     ambiguous = arguments.get("ambiguous") is True
-    return Plan(steps=cleaned, ambiguous=ambiguous and bool(question), clarify_question=question)
+    analysis = arguments.get("analysis")
+    return Plan(
+        steps=cleaned,
+        ambiguous=ambiguous and bool(question),
+        clarify_question=question,
+        analysis=analysis if analysis in PLAN_ANALYSES else "none",
+    )
 
 
-def plan_notes(steps: list[str], clarifications: list[str]) -> str:
-    """The plan and the user's answers, added to the question for the tool loop."""
+def plan_notes(steps: list[str], clarifications: list[str], analysis: str = "none") -> str:
+    """The plan and the user's answers, added to the question for the tool loop. A named analysis
+    becomes a directive written by code, so the loop calls analyze instead of judging rows."""
     parts = []
+    directive = analysis_directive(analysis)
+    if directive:
+        parts.append(directive)
     if clarifications:
         parts.append("The user clarified:\n" + "\n".join(f"- {c}" for c in clarifications))
     if steps:

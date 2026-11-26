@@ -310,6 +310,7 @@ export class Api {
     question: string,
     asOf?: string,
     conversationId?: string | null,
+    analysisKind?: AnalysisKind,
   ): Promise<{ id: string }> {
     return this.request("/v1/runs", {
       method: "POST",
@@ -319,6 +320,7 @@ export class Api {
         question,
         ...(asOf ? { as_of: asOf } : {}),
         ...(conversationId ? { conversation_id: conversationId } : {}),
+        ...(analysisKind ? { analysis_kind: analysisKind } : {}),
       }),
     });
   }
@@ -512,11 +514,45 @@ export function exportFileUrl(id: string): string {
   return `/v1/exports/${encodeURIComponent(id)}/file`;
 }
 
+/** A fixed analysis the agent ran (ADR 0051): code computed it from the query's rows. */
+export type AnalysisKind = "explain_change" | "trend" | "forecast" | "correlation" | "outliers";
+
+/** A choice code made, such as leaving out an unfinished month: a code the web translates, and the
+ * English sentence the model read. */
+export interface AnalysisNote {
+  code: string;
+  params: Record<string, unknown>;
+  text: string;
+}
+
+export interface DateRange {
+  start: string;
+  end: string;
+}
+
+export interface AnalysisInfo {
+  kind: AnalysisKind;
+  arguments: {
+    x?: string;
+    y?: string;
+    dimensions?: string[];
+    before?: DateRange | null;
+    after?: DateRange | null;
+    periods?: number;
+  };
+  summary: Record<string, unknown>;
+  notes: AnalysisNote[];
+  /** The Vega-Lite spec code built from the analysis, for the kinds drawn as a chart. */
+  chart?: VegaLiteSpec;
+}
+
 export interface QueryRecord {
   sql: string;
   columns: string[];
   rows: unknown[][];
   truncated?: boolean;
+  /** Set when the record is a fixed analysis; its rows are then the analysis table. */
+  analysis?: AnalysisInfo | null;
 }
 
 export interface RunResult {

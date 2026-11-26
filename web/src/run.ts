@@ -205,6 +205,16 @@ export function formatAnswer(answer: Answer, m: Messages): FormattedAnswer {
   }
 }
 
+// Longer than this, a text answer reads as a sentence, not a headline value.
+const HEADLINE_CHARS = 60;
+
+/** Whether an answer is a sentence to read rather than a value to show large, such as an
+ * explanation of where a total changed. */
+export function isLongText(answer: Answer, m: Messages): boolean {
+  const formatted = formatAnswer(answer, m);
+  return "text" in formatted && formatted.text.length > HEADLINE_CHARS;
+}
+
 /**
  * The charts a run drew, each once. A model sometimes draws the same chart again, perhaps with a
  * better title: the repeat replaces the first, so the chart keeps its last title and place.

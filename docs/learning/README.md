@@ -36,3 +36,4 @@ Mỗi cột mốc có một ghi chú tiếng Việt, theo khung sau:
 | [25. Giao diện tiếng Việt](25-vietnamese-ui.md) | i18n bằng từ điển có kiểu, trật tự từ, định dạng số, mã lỗi API, test chữ cứng |
 | [26. Baseline one-shot và lệnh gọi tool bị hỏng](26-baseline-garbled-tool-calls.md) | Baseline công bằng, phủ rộng hay chính xác, chẩn đoán bằng dữ liệu, định dạng harmony, sửa tên tool có giới hạn |
 | [27. Xoá dataset](27-xoa-dataset.md) | Xoá dữ liệu người dùng: ẩn trước rồi xoá bằng job nền, kiểm kê chỗ chứa dữ liệu, bước idempotent, chờ mà không tốn lượt thử |
+| [28. Phân tích cố định](28-phan-tich-co-dinh.md) | Model chọn loại phân tích, code tính: trusted functions, phân rã cộng tính, "ở đâu" không phải "vì sao", đo bằng dữ liệu cài sẵn đáp án |
