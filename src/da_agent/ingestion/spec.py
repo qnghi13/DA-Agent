@@ -11,6 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from da_agent.ingestion.layout_spec import LayoutSpec
 from da_agent.ingestion.raw import slug
 from da_agent.ingestion.report import IngestReport
 
@@ -19,7 +20,8 @@ IDENTIFIER_PATTERN = r"^[A-Za-z][A-Za-z0-9_]{0,62}$"
 # Raw column names that SQL can use unquoted. Clean tables keep them, because documents written for
 # an upload use its own names.
 SOURCE_NAME = re.compile(IDENTIFIER_PATTERN)
-META_COLUMNS = ("_source", "_row")
+# `_cell` is only in tables a layout made: the sheet range each record came from.
+META_COLUMNS = ("_source", "_row", "_cell")
 
 ColumnType = Literal[
     "text", "integer", "number", "money", "quantity", "date", "datetime", "boolean"
@@ -113,6 +115,9 @@ class DatasetSpec(_Model):
     tables: list[TableSpec] = Field(max_length=200)
     relationships: list[Relationship] = Field(default_factory=list, max_length=200)
     notes: list[str] = Field(default_factory=list, max_length=50)
+    # How raw tables were read from sheets that are not "one header row, then records". Set by
+    # code from the layout stage, approved with the spec, and reused by every rebuild.
+    layout: LayoutSpec | None = None
 
 
 def check_spec(spec: DatasetSpec, report: IngestReport) -> list[str]:

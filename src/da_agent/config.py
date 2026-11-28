@@ -6,6 +6,7 @@
 | DA_AGENT_DATA_DIR | required | Holds uploads/, staging/, and datasets/ |
 | DA_AGENT_SANDBOX_IMAGE | da-agent-sandbox:dev | Image the Runner starts |
 | DA_AGENT_ROUTES | none; the worker needs it | Model routes, such as groq:openai/gpt-oss-20b |
+| DA_AGENT_INGEST_ROUTES | DA_AGENT_ROUTES | Routes for reading sheet layouts, once per upload |
 | DA_AGENT_DAILY_BUDGET_USD | 5.0 | Model spending per workspace per day, unless it has its own |
 | DA_AGENT_MAX_DATASET_VERSIONS | 20 | Versions per dataset; adding files past it returns 409 |
 | DA_AGENT_RUN_BUDGET_USD | 0.25 | Model spending per job |
@@ -139,6 +140,8 @@ class Settings:
     data_dir: Path
     sandbox_image: str = "da-agent-sandbox:dev"
     routes: str | None = None
+    # Layout proposals run once per upload and gain from a stronger model (layout layer design).
+    ingest_routes: str | None = None
     daily_budget_usd: float = 5.0
     run_budget_usd: float = 0.25
     # Versions one dataset may have (docs/design/2026-11-21-add-files.md, Retention).
@@ -186,6 +189,7 @@ class Settings:
             data_dir=Path(_required(env, "DA_AGENT_DATA_DIR")),
             sandbox_image=env.get("DA_AGENT_SANDBOX_IMAGE", "").strip() or cls.sandbox_image,
             routes=env.get("DA_AGENT_ROUTES", "").strip() or None,
+            ingest_routes=env.get("DA_AGENT_INGEST_ROUTES", "").strip() or None,
             daily_budget_usd=_number(env, "DA_AGENT_DAILY_BUDGET_USD", cls.daily_budget_usd),
             run_budget_usd=_number(env, "DA_AGENT_RUN_BUDGET_USD", cls.run_budget_usd),
             max_dataset_versions=_count(

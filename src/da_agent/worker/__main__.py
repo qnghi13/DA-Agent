@@ -81,10 +81,16 @@ def build_worker(
         settings.rate_limiter, settings.route_limits,
         connect=lambda: limiter_connection(settings.database_url, schema=settings.schema),
     )  # fmt: skip
+    ledger, metrics = PostgresCostLedger(conn), llm_metrics()
     llm = LLMClient(
-        routes, PostgresCostLedger(conn), breaker_policy=settings.breaker_policy, limiter=limiter,
-        metrics=llm_metrics(),
+        routes, ledger, breaker_policy=settings.breaker_policy, limiter=limiter, metrics=metrics,
     )  # fmt: skip
+    layout_llm = llm
+    if settings.ingest_routes:
+        layout_llm = LLMClient(
+            build_routes(settings.ingest_routes, env), ledger,
+            breaker_policy=settings.breaker_policy, limiter=limiter, metrics=metrics,
+        )  # fmt: skip
     agent_limits = AgentLimits(max_seconds=settings.run_max_seconds)
     # Which agent this worker runs, recorded on every attempt (ADR 0038).
     limits = {
@@ -111,7 +117,9 @@ def build_worker(
             agent_version=manifest.version,
             limits=agent_limits,
         ),
-        "ingest": IngestHandler(**database, **roots, llm=llm, budgets=budgets),
+        "ingest": IngestHandler(
+            **database, **roots, llm=llm, budgets=budgets, layout_llm=layout_llm
+        ),
         "build": BuildHandler(**database, **roots),
         "version": VersionHandler(
             **database, **roots, llm=llm, uploads_root=settings.uploads_root, budgets=budgets

@@ -25,6 +25,10 @@ PRICES: dict[tuple[str, str], ModelPrice] = {
     ("groq", "openai/gpt-oss-20b"): ModelPrice(
         input_per_million=0.075, output_per_million=0.30, cached_input_per_million=0.037
     ),
+    # Checked 2026-11-27 on console.groq.com/docs/model/openai/gpt-oss-120b. The ingest model.
+    ("groq", "openai/gpt-oss-120b"): ModelPrice(
+        input_per_million=0.15, output_per_million=0.60, cached_input_per_million=0.075
+    ),
     ("openrouter", "deepseek/deepseek-v4.1-flash-1017"): ModelPrice(
         input_per_million=0.15, output_per_million=0.60, cached_input_per_million=0.003
     ),

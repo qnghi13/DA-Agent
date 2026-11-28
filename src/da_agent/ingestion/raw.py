@@ -18,8 +18,12 @@ from pathlib import Path
 
 import duckdb
 
+from da_agent.ingestion.grid import Grid, plain
+from da_agent.ingestion.layout_apply import TidyRow, apply_sheet
+from da_agent.ingestion.layout_findings import SheetLayout, describe_sheet, find_families
+from da_agent.ingestion.layout_spec import LayoutSpec
 from da_agent.ingestion.limits import IngestLimits
-from da_agent.ingestion.profile import SAMPLE_CHARS, ColumnStats, classify
+from da_agent.ingestion.profile import SAMPLE_CHARS, SENSITIVE_MARK, ColumnStats, classify
 from da_agent.ingestion.readers import ReadError, Row, Sheet, read_csv, read_sqlite, read_xlsx
 from da_agent.ingestion.report import (
     ColumnProfile,
@@ -33,19 +37,23 @@ from da_agent.ingestion.report import (
 from da_agent.ingestion.sqltext import sums_above_sql
 
 RAW_DATABASE = "raw.duckdb"
-SOURCE_COLUMN, ROW_COLUMN = "_source", "_row"
+SOURCE_COLUMN, ROW_COLUMN, CELL_COLUMN = "_source", "_row", "_cell"
+FAST_META = (SOURCE_COLUMN, ROW_COLUMN)
+LAYOUT_META = (SOURCE_COLUMN, ROW_COLUMN, CELL_COLUMN)
 TABLE_FILES = {".csv": "csv", ".tsv": "csv", ".xlsx": "xlsx", ".xlsm": "xlsx"}
 SQLITE_FILES = {".sqlite", ".sqlite3", ".db"}
 DOCUMENT_FILES = {".md", ".txt"}
 JUNK_NAMES = {"thumbs.db", "desktop.ini", ".ds_store"}
 _HEADER_TEXT_SHARE = 0.8
 _BLANK_ROW_LIMIT = 1000
+# Work files end rows with a bare newline, and DuckDB is told so: when it guesses, a line break
+# inside a quoted cell can make it pick the wrong one and reject the file.
+_LINE_END = "\n"
 # Row shapes rarer than this, with fewer filled cells than the common shape, are reported. They are
 # often subtotal or note rows that the DatasetSpec should exclude.
 RARE_SHAPE_SHARE = 0.05
 MAX_RARE_SHAPES = 5
 SHAPE_EXAMPLES = 2
-SENSITIVE_MARK = "<sensitive>"
 
 
 @dataclass
@@ -68,13 +76,22 @@ class _Group:
     sheets: list[_SheetResult] = field(default_factory=list)
 
 
-def ingest(input_dir: Path, out_dir: Path, limits: IngestLimits | None = None) -> IngestReport:
+def ingest(
+    input_dir: Path,
+    out_dir: Path,
+    limits: IngestLimits | None = None,
+    layout: LayoutSpec | None = None,
+) -> IngestReport:
+    """Read every file into raw tables. Families of sheets that `layout` describes are made by
+    applying it; every other sheet takes the fast path (one header row, then records)."""
     limits = limits or IngestLimits()
     work = out_dir / "_work"
     work.mkdir(parents=True, exist_ok=True)
     report = IngestReport()
     groups: dict[tuple[str, ...], _Group] = {}
     names: set[str] = set()
+    layouts: list[SheetLayout] = []
+    files_read: list[tuple[Path, str, list[_SheetResult]]] = []
 
     files = _list_files(input_dir, report)
     if len(files) > limits.max_files:
@@ -102,16 +119,191 @@ def ingest(input_dir: Path, out_dir: Path, limits: IngestLimits | None = None) -
             report.documents.append({"path": relative, "text": text})
             continue
         try:
-            sheets = list(_read_file(path, kind, file_report, limits, work / f"f{index}"))
+            read = list(_read_file(path, kind, file_report, limits, work / f"f{index}"))
         except (ReadError, OSError, ValueError, csv.Error) as error:
             file_report.status, file_report.reason = "error", str(error)[:300]
             continue
-        _register(sheets, path, kind, groups, names)
+        layouts += [found for _, found in read if found is not None]
+        files_read.append((path, kind, [sheet for sheet, _ in read if sheet is not None]))
+    report.layout = find_families(list(layouts), limits.preview_cells)
+    made: list[_LayoutTable] = []
+    if layout is not None and layout.families:
+        made = _apply_layouts(report, layout, {p.name: (p, k) for p, k, _ in files_read}, limits)
+    covered = {source for table in made for source in table.sources}
+    for path, kind, sheets in files_read:
+        kept = [sheet for sheet in sheets if sheet.source not in covered]
+        _register(kept, path, kind, groups, names)
 
     with duckdb.connect(str(out_dir / RAW_DATABASE)) as connection:
         for group in groups.values():
-            report.tables.append(_load_group(connection, group, work))
+            # One table that will not load must not cost the user every other table.
+            try:
+                report.tables.append(_load_group(connection, group, work))
+            except duckdb.Error as error:
+                connection.execute(f"DROP TABLE IF EXISTS {_quote(group.name)}")
+                sources = ", ".join(sheet.source for sheet in group.sheets[:5])
+                more = f" and {len(group.sheets) - 5} more" if len(group.sheets) > 5 else ""
+                first_line = (
+                    str(error).splitlines()[0][:300] if str(error) else type(error).__name__
+                )
+                report.warnings.append(
+                    f"table {group.name!r} from {sources}{more} could not be loaded: {first_line}"
+                )
+        for table in made:
+            table.name = _unique(table.name, names)
+            names.add(table.name)
+            try:
+                report.tables.append(_load_layout_table(connection, table, work))
+            except duckdb.Error as error:
+                connection.execute(f"DROP TABLE IF EXISTS {_quote(table.name)}")
+                first_line = str(error).splitlines()[0][:300] if str(error) else "error"
+                report.warnings.append(
+                    f"layout table {table.name!r} could not be loaded: {first_line}"
+                )
     shutil.rmtree(work, ignore_errors=True)
+    return report
+
+
+@dataclass
+class _LayoutTable:
+    """Rows a layout made for one region of one family, stacked across the family's sheets."""
+
+    name: str
+    columns: list[str] = field(default_factory=list)
+    keys: list[str] = field(default_factory=list)
+    rows: list[list[str | None]] = field(default_factory=list)
+    sources: dict[str, int] = field(default_factory=dict)
+    coverage: float | None = None
+
+    def add(self, source: str, header: list[str], tidy: list[TidyRow]) -> None:
+        positions = []
+        seen: dict[str, int] = {}
+        for name in header:
+            # A name with no letters or digits keeps its own text; names that normalize alike in
+            # one sheet are numbered, so two columns never share one key.
+            key = _normal_name(name) or name.strip() or "column"
+            seen[key] = seen.get(key, 0) + 1
+            if seen[key] > 1:
+                key = f"{key}_{seen[key]}"
+            if key not in self.keys:
+                self.keys.append(key)
+                self.columns.append(name)
+            positions.append(self.keys.index(key))
+        for row in tidy:
+            cells: list[str | None] = [None] * len(self.keys)
+            for position, value in zip(positions, row.cells, strict=True):
+                cells[position] = value
+            self.rows.append([source, str(row.ordinal), row.cell_range, *cells])
+        self.sources[source] = len(tidy)
+
+
+def _normal_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", plain(name)).strip("_")
+
+
+def _apply_layouts(
+    report: IngestReport,
+    layout: LayoutSpec,
+    files: dict[str, tuple[Path, str]],
+    limits: IngestLimits,
+) -> list[_LayoutTable]:
+    """Apply each family's entries to its sheets. A sheet the layout cannot read (no rows) stays
+    on the fast path, with a warning."""
+    made: list[_LayoutTable] = []
+    known = {f.family for f in report.layout}
+    for family in dict.fromkeys(e.family for e in layout.families if e.family not in known):
+        report.warnings.append(
+            f"layout for family {family} matches no family in these files: not applied"
+        )
+    for finding in report.layout:
+        entries = [e for e in layout.families if e.family == finding.family]
+        if not entries:
+            continue
+        tables = [
+            _LayoutTable(name=slug(Path(finding.sources[0].split("#")[0]).stem)) for _ in entries
+        ]
+        for k, entry in enumerate(entries[1:], start=2):
+            tables[k - 1].name += f"_{entry.region}"
+        filled = covered = 0
+        for source, grid in _full_grids(finding.sources, files, limits):
+            applied, coverage = apply_sheet(grid, entries)
+            problems = [p for a in applied for p in a.problems]
+            if not any(a.rows for a in applied):
+                reason = "; ".join(problems) or "no rows"
+                report.warnings.append(
+                    f"layout for {source} made no rows ({reason}): fast path kept"
+                )
+                finding.problems.append(f"{source}: {reason}")
+                continue
+            finding.problems += [f"{source}: {p}" for p in problems]
+            for table, result in zip(tables, applied, strict=True):
+                table.add(source, result.header, result.rows)
+            filled += coverage.filled
+            covered += round(coverage.share * coverage.filled)
+            room = 20 - len(finding.left)
+            finding.left += [f"{source} {address}" for address in coverage.left[:room]]
+        if filled:
+            finding.coverage = covered / filled
+        for table in tables:
+            table.coverage = finding.coverage
+            if table.rows:
+                made.append(table)
+    return made
+
+
+def _full_grids(
+    sources: list[str], files: dict[str, tuple[Path, str]], limits: IngestLimits
+) -> Iterator[tuple[str, Grid]]:
+    """Each wanted sheet in full (up to the row limit), reading every file once."""
+    wanted: dict[str, set[str]] = {}
+    for source in sources:
+        wanted.setdefault(source.split("#", 1)[0], set()).add(source)
+    for file_name, chosen in wanted.items():
+        if file_name not in files:
+            continue
+        path, kind = files[file_name]
+        if kind == "csv":
+            sheets: Iterator[Sheet] = iter([read_csv(path, limits)[0]])
+        elif kind == "xlsx":
+            sheets = read_xlsx(path)
+        else:
+            continue
+        for sheet in sheets:
+            if sheet.source not in chosen:
+                continue
+            rows: list[Row] = []
+            blank_run = 0
+            for row in sheet.rows:
+                if len(rows) >= limits.max_rows_per_table:
+                    break
+                blank_run = 0 if any(c not in (None, "") for c in row) else blank_run + 1
+                if blank_run > _BLANK_ROW_LIMIT:
+                    break
+                rows.append(
+                    [c[: limits.max_cell_chars] if c else c for c in row[: limits.max_columns]]
+                )
+            yield sheet.source, Grid(sheet.source, rows, sheet.first_row)
+
+
+def _load_layout_table(
+    connection: duckdb.DuckDBPyConnection, table: _LayoutTable, work: Path
+) -> TableReport:
+    columns = _column_names(list[str | None](table.columns)) if table.columns else []
+    columns += [
+        _unique(f"column_{n}", columns) for n in range(len(columns) + 1, len(table.keys) + 1)
+    ]
+    merged = work / f"layout_{table.name}.csv"
+    with merged.open("w", newline="", encoding="utf-8") as out:
+        writer = csv.writer(out, quoting=csv.QUOTE_NOTNULL, lineterminator=_LINE_END)
+        for row in table.rows:
+            writer.writerow(row + [None] * (len(columns) + 3 - len(row)))
+    report = _create_table(connection, table.name, columns, merged, meta=LAYOUT_META)
+    report.sources = [
+        SourceReport(source=source, header_row=0, skipped_rows=0, rows=rows)
+        for source, rows in table.sources.items()
+    ]
+    report.row_count = len(table.rows)
+    report.coverage = table.coverage
     return report
 
 
@@ -168,7 +360,7 @@ def _safety_problem(path: Path, kind: str, limits: IngestLimits) -> str | None:
 
 def _read_file(
     path: Path, kind: str, file_report: FileReport, limits: IngestLimits, prefix: Path
-) -> Iterator[_SheetResult]:
+) -> Iterator[tuple[_SheetResult | None, SheetLayout | None]]:
     if kind == "csv":
         sheet, file_report.encoding, file_report.delimiter = read_csv(path, limits)
         sheets: Iterator[Sheet] = iter([sheet])
@@ -177,13 +369,16 @@ def _read_file(
     else:
         sheets = read_sqlite(path)
     for number, sheet in enumerate(sheets):
-        result = _write_sheet(sheet, limits, prefix.with_name(f"{prefix.name}_{number}.csv"))
-        if result is not None:
-            yield result
+        yield _write_sheet(sheet, limits, prefix.with_name(f"{prefix.name}_{number}.csv"))
 
 
-def _write_sheet(sheet: Sheet, limits: IngestLimits, target: Path) -> _SheetResult | None:
-    rows = iter(sheet.rows)
+def _write_sheet(
+    sheet: Sheet, limits: IngestLimits, target: Path
+) -> tuple[_SheetResult | None, SheetLayout | None]:
+    # Database tables are tidy by construction: only sheets and CSV files get a grid.
+    captured: list[Row] = []
+    keep = 0 if sheet.first_row == 0 else limits.layout_grid_rows
+    rows = _capture(iter(sheet.rows), captured, keep, limits)
     lookahead: list[Row] = []
     for row in rows:
         lookahead.append(row)
@@ -191,11 +386,13 @@ def _write_sheet(sheet: Sheet, limits: IngestLimits, target: Path) -> _SheetResu
             break
     header_index = 0 if sheet.first_row == 0 else _find_header(lookahead)
     if header_index is None:
-        return None
+        for _ in zip(range(keep), rows, strict=False):
+            pass
+        return None, _layout(sheet, captured, keep, fast_header_row=0)
     header = _column_names(lookahead[header_index][: limits.max_columns])
     width, count, truncated, long_cells, blank_run = len(header), 0, False, 0, 0
     with target.open("w", newline="", encoding="utf-8") as file:
-        writer = csv.writer(file, quoting=csv.QUOTE_NOTNULL)
+        writer = csv.writer(file, quoting=csv.QUOTE_NOTNULL, lineterminator=_LINE_END)
         body = _chain(lookahead[header_index + 1 :], rows)
         for offset, row in enumerate(body, start=header_index + 1):
             if not any(cell not in (None, "") for cell in row):
@@ -215,7 +412,7 @@ def _write_sheet(sheet: Sheet, limits: IngestLimits, target: Path) -> _SheetResu
             width = max(width, len(cells))
             writer.writerow([sheet.source, str(sheet.first_row + offset), *cells])
             count += 1
-    return _SheetResult(
+    result = _SheetResult(
         source=sheet.source,
         path=target,
         header=header,
@@ -226,6 +423,28 @@ def _write_sheet(sheet: Sheet, limits: IngestLimits, target: Path) -> _SheetResu
         truncated=truncated,
         long_cells=long_cells,
     )
+    return result, _layout(sheet, captured, keep, result.header_row)
+
+
+def _capture(
+    rows: Iterator[Row], captured: list[Row], keep: int, limits: IngestLimits
+) -> Iterator[Row]:
+    """Pass rows through, keeping a bounded copy of the first `keep` of them."""
+    for row in rows:
+        if len(captured) < keep:
+            captured.append(
+                [c[: limits.max_cell_chars] if c else c for c in row[: limits.max_columns]]
+            )
+        yield row
+
+
+def _layout(
+    sheet: Sheet, captured: list[Row], keep: int, fast_header_row: int
+) -> SheetLayout | None:
+    if not keep or not captured:
+        return None
+    grid = Grid(sheet.source, captured, sheet.first_row)
+    return describe_sheet(grid, fast_header_row=fast_header_row)
 
 
 def _chain(first: list[Row], rest: Iterator[Row]) -> Iterator[Row]:
@@ -268,7 +487,7 @@ def _column_names(cells: Row) -> list[str]:
 
 def _unique(base: str, taken: list[str] | set[str]) -> str:
     name, suffix = base, 2
-    while name in taken or name in (SOURCE_COLUMN, ROW_COLUMN):
+    while name in taken or name in LAYOUT_META:
         name, suffix = f"{base}_{suffix}", suffix + 1
     return name
 
@@ -314,44 +533,58 @@ def _load_group(connection: duckdb.DuckDBPyConnection, group: _Group, work: Path
         columns.append(_unique(f"column_{position}", columns))
     merged = work / f"{group.name}.csv"
     with merged.open("w", newline="", encoding="utf-8") as out:
-        writer = csv.writer(out, quoting=csv.QUOTE_NOTNULL)
+        writer = csv.writer(out, quoting=csv.QUOTE_NOTNULL, lineterminator=_LINE_END)
         for sheet in group.sheets:
             with sheet.path.open(newline="", encoding="utf-8") as source:
                 for record in csv.reader(source):
                     cells: list[str | None] = [c if c != "" else None for c in record]
                     writer.writerow(cells + [None] * (width + 2 - len(cells)))
-    positional = {f"c{i}": "VARCHAR" for i in range(width + 2)}
+    report = _create_table(connection, group.name, columns, merged, meta=FAST_META)
+    long_cells = sum(sheet.long_cells for sheet in group.sheets)
+    if long_cells and report.columns:
+        report.columns[0].profile.truncated_cells = long_cells
+    report.sources = [
+        SourceReport(
+            source=s.source, header_row=s.header_row, skipped_rows=s.skipped_rows, rows=s.rows
+        )
+        for s in group.sheets
+    ]
+    report.row_count = sum(sheet.rows for sheet in group.sheets)
+    report.truncated = any(sheet.truncated for sheet in group.sheets)
+    return report
+
+
+def _create_table(
+    connection: duckdb.DuckDBPyConnection,
+    name: str,
+    columns: list[str],
+    merged: Path,
+    meta: tuple[str, ...],
+) -> TableReport:
+    """Load a work CSV whose rows are the meta columns, then the values, all as text."""
+    positional = {f"c{i}": "VARCHAR" for i in range(len(columns) + len(meta))}
     select = ", ".join(
-        [f"c{i + 2} AS {_quote(name)}" for i, name in enumerate(columns)]
-        + [f"c0 AS {SOURCE_COLUMN}", f"c1 AS {ROW_COLUMN}"]
+        [f"c{i + len(meta)} AS {_quote(column)}" for i, column in enumerate(columns)]
+        + [f"c{i} AS {m}" for i, m in enumerate(meta)]
     )
     reader = (
         f"read_csv(?, header=false, auto_detect=false, delim=',', quote='\"', escape='\"', "
-        f"allow_quoted_nulls=false, columns={positional!r})"
+        f"new_line='\\n', allow_quoted_nulls=false, columns={positional!r})"
     )
     connection.execute(
-        f"CREATE TABLE {_quote(group.name)} AS SELECT {select} FROM {reader}",  # noqa: S608
+        f"CREATE TABLE {_quote(name)} AS SELECT {select} FROM {reader}",  # noqa: S608
         [str(merged)],
     )
-    profiles = {name: _profile(connection, group.name, name) for name in columns}
-    long_cells = sum(sheet.long_cells for sheet in group.sheets)
-    reports = [ColumnReport(name=name, profile=profiles[name]) for name in columns]
-    reports += [ColumnReport(name=n, profile=ColumnProfile()) for n in (SOURCE_COLUMN, ROW_COLUMN)]
-    if long_cells and reports:
-        reports[0].profile.truncated_cells = long_cells
-    sensitive = {name for name in columns if profiles[name].sensitive}
+    profiles = {column: _profile(connection, name, column) for column in columns}
+    reports = [ColumnReport(name=column, profile=profiles[column]) for column in columns]
+    reports += [ColumnReport(name=m, profile=ColumnProfile()) for m in meta]
+    sensitive = {column for column in columns if profiles[column].sensitive}
     return TableReport(
-        name=group.name,
-        sources=[
-            SourceReport(
-                source=s.source, header_row=s.header_row, skipped_rows=s.skipped_rows, rows=s.rows
-            )
-            for s in group.sheets
-        ],
-        row_count=sum(sheet.rows for sheet in group.sheets),
-        truncated=any(sheet.truncated for sheet in group.sheets),
+        name=name,
+        sources=[],
+        row_count=0,
         columns=reports,
-        rare_shapes=_rare_shapes(connection, group.name, columns, sensitive),
+        rare_shapes=_rare_shapes(connection, name, columns, sensitive),
     )
 
 

@@ -153,7 +153,15 @@ secrets ([ADR 0009](adr/0009-parse-uploads-in-sandbox.md)).
 1. **Safety checks:** limits on size, file type, and row count. Reject zip bombs. Ignore macros and
    junk files such as `Zone.Identifier`.
 2. **Raw read:** xlsx, csv (with encoding detection), and SQLite become raw text tables.
-3. **Table detection:** find header rows, drop title rows, split by sheet.
+3. **Table detection:** find header rows, drop title rows, split by sheet. Code also reads each
+   sheet's grid: regions, row roles, and families of sheets that share a layout. A family whose
+   layout is not "one header row, then records" is flagged; the ingest model proposes a
+   `LayoutSpec` of fixed operators for flagged families only (header layers, context from titles
+   and sheet names, sections, unpivot, column groups, paired rows, `key: value` lines, packed
+   cells). Code applies each candidate in a fresh ingest, scores coverage of every filled cell and
+   the output's shape, and keeps the best; without a winner the fast path stays. Layout tables
+   carry `_cell`, the sheet range of each record, and the chosen layout is stored in the approved
+   spec ([ADR 0052](adr/0052-layout-layer.md)).
 4. **Profile:** per-column statistics and value patterns, plus rare row shapes (sets of filled
    columns) with example rows, which point at subtotal and note rows.
 5. **LLM proposes a `DatasetSpec`** from the profile and the user's description: column types and
@@ -174,7 +182,9 @@ secrets ([ADR 0009](adr/0009-parse-uploads-in-sandbox.md)).
 is no fixed canonical schema and no DataMate-specific code ([ADR 0006](adr/0006-dataset-spec.md)).
 
 Implemented in `src/da_agent/ingestion/`:
-- `raw.py` (steps 1–4, sandbox job `ingest`), `propose.py` (step 5, Worker), `build.py` (steps 6
+- `raw.py` (steps 1–4, sandbox job `ingest`), `grid.py`, `layout_findings.py`, `layout_spec.py`,
+  and `layout_apply.py` (step 3's layouts, in the sandbox), `propose_layout.py` (layout
+  proposals, Worker), `propose.py` (step 5, Worker), `build.py` (steps 6
   and 8, sandbox job `build`), and `pipeline.py`, which repairs a spec up to 3 times.
 - Code, not the model, settles what code can tell: groups of three digits always mean thousands,
   and a column cannot be both day-first and month-first.

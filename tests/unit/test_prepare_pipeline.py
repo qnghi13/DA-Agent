@@ -5,7 +5,13 @@ from pathlib import Path
 
 from da_agent.ingestion.build import BuildReport, ColumnBuild, TableBuild
 from da_agent.ingestion.pipeline import parse_problems, prepare_dataset
-from da_agent.ingestion.report import ColumnProfile, ColumnReport, IngestReport, TableReport
+from da_agent.ingestion.report import (
+    ColumnProfile,
+    ColumnReport,
+    FamilyFinding,
+    IngestReport,
+    TableReport,
+)
 from da_agent.llm.client import CostLedger, LLMClient, Route
 from da_agent.llm.types import LLMRequest, LLMResponse, PermanentLLMError, Usage
 from da_agent.runner.runner import BuildResult, BuildRun, IngestResult, IngestRun
@@ -356,3 +362,146 @@ def test_a_failed_rebuild_leaves_no_folder_in_staging(tmp_path: Path) -> None:
         rebuild_dataset("up", Exploding(tmp_path, []), DatasetSpec(tables=[]))  # type: ignore[arg-type]
 
     assert list(tmp_path.iterdir()) == []
+
+
+FLAGGED = REPORT.model_copy(
+    update={
+        "layout": [
+            FamilyFinding(
+                family="f1", sources=["book.xlsx#S"], flags=["header_rows"], regions=1,
+                region_bounds=["A1:C9"], columns=["No"], preview="A1: No",
+            )
+        ]
+    }
+)  # fmt: skip
+LAYOUT_REPLY = json.dumps({"families": [{"family": "f1", "header": [{"row": 2}]}]})
+
+
+class LayoutRunner(FakeRunner):
+    """Ingest without a layout reports a flagged family; with one, coverage `coverage`."""
+
+    def __init__(self, tmp_path: Path, builds: list[BuildReport], coverage: float | None) -> None:
+        super().__init__(tmp_path, builds)
+        self.coverage = coverage
+        self.ingests: list[IngestRun] = []
+
+    def ingest(self, request: IngestRun) -> IngestResult:
+        self.ingests.append(request)
+        out = self.tmp_path / f"ing{len(self.ingests)}"
+        out.mkdir()
+        report = FLAGGED
+        if request.layout is not None:
+            if self.coverage is None:
+                return IngestResult(status="error", exit_code=1, stderr="boom", report=None,
+                                    output_dir=out, duration_seconds=1)  # fmt: skip
+            found = FLAGGED.layout[0].model_copy(update={"coverage": self.coverage})
+            report = FLAGGED.model_copy(update={"layout": [found]})
+        return IngestResult(status="ok", exit_code=0, stderr="", report=report, output_dir=out,
+                            duration_seconds=1)  # fmt: skip
+
+
+def test_the_ingest_model_proposes_layouts_and_the_spec_model_proposes_the_spec(
+    tmp_path: Path,
+) -> None:
+    runner = LayoutRunner(tmp_path, [build_report(parsed=100)], coverage=1.0)
+    spec_client, spec_adapter = llm([GOOD])
+    layout_client, layout_adapter = llm([LAYOUT_REPLY])
+
+    prepared = prepare_dataset(
+        "up", runner, spec_client, run_id="r", layout_llm=layout_client, layout_candidates=1
+    )  # type: ignore[arg-type]
+
+    assert prepared.status == "ok"
+    assert len(layout_adapter.requests) == 1 and len(spec_adapter.requests) == 1
+    assert prepared.spec is not None and prepared.spec.layout is not None
+    assert prepared.spec.layout.families[0].header[0].row == 2
+    assert prepared.ingest.output_dir == tmp_path / "ing2"
+    assert not (tmp_path / "ing1").exists()
+
+
+def test_when_every_layout_fails_the_fast_path_report_is_kept_with_a_warning(
+    tmp_path: Path,
+) -> None:
+    runner = LayoutRunner(tmp_path, [build_report(parsed=100)], coverage=None)
+    spec_client, _ = llm([GOOD])
+    layout_client, _ = llm([LAYOUT_REPLY])
+
+    prepared = prepare_dataset(
+        "up",
+        runner,
+        spec_client,
+        run_id="r",
+        layout_llm=layout_client,
+        layout_candidates=1,
+        layout_rounds=1,
+    )  # type: ignore[arg-type]
+
+    assert prepared.status == "ok"
+    assert prepared.ingest.output_dir == tmp_path / "ing1"
+    assert not (tmp_path / "ing2").exists()
+    assert prepared.spec is not None and prepared.spec.layout is None
+    assert any("layout" in w for w in prepared.ingest.report.warnings)
+
+
+def test_a_layout_model_error_keeps_the_fast_path(tmp_path: Path) -> None:
+    runner = LayoutRunner(tmp_path, [build_report(parsed=100)], coverage=1.0)
+    spec_client, _ = llm([GOOD])
+    layout_client, _ = llm([PermanentLLMError("no quota")])
+
+    prepared = prepare_dataset("up", runner, spec_client, run_id="r", layout_llm=layout_client)  # type: ignore[arg-type]
+
+    assert prepared.status == "ok"
+    assert len(runner.ingests) == 1
+    assert any("no quota" in w for w in prepared.ingest.report.warnings)
+
+
+def test_a_rebuild_ingests_with_the_approved_layout(tmp_path: Path) -> None:
+    from da_agent.ingestion.layout_spec import LayoutSpec
+    from da_agent.ingestion.pipeline import rebuild_dataset
+    from da_agent.ingestion.spec import ColumnSpec, DatasetSpec, TableSpec
+
+    runner = LayoutRunner(tmp_path, [build_report(parsed=100)], coverage=1.0)
+    layout = LayoutSpec.model_validate(json.loads(LAYOUT_REPLY))
+    spec = DatasetSpec(
+        tables=[
+            TableSpec(
+                source="don",
+                name="orders",
+                columns=[ColumnSpec(source="Tổng", name="total", type="money")],
+            )
+        ],
+        layout=layout,
+    )
+
+    rebuild_dataset("up", runner, spec)  # type: ignore[arg-type]
+
+    assert runner.ingests[0].layout == layout
+
+
+def test_a_layout_in_the_spec_reply_is_never_kept(tmp_path: Path) -> None:
+    runner = FakeRunner(tmp_path, [build_report(parsed=100)])
+    sneaky = json.loads(GOOD) | {"layout": json.loads(LAYOUT_REPLY)}
+    client, _ = llm([json.dumps(sneaky)])
+
+    prepared = prepare_dataset("up", runner, client, run_id="r")  # type: ignore[arg-type]
+
+    assert prepared.spec is not None and prepared.spec.layout is None
+
+
+def test_an_error_in_the_layout_stage_removes_the_fast_path_ingest_too(tmp_path: Path) -> None:
+    import pytest
+
+    class Breaking(LayoutRunner):
+        def ingest(self, request: IngestRun) -> IngestResult:
+            if request.layout is not None:
+                raise RuntimeError("runner went away")
+            return super().ingest(request)
+
+    runner = Breaking(tmp_path, [], coverage=1.0)
+    spec_client, _ = llm([])
+    layout_client, _ = llm([LAYOUT_REPLY])
+
+    with pytest.raises(RuntimeError):
+        prepare_dataset("up", runner, spec_client, run_id="r", layout_llm=layout_client)  # type: ignore[arg-type]
+
+    assert not (tmp_path / "ing1").exists()

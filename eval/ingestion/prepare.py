@@ -64,6 +64,7 @@ def prepare_uploads(
     extra_files: list[Path] | None = None,
     specs: dict[str, DatasetSpec] | None = None,
     workers: int = 1,
+    layout_llm: LLMClient | None = None,
 ) -> list[dict[str, Any]]:
     """Prepare each named upload into output_dir/datasets/<name>, and summarise each run.
 
@@ -81,7 +82,7 @@ def prepare_uploads(
     def prepare_one(name: str) -> dict[str, Any]:
         return _prepare_one(
             name, output_dir, runner, llm, ledger, description=description, max_cost=max_cost,
-            max_tokens_per_upload=max_tokens_per_upload, specs=specs,
+            max_tokens_per_upload=max_tokens_per_upload, specs=specs, layout_llm=layout_llm,
         )  # fmt: skip
 
     if workers == 1:
@@ -101,6 +102,7 @@ def _prepare_one(
     max_cost: float,
     max_tokens_per_upload: int,
     specs: dict[str, DatasetSpec] | None,
+    layout_llm: LLMClient | None = None,
 ) -> dict[str, Any]:
     if specs is not None and name in specs:
         prepared = rebuild_dataset(name, runner, specs[name])
@@ -116,6 +118,7 @@ def _prepare_one(
             run_id=name,
             description=description,
             budget=RunBudget(max_total_tokens=max_tokens_per_upload),
+            layout_llm=layout_llm,
         )
     totals = ledger.totals(name)
     row: dict[str, Any] = {
@@ -126,6 +129,18 @@ def _prepare_one(
         "cost_usd": round(totals.cost_usd, 5),
         "ingest_seconds": round(prepared.ingest.duration_seconds, 1),
     }
+    if prepared.layout is not None:
+        row["layout_rounds"] = prepared.layout.rounds
+        row["layout_scores"] = prepared.layout.scores
+        row["layout_kept"] = prepared.spec is not None and prepared.spec.layout is not None
+    raw_dir = prepared.ingest.output_dir
+    if raw_dir is not None and (raw_dir / "raw.duckdb").exists():
+        # Layout targets score the raw tables, so keep them next to the dataset.
+        kept = output_dir / "ingests" / name
+        kept.mkdir(parents=True, exist_ok=True)
+        for file_name in ("raw.duckdb", "report.json"):
+            if (raw_dir / file_name).exists():
+                shutil.copyfile(raw_dir / file_name, kept / file_name)
     if prepared.proposal is not None:
         row["attempts"] = prepared.proposal.attempts
         row["problems"] = prepared.proposal.problems
@@ -178,6 +193,9 @@ def main() -> int:
     parser.add_argument("--image", default="da-agent-sandbox:dev")
     parser.add_argument("--max-cost", type=float, required=True)
     parser.add_argument("--max-tokens-per-upload", type=int, default=150_000)
+    parser.add_argument(
+        "--layout-routes", help="routes that propose sheet layouts; none: fast path only"
+    )
     args = parser.parse_args()
 
     root = args.output_dir.resolve()
@@ -185,10 +203,13 @@ def main() -> int:
     runner = make_runner(root, args.image)
     ledger = CostLedger(root / "ledger.jsonl")
     llm = LLMClient(build_routes(args.routes, os.environ), ledger)
+    layout_llm = None
+    if args.layout_routes:
+        layout_llm = LLMClient(build_routes(args.layout_routes, os.environ), ledger)
     summary = prepare_uploads(
         sources, root, runner, llm, ledger,
         description=args.description, max_cost=args.max_cost,
-        max_tokens_per_upload=args.max_tokens_per_upload,
+        max_tokens_per_upload=args.max_tokens_per_upload, layout_llm=layout_llm,
     )  # fmt: skip
     write_summary(root, summary, ledger)
     return 0

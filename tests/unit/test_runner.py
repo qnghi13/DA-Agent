@@ -623,3 +623,28 @@ def test_date_span_must_not_end_before_it_starts() -> None:
 def test_stats_requests_are_bounded(fields: dict) -> None:
     with pytest.raises(ValidationError):
         change_run(**fields)
+
+
+def test_an_ingest_request_carries_a_layout_through_json() -> None:
+    from da_agent.ingestion.layout_spec import LayoutSpec
+
+    layout = LayoutSpec.model_validate(
+        {
+            "families": [
+                {
+                    "family": "f1",
+                    "reshape": {
+                        "kind": "unpivot",
+                        "first": "1",
+                        "last": "31",
+                        "key": "day",
+                        "value": "mark",
+                    },
+                }
+            ]
+        }
+    )
+    request = IngestRun(upload_id="up_3", layout=layout)
+
+    assert IngestRun.model_validate_json(request.model_dump_json()) == request
+    assert IngestRun(upload_id="up_4").layout is None

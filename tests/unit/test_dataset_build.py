@@ -1070,3 +1070,56 @@ def test_drop_overlap_quotes_names(tmp_path: Path, out: Path) -> None:
     assert result.tables[0].error is None
     assert rows(out, "SELECT reason FROM _excluded") == [(f"already in {file_old}",)]
     assert rows(out, "SELECT count(*) FROM t") == [(3,)]
+
+
+def test_a_layout_table_keeps_its_cell_ranges_through_build(tmp_path: Path, out: Path) -> None:
+    import openpyxl
+
+    from da_agent.ingestion.layout_spec import LayoutSpec
+
+    upload, raw = tmp_path / "upload", tmp_path / "raw"
+    upload.mkdir()
+    raw.mkdir()
+    book = openpyxl.Workbook()
+    sheet = book.active
+    sheet.title = "S"
+    for row in [
+        ["SALES"],
+        ["Order", "Item", "Amount"],
+        ["D1", "tea", "10"],
+        [None, "coffee", "20"],
+        [None, "note: call back", None],
+        ["D2", "tea", "5"],
+    ]:
+        sheet.append(row)
+    book.save(upload / "t.xlsx")
+    [finding] = ingest(upload, tmp_path / "probe").layout
+    layout = LayoutSpec.model_validate({"families": [{"family": finding.family}]})
+    report = ingest(upload, raw, layout=layout)
+    assert [t.name for t in report.tables] == ["t"], report.layout
+    spec = DatasetSpec(
+        tables=[
+            TableSpec(
+                source="t",
+                name="t",
+                columns=[
+                    ColumnSpec(source="Order", name="order_id"),
+                    ColumnSpec(source="Item", name="item"),
+                    ColumnSpec(source="Amount", name="amount", type="integer"),
+                ],
+                fill_down=["Order"],
+                exclude_rows=[
+                    RowRule(when=[RowCondition(column="Amount", op="blank")], reason="note")
+                ],
+            )
+        ]
+    )
+
+    build(raw / RAW_DATABASE, spec, report, out)
+
+    assert rows(out, "SELECT order_id, item, _row, _cell FROM t ORDER BY _row") == [
+        ("D1", "tea", 1, "A3:C3"),
+        ("D1", "coffee", 2, "A4:C4"),
+        ("D2", "tea", 4, "A6:C6"),
+    ]
+    assert rows(out, "SELECT reason, _row, _cell FROM _excluded") == [("note", 3, "A5:C5")]

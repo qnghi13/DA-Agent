@@ -22,6 +22,7 @@ from typing import IO, Annotated, Any, Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from da_agent.ingestion.build import BuildReport
+from da_agent.ingestion.layout_spec import LayoutSpec
 from da_agent.ingestion.report import IngestReport
 from da_agent.ingestion.spec import DatasetSpec
 from da_agent.storage.csv_export import EXPORT_TIMEOUT_SECONDS, MAX_EXPORT_BYTES, ExportReport
@@ -139,6 +140,8 @@ class IngestRun(BaseModel):
     kind: Literal["ingest"] = "ingest"
     upload_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
     timeout_seconds: int = Field(default=600, ge=1, le=1800)
+    # Families of sheets to make by a layout instead of the fast path (one header row).
+    layout: LayoutSpec | None = None
 
 
 class BuildRun(BaseModel):

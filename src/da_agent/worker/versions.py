@@ -216,8 +216,10 @@ class _VersionRun:
     def ingest(self, upload_dir: str) -> tuple[IngestResult, IngestReport, str]:
         if not DIRECTORY_NAME.fullmatch(upload_dir):
             raise _VersionFailed(FAILURES["ingest_failed"])
+        # The approved layout reads the new files' sheets too; family ids follow their shape.
+        layout = DatasetSpec.model_validate(self.current.spec or {"tables": []}).layout
         with self.span("version.ingest"):
-            result = self.h.runner.ingest(IngestRun(upload_id=upload_dir))
+            result = self.h.runner.ingest(IngestRun(upload_id=upload_dir, layout=layout))
         if result.output_dir is not None:
             self.staging.append(result.output_dir)
         if _unavailable(result):

@@ -9,7 +9,9 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from da_agent.ingestion.build import BuildReport, ExcludedRule
+from da_agent.ingestion.layout_spec import LayoutSpec
 from da_agent.ingestion.propose import ProposalResult, propose_spec
+from da_agent.ingestion.propose_layout import LayoutResult, propose_layout
 from da_agent.ingestion.report import IngestReport
 from da_agent.ingestion.spec import DatasetSpec, TableSpec, keep_source_names
 from da_agent.llm.client import LLMClient, RunBudget
@@ -40,6 +42,7 @@ class PreparedDataset:
     dropped_rules: list[str] = field(default_factory=list)
     # Tables whose exact repeats were removed because a key proved them double entries.
     deduplicated: list[str] = field(default_factory=list)
+    layout: LayoutResult | None = None
 
 
 def _record_problems(
@@ -158,14 +161,28 @@ def prepare_dataset(
     max_attempts: int = 3,
     min_parse_rate: float = MIN_PARSE_RATE,
     budget: RunBudget | None = None,
+    layout_llm: LLMClient | None = None,
+    layout_candidates: int = 2,
+    layout_rounds: int = 3,
 ) -> PreparedDataset:
+    """`layout_llm` (the ingest model) proposes layouts for flagged sheet families; `llm`
+    proposes the DatasetSpec. Without `layout_llm` every sheet takes the fast path."""
     ingested = runner.ingest(IngestRun(upload_id=upload_id))
     if ingested.status != "ok" or ingested.report is None or ingested.output_dir is None:
         return PreparedDataset(status="ingest_failed", ingest=ingested)
+    layout: LayoutResult | None = None
+    if layout_llm is not None and ingested.report.layout:
+        ingested, layout = _choose_layout(
+            upload_id, ingested, runner, layout_llm, run_id=run_id, budget=budget,
+            candidates=layout_candidates, rounds=layout_rounds,
+        )  # fmt: skip
+    report = ingested.report
+    if report is None or ingested.output_dir is None:  # a layout ingest always has both
+        return PreparedDataset(status="ingest_failed", ingest=ingested)
     builds: list[tuple[DatasetSpec, BuildResult]] = []
     try:
-        return _prepare(
-            ingested, ingested.report, ingested.output_dir.name, builds, runner, llm, run_id=run_id,
+        prepared = _prepare(
+            ingested, report, ingested.output_dir.name, builds, runner, llm, run_id=run_id,
             description=description, max_attempts=max_attempts,
             min_parse_rate=min_parse_rate, budget=budget,
         )  # fmt: skip
@@ -173,6 +190,59 @@ def prepare_dataset(
         # Nothing was returned, so no handler knows these folders: remove them here.
         _remove_outputs(ingested, [built for _, built in builds])
         raise
+    prepared.layout = layout
+    if prepared.spec is not None:
+        # Only the layout stage sets the layout: never one a spec reply carried.
+        chosen = layout.spec if layout is not None else None
+        prepared.spec = prepared.spec.model_copy(update={"layout": chosen})
+    return prepared
+
+
+def _choose_layout(
+    upload_id: str,
+    fast: IngestResult,
+    runner: SandboxRunner,
+    llm: LLMClient,
+    *,
+    run_id: str,
+    budget: RunBudget | None,
+    candidates: int,
+    rounds: int,
+) -> tuple[IngestResult, LayoutResult]:
+    """Try layouts by real ingests; keep the winner's output and remove every other one. When no
+    layout wins, the fast-path ingest stays, with a warning."""
+    tried: list[tuple[LayoutSpec, IngestResult]] = []
+
+    def try_layout(spec: LayoutSpec) -> IngestReport | None:
+        result = runner.ingest(IngestRun(upload_id=upload_id, layout=spec))
+        tried.append((spec, result))
+        return result.report if result.status == "ok" else None
+
+    found = fast.report or IngestReport()
+    try:
+        layout = propose_layout(
+            found, found.documents, llm, run_id=run_id, try_layout=try_layout,
+            candidates=candidates, max_rounds=rounds, budget=budget,
+        )  # fmt: skip
+    except BaseException:
+        # Nothing was returned, so no handler knows any of these folders, the fast one included.
+        for _, result in tried:
+            _remove_outputs(result, [])
+        _remove_outputs(fast, [])
+        raise
+    chosen = next(
+        (r for s, r in reversed(tried) if layout.spec is not None and s == layout.spec), None
+    )
+    for _, result in tried:
+        if result is not chosen:
+            _remove_outputs(result, [])
+    if chosen is None or chosen.report is None:
+        reason = layout.error or "; ".join(layout.problems[:3]) or "no layout covered the sheets"
+        found.warnings.append(f"layout stage kept the fast path: {reason}")
+        layout.spec = None
+        return fast, layout
+    _remove_outputs(fast, [])
+    return chosen, layout
 
 
 def _remove_outputs(ingested: IngestResult, builds: list[BuildResult]) -> None:
@@ -256,7 +326,7 @@ def rebuild_dataset(
     """Ingest an upload and build it with an approved spec, without the model. Used when files
     change under a spec the user already approved."""
     spec = keep_source_names(spec)
-    ingested = runner.ingest(IngestRun(upload_id=upload_id))
+    ingested = runner.ingest(IngestRun(upload_id=upload_id, layout=spec.layout))
     if ingested.status != "ok" or ingested.report is None or ingested.output_dir is None:
         return PreparedDataset(status="ingest_failed", ingest=ingested)
     made: list[BuildResult] = []

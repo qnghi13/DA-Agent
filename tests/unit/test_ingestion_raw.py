@@ -9,6 +9,8 @@ import duckdb
 import openpyxl
 import pytest
 
+from da_agent.ingestion import raw
+from da_agent.ingestion.layout_spec import LayoutSpec
 from da_agent.ingestion.limits import IngestLimits
 from da_agent.ingestion.raw import ingest
 
@@ -114,6 +116,56 @@ def test_cell_values_become_lossless_text(upload: Path, out: Path) -> None:
         "true",
         "45717",
     )
+
+
+def test_cells_with_line_breaks_keep_their_text(upload: Path, out: Path) -> None:
+    # A calendar sheet packs several records into one cell, one per line.
+    write_xlsx(
+        upload / "orders.xlsx",
+        {
+            "May": [
+                ["Week", "Mon", "Tue"],
+                ["Week 1", 'No: 1 | Name: "An"\nNo: 2 | Name: Bình', None],
+                ["Week 2", None, "No: 3\nNo: 4"],
+            ]
+        },
+    )
+    # xlsx stores line breaks as \n, so Windows line breaks are tested through a CSV upload.
+    (upload / "notes.csv").write_bytes(b'Day,Note\r\n1,"call back\r\nafter 5pm"\r\n2,ok\r\n')
+
+    report = ingest(upload, out)
+
+    assert by_name(report, "orders").row_count == 2
+    assert [row[:3] for row in tables(out)["orders"]] == [
+        ("Week 1", 'No: 1 | Name: "An"\nNo: 2 | Name: Bình', None),
+        ("Week 2", None, "No: 3\nNo: 4"),
+    ]
+    assert [row[:2] for row in tables(out)["notes"]] == [
+        ("1", "call back\r\nafter 5pm"),
+        ("2", "ok"),
+    ]
+
+
+def test_a_table_that_fails_to_load_is_reported_and_the_rest_still_load(
+    upload: Path, out: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (upload / "broken.csv").write_text("A,B\n1,2\n", encoding="utf-8")
+    (upload / "good.csv").write_text("C,D\n3,4\n", encoding="utf-8")
+    load = raw._load_group
+
+    def failing_load(connection, group, work):
+        if group.name == "broken":
+            load(connection, group, work)  # Leaves a half-made table behind, then fails.
+            raise duckdb.InvalidInputException("CSV Error on Line: 1")
+        return load(connection, group, work)
+
+    monkeypatch.setattr(raw, "_load_group", failing_load)
+
+    report = ingest(upload, out)
+
+    assert [table.name for table in report.tables] == ["good"]
+    assert set(tables(out)) == {"good"}
+    assert any("broken" in w and "broken.csv" in w and "CSV Error" in w for w in report.warnings)
 
 
 def test_empty_and_duplicate_header_names_are_made_unique(upload: Path, out: Path) -> None:
@@ -307,3 +359,169 @@ def test_hostile_column_names_stay_data_in_row_shapes(upload: Path, out: Path) -
     [shape] = by_name(report, "t").rare_shapes
     assert (shape.columns, shape.rows) == (["b"], 2)
     assert len(tables(out)["t"]) == 42
+
+
+def test_sheets_that_need_a_layout_are_reported_and_clean_ones_are_not(
+    upload: Path, out: Path
+) -> None:
+    write_xlsx(
+        upload / "book.xlsx",
+        {
+            "Scores": [
+                ["Class", "7A1", "Subject", "Math"],
+                [None, None, None, "TERM I", None, "TERM II", None],
+                ["No", "Code", "Name", "TX1", "CK", "TX1", "CK"],
+                [1, "S1", "An", 7, 8, 6, 9],
+                [2, "S2", "Binh", 5, 6, 7, 8],
+            ],
+            "Clean": [["Date", "Item"], ["1/1", "rice"], ["2/1", "fish"]],
+        },
+    )
+    (upload / "orders.csv").write_text("Date,Item\n1/1,rice\n", encoding="utf-8")
+
+    report = ingest(upload, out)
+
+    [finding] = report.layout
+    assert finding.sources == ["book.xlsx#Scores"]
+    assert "header_rows" in finding.flags
+    assert "cell B1" in finding.context_candidates
+    assert "TERM I" in finding.preview
+
+
+def test_a_sheet_with_no_header_is_still_described_for_the_layout_stage(
+    upload: Path, out: Path
+) -> None:
+    lines = [["Receipts"]] + [[f"{key}: {n}"] for n in range(5) for key in ("Date", "Client")]
+    write_xlsx(upload / "book.xlsx", {"Lines": lines})
+
+    report = ingest(upload, out)
+
+    assert [f.sources for f in report.layout] == [["book.xlsx#Lines"]]
+    assert "one_column" in report.layout[0].flags
+
+
+SCORE_SHEET = [
+    ["Class", "7A1", "Subject", "Math"],
+    [None, None, None, "TERM I", None, "TERM II", None],
+    ["No", "Code", "Name", "TX1", "CK", "TX1", "CK"],
+    [1, "S1", "An", 7, 8, 6, 9],
+    [2, "S2", "Binh", 5, 6, 7, 8],
+]
+
+
+def family_of(upload: Path, out: Path) -> str:
+    """The id code gives the upload's one flagged family, from an ingest without a layout."""
+    [finding] = ingest(upload, out / "probe").layout
+    return finding.family
+
+
+def score_layout(family: str, **extra) -> LayoutSpec:
+    return LayoutSpec.model_validate(
+        {
+            "families": [
+                {
+                    "family": family,
+                    "header": [{"row": 2, "spread": "right"}, {"row": 3}],
+                    "context": [{"name": "subject", "source": "sheet_name"}],
+                    "reshape": {"kind": "split_groups", "layer": 1, "name": "term"},
+                    **extra,
+                }
+            ]
+        }
+    )
+
+
+def test_a_layout_turns_a_family_into_one_tidy_table_with_cell_ranges(
+    upload: Path, out: Path
+) -> None:
+    write_xlsx(upload / "book.xlsx", {"Math": SCORE_SHEET, "Art": SCORE_SHEET})
+    (upload / "orders.csv").write_text("Date,Item\n1/1,rice\n", encoding="utf-8")
+
+    report = ingest(upload, out, layout=score_layout(family_of(upload, out)))
+
+    names = sorted(t.name for t in report.tables)
+    assert names == ["book", "orders"]
+    book = by_name(report, "book")
+    assert book.row_count == 8
+    assert book.coverage == 1.0
+    assert [c.name for c in book.columns] == [
+        "No", "Code", "Name", "term", "TX1", "CK", "subject", "_source", "_row", "_cell",
+    ]  # fmt: skip
+    rows = tables(out)["book"]
+    assert rows[0] == ("1", "S1", "An", "TERM I", "7", "8", "Math", "book.xlsx#Math", "1", "D4:E4")
+    by_source: dict[str, list[int]] = {}
+    for row in rows:
+        by_source.setdefault(row[7], []).append(int(row[8]))
+    assert by_source == {"book.xlsx#Math": [1, 2, 3, 4], "book.xlsx#Art": [1, 2, 3, 4]}
+    assert tables(out)["orders"] == [("1/1", "rice", "orders.csv", "2")]
+    [finding] = report.layout
+    assert finding.coverage == 1.0
+
+
+def test_family_sheets_with_drifting_columns_stack_by_name(upload: Path, out: Path) -> None:
+    title = ["ORDERS EXPORT"]
+    write_xlsx(
+        upload / "a.xlsx",
+        {"S": [title, ["Order", "Date", "Amount"], ["O1", "1/1", "10"], ["O2", "2/1", "20"]]},
+    )
+    write_xlsx(
+        upload / "b.xlsx",
+        {"S": [title, ["date", "ORDER", "Amount", "Note"], ["3/1", "O3", "30", "late"]]},
+    )
+    first = ingest(upload, out / "first")
+    assert [f.sources for f in first.layout] == [["a.xlsx#S", "b.xlsx#S"]]
+    family = first.layout[0].family
+
+    report = ingest(
+        upload, out, layout=LayoutSpec.model_validate({"families": [{"family": family}]})
+    )
+
+    [table] = report.tables
+    assert [c.name for c in table.columns][:4] == ["Order", "Date", "Amount", "Note"]
+    assert sorted(r[:4] for r in tables(out)[table.name]) == [
+        ("O1", "1/1", "10", None),
+        ("O2", "2/1", "20", None),
+        ("O3", "3/1", "30", "late"),
+    ]
+
+
+def test_a_layout_that_fails_on_a_sheet_keeps_the_fast_path_for_it(upload: Path, out: Path) -> None:
+    write_xlsx(upload / "book.xlsx", {"Math": SCORE_SHEET})
+
+    family = family_of(upload, out)
+    report = ingest(
+        upload,
+        out,
+        layout=LayoutSpec.model_validate({"families": [{"family": family, "region": 4}]}),
+    )
+
+    [table] = report.tables
+    assert table.coverage is None
+    assert any("region 4" in w for w in report.warnings)
+
+
+def test_columns_whose_names_normalize_alike_stay_apart_when_stacked(
+    upload: Path, out: Path
+) -> None:
+    rows = [["#", "Mã", "Ma", "%"], ["Group A"], [1, "A1", "x", 5], [2, "A2", "y", 7]]
+    write_xlsx(upload / "book.xlsx", {"S": rows})
+    family = family_of(upload, out)
+
+    report = ingest(
+        upload, out, layout=LayoutSpec.model_validate({"families": [{"family": family}]})
+    )
+
+    [table] = report.tables
+    values = [c.name for c in table.columns if not c.name.startswith("_")]
+    assert len(values) == 4
+    assert [r[:4] for r in tables(out)[table.name] if r[0] == "1"] == [("1", "A1", "x", "5")]
+
+
+def test_a_layout_entry_that_matches_no_family_is_reported(upload: Path, out: Path) -> None:
+    write_xlsx(upload / "book.xlsx", {"S": SCORE_SHEET})
+
+    report = ingest(
+        upload, out, layout=LayoutSpec.model_validate({"families": [{"family": "f000000"}]})
+    )
+
+    assert any("f000000" in w for w in report.warnings)

@@ -308,7 +308,7 @@ def build(
         )
         connection.execute(
             f"CREATE TABLE {EXCLUDED} (table_name VARCHAR, reason VARCHAR, "
-            "_source VARCHAR, _row BIGINT, raw_values VARCHAR)"
+            "_source VARCHAR, _row BIGINT, raw_values VARCHAR, _cell VARCHAR)"
         )
         for table in tables:
             if table.source not in raw_columns:
@@ -394,9 +394,12 @@ def _build_table(
     _drop_overlaps(connection, marked, raw_columns, table.drop_overlap)
     values = ", ".join(f"{lit(s)}, {q(s)}" for s in visible)
     raw_values = f"CAST(json_object({values}) AS VARCHAR)" if visible else "'{}'"
+    has_cell = any(c.name == "_cell" for c in raw_report.columns) if raw_report else False
+    cell = "_cell" if has_cell else "NULL"
     connection.execute(
         f"INSERT INTO {EXCLUDED} SELECT {lit(table.name)}, __excluded, _source, __row, "
-        f"{raw_values} FROM {q(marked)} WHERE __excluded IS NOT NULL ORDER BY _source, __row"
+        f"{raw_values}, {cell} FROM {q(marked)} WHERE __excluded IS NOT NULL "
+        "ORDER BY _source, __row"
     )
     filled = [
         (
@@ -413,13 +416,13 @@ def _build_table(
         dedupe = f"QUALIFY row_number() OVER (PARTITION BY {partition} ORDER BY _source, __row) = 1"
     connection.execute(
         f"CREATE TEMP TABLE {q(stage)} AS SELECT * FROM ("
-        f"SELECT {', '.join(filled)}, _source, __row FROM ("
+        f"SELECT {', '.join(filled)}, _source, __row{', _cell' if has_cell else ''} FROM ("
         f"SELECT * FROM {q(marked)} WHERE __excluded IS NULL)) {dedupe}"
     )
     selected = [f"{parse_expression(c, c.source)} AS {q(c.name)}" for c in columns]
     connection.execute(
-        f"CREATE TABLE {q(table.name)} AS SELECT {', '.join(selected)}, _source, __row AS _row "
-        f"FROM {q(stage)} ORDER BY _source, __row"
+        f"CREATE TABLE {q(table.name)} AS SELECT {', '.join(selected)}, _source, __row AS _row"
+        f"{', _cell' if has_cell else ''} FROM {q(stage)} ORDER BY _source, __row"
     )
     report = TableBuild(
         name=table.name,

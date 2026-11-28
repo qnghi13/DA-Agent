@@ -160,9 +160,12 @@ class IngestHandler(_DatasetJob):
         llm: LLMClient,
         datasets_root: Path,
         budgets: WorkspaceBudgets | None = None,
+        layout_llm: LLMClient | None = None,
     ) -> None:
         super().__init__(url=url, schema=schema, runner=runner, datasets_root=datasets_root)
         self.llm = llm
+        # Reads sheet layouts; the question model unless DA_AGENT_INGEST_ROUTES names another.
+        self.layout_llm = layout_llm or llm
         # When set, the spec proposal may spend only what the workspace has left today.
         self.budgets = budgets
 
@@ -173,7 +176,7 @@ class IngestHandler(_DatasetJob):
             budget = self.budgets.for_job(job) if self.budgets is not None else None
             prepared = prepare_dataset(
                 str(record.id), self.runner, self.llm, run_id=str(job.id),
-                description=record.description, budget=budget,
+                description=record.description, budget=budget, layout_llm=self.layout_llm,
             )  # fmt: skip
             try:
                 report = self._finish(store, record, prepared)

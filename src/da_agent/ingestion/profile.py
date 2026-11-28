@@ -31,10 +31,17 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 # Checked before the generic patterns, so a phone number is not reported as an integer.
 _PRIORITY = ("phone", "id_number", "email")
 SENSITIVE_PATTERNS = set(_PRIORITY)
+SENSITIVE_MARK = "<sensitive>"
 SENSITIVE_NAME_WORDS = (
     "cccd", "cmnd", "email", "e-mail", "phone", "sdt", "so dien thoai", "dien thoai",
     "ngay sinh", "birth", "dia chi", "address", "passport", "ho chieu", "mst", "tax",
 )  # fmt: skip
+
+
+def sensitive_name(name: str) -> bool:
+    """A column name that says the values are personal: phone, ID, address, and the like."""
+    plain_name = _plain(name).replace("_", " ")
+    return any(word in plain_name for word in SENSITIVE_NAME_WORDS)
 
 
 def _plain(text: str) -> str:
@@ -90,8 +97,7 @@ class ColumnStats:
         )
 
     def _sensitive(self) -> bool:
-        plain_name = _plain(self.name).replace("_", " ")
-        if any(word in plain_name for word in SENSITIVE_NAME_WORDS):
+        if sensitive_name(self.name):
             return True
         if not self.non_null:
             return False

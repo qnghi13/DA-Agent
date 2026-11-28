@@ -215,3 +215,9 @@ def test_the_metrics_port_is_off_unless_set() -> None:
     for bad in ("0", "70000", "http"):
         with pytest.raises(ConfigError, match="DA_AGENT_METRICS_PORT"):
             Settings.from_env(REQUIRED | {"DA_AGENT_METRICS_PORT": bad})
+
+
+def test_ingest_routes_default_to_none_and_can_name_a_stronger_model() -> None:
+    assert Settings.from_env(REQUIRED).ingest_routes is None
+    env = REQUIRED | {"DA_AGENT_INGEST_ROUTES": " groq:openai/gpt-oss-120b "}
+    assert Settings.from_env(env).ingest_routes == "groq:openai/gpt-oss-120b"

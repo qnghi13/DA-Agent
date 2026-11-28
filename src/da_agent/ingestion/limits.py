@@ -15,3 +15,7 @@ class IngestLimits:
     max_cell_chars: int = 10_000
     max_document_chars: int = 50_000
     header_search_rows: int = 30
+    # The layout stage reads at most this many rows of each sheet, and the model sees at most
+    # this many cells of each flagged family.
+    layout_grid_rows: int = 5000
+    preview_cells: int = 4000

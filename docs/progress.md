@@ -1,11 +1,17 @@
 # Progress
 
-Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-26 (analysis tools)
+Loaded into every session; keep it under 60 lines and replace stale content. **Last updated:** 2026-11-27 (layout layer)
 **Phase:** product, deeper analysis for non-technical users, in order B -> C -> D (user,
 2026-11-26): B fixed analyses (done), C insight cards, D multi-step deep analysis. The Zalo
 challenge ended 2026-11-25: its limits no longer apply; its data stays private.
-- GPU run 1 (2026-11-13, `gemma-4-12B-it` on vLLM): `regression` +56 vs Groq +53 (docs/eval/gpu.md).
 ## Next step
+- **General layouts** (ADR 0052, note 29, design + plan 2026-11-27) on branch
+  `fix/ingest-multiline-cells`, nothing committed: crash fix for line breaks in cells, then the
+  layout layer (grid regions and row roles, flagged sheet families, a `LayoutSpec` of fixed
+  operators, coverage and shape checks, layout in `DatasetSpec.layout`, `DA_AGENT_INGEST_ROUTES`).
+  `docs/eval/layout.md`: dev 30 -> 48/49 (`gpt-oss-120b`, twice); held-out once 33 -> 38/47
+  ($0.15). 2026-11-28: the four held-out misses fixed on a synthetic upload (6/6, $0.03); dev
+  still 48/49. Next: commit; a new unseen set to measure generality again.
 - **Analysis tools B** (ADR 0051, note 28, design + plan 2026-11-26) on branch
   `feat/analysis-tools`: `analyze` with explain_change, trend, forecast, correlation,
   outliers computed in the sandbox; card, "Vì sao thay đổi?" button, drill chip in the web.
@@ -35,7 +41,7 @@ challenge ended 2026-11-25: its limits no longer apply; its data stays private.
    guessed (run 97d7bc1f; a UI guardrail); `\uXXXX` escapes in SQL text (2 runs in all reports).
 ## Baselines (Groq `gpt-oss-20b`, before 559f88a): `regression` +53 (93/40/17), holdout +44.
 ## Done
-- ADRs 0001–0050, notes 01–27. Scorer 3000/3000; splits in `eval/splits/splits.json`.
+- ADRs 0001–0052, notes 01–29. Scorer 3000/3000; splits in `eval/splits/splits.json`.
 - Agent, sandbox (escape tests pass), backend over HTTP, reports; RAG cut (note 05).
   `datasets-dev/`: 24/24 ok, parse 99.98%+, exclusion precision and recall 100%.
 ## Not verified
@@ -45,8 +51,7 @@ challenge ended 2026-11-25: its limits no longer apply; its data stays private.
 ## Waiting on the user
 - No rows, questions, rulebook, or answers in any commit or image (organiser rules). When the
   challenge ends: delete `train/`, `eval/reports/`, and Docker volumes with eval data.
-## Spend so far: about $4.21 (agent runs $3.55, spec proposals $0.57, demos and e2e $0.08).
-- Demo video re-recorded 2026-11-25 (Kokoro narration, synced) and linked in the README.
+## Spend so far: about $4.42 (agent runs $3.55, spec proposals $0.57, layouts $0.21, demos $0.08).
 - Open: Vietnamese chart requests drew a chart in 1 of 3 Groq runs (`make_chart` text is English).
 ## Watch out
 - 30 questions on Groq cost about $0.05–0.10, and results vary run to run: compare totals.

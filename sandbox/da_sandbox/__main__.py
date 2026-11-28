@@ -25,12 +25,15 @@ def run_python(code: str) -> int:
     return 0
 
 
-def run_ingest() -> int:
+def run_ingest(request: dict) -> int:
     # -I leaves /app off sys.path. It is read-only, so adding it does not let code plant modules.
     sys.path.insert(0, APP)
+    from da_agent.ingestion.layout_spec import LayoutSpec
     from da_agent.ingestion.raw import ingest
 
-    report = ingest(Path("/input"), Path("/out"))
+    layout = request.get("layout")
+    spec = LayoutSpec.model_validate(layout) if layout else None
+    report = ingest(Path("/input"), Path("/out"), layout=spec)
     Path("/out/report.json").write_text(report.model_dump_json(), encoding="utf-8")
     return 0
 
@@ -127,7 +130,7 @@ def main() -> int:
     if kind == "sql":
         return run_sql(request)
     if kind == "ingest":
-        return run_ingest()
+        return run_ingest(request)
     if kind == "build":
         return run_build(request)
     if kind == "stats":

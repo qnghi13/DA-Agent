@@ -13,8 +13,8 @@ from eval.ingestion.prepare import make_runner, prepare_uploads
 
 def fake_prepared(name: str) -> SimpleNamespace:
     return SimpleNamespace(
-        status="ok", ingest=SimpleNamespace(duration_seconds=0.0), proposal=None, build=None,
-        spec=None, dropped_rules=[], deduplicated={},
+        status="ok", ingest=SimpleNamespace(duration_seconds=0.0, output_dir=None),
+        proposal=None, build=None, spec=None, dropped_rules=[], deduplicated={}, layout=None,
     )  # fmt: skip
 
 

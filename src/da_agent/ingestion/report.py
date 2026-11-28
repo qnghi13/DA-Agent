@@ -57,6 +57,31 @@ class TableReport(BaseModel):
     truncated: bool = False
     columns: list[ColumnReport]
     rare_shapes: list[RowShape] = Field(default_factory=list)
+    # Set when a layout made the table: the share of its sheets' filled cells it accounted for.
+    coverage: float | None = None
+
+
+class FamilyFinding(BaseModel):
+    """Sheets that share one layout, found by code, and why they need a layout spec."""
+
+    family: str
+    sources: list[str]
+    flags: list[str]
+    regions: int
+    # Each region of the first sheet as a range, such as "A1:F74", in the order layouts number them.
+    region_bounds: list[str] = Field(default_factory=list)
+    # Header cell texts of the first sheet, every layer, for checking names a layout uses.
+    columns: list[str] = Field(default_factory=list)
+    context_candidates: list[str] = Field(default_factory=list)
+    # Title and side-block cells whose text differs between the family's sheets.
+    varying_cells: list[str] = Field(default_factory=list)
+    # What code noticed in the first sheet, in words, such as rows that come in pairs.
+    hints: list[str] = Field(default_factory=list)
+    preview: str = ""
+    # Set when a layout was applied to the family.
+    coverage: float | None = None
+    left: list[str] = Field(default_factory=list)
+    problems: list[str] = Field(default_factory=list)
 
 
 class IngestReport(BaseModel):
@@ -64,3 +89,4 @@ class IngestReport(BaseModel):
     tables: list[TableReport] = Field(default_factory=list)
     documents: list[dict[str, str]] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    layout: list[FamilyFinding] = Field(default_factory=list)
