@@ -5,13 +5,13 @@ Loaded into every session; keep it under 60 lines and replace stale content. **L
 2026-11-26): B fixed analyses (done), C insight cards, D multi-step deep analysis. The Zalo
 challenge ended 2026-11-25: its limits no longer apply; its data stays private.
 ## Next step
-- **General layouts** (ADR 0052, note 29, design + plan 2026-11-27) on branch
-  `fix/ingest-multiline-cells`, nothing committed: crash fix for line breaks in cells, then the
+- **General layouts** (ADR 0052, note 29, design + plan 2026-11-27) on `main` (d965f29, not
+  pushed): crash fix for line breaks in cells, then the
   layout layer (grid regions and row roles, flagged sheet families, a `LayoutSpec` of fixed
   operators, coverage and shape checks, layout in `DatasetSpec.layout`, `DA_AGENT_INGEST_ROUTES`).
   `docs/eval/layout.md`: dev 30 -> 48/49 (`gpt-oss-120b`, twice); held-out once 33 -> 38/47
   ($0.15). 2026-11-28: the four held-out misses fixed on a synthetic upload (6/6, $0.03); dev
-  still 48/49. Next: commit; a new unseen set to measure generality again.
+  still 48/49. Next: a new unseen set to measure generality again.
 - **Analysis tools B** (ADR 0051, note 28, design + plan 2026-11-26) on branch
   `feat/analysis-tools`: `analyze` with explain_change, trend, forecast, correlation,
   outliers computed in the sandbox; card, "Vì sao thay đổi?" button, drill chip in the web.
